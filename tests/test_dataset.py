@@ -1,0 +1,438 @@
+from __future__ import annotations
+
+import copy
+import gzip
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from wcl_report_data.dataset import DatasetService, DatasetStore, query_bundle
+from wcl_report_data.errors import ApiError, DatasetError, InputError, RevisionChangedError
+from wcl_report_data.models import ReportRef
+
+
+def report_fixture() -> dict:
+    return {
+        "code": "AbC123",
+        "title": "Team Raid",
+        "visibility": "public",
+        "revision": 3,
+        "startTime": 1_700_000_000_000,
+        "endTime": 1_700_000_020_000,
+        "archiveStatus": {"isArchived": False, "isAccessible": True},
+        "zone": {
+            "id": 42,
+            "name": "Test Raid",
+            "difficulties": [{"id": 5, "name": "Mythic", "sizes": [20]}],
+        },
+        "masterData": {
+            "logVersion": 99,
+            "gameVersion": 1,
+            "lang": "en",
+            "actors": [
+                {"id": 10, "gameID": 1, "name": "Tank", "server": "Realm", "type": "Player", "subType": "Warrior", "petOwner": None},
+                {"id": 11, "gameID": 2, "name": "Healer", "server": "Realm", "type": "Player", "subType": "Priest", "petOwner": None},
+                {"id": 100, "gameID": 9001, "name": "Boss", "server": None, "type": "NPC", "subType": "Boss", "petOwner": None},
+            ],
+            "abilities": [
+                {"gameID": 7001, "name": "Heavy Hit", "type": 1, "icon": "spell"},
+                {"gameID": 7002, "name": "Heal", "type": 2, "icon": "heal"},
+            ],
+        },
+        "fights": [
+            {
+                "id": 1,
+                "encounterID": 5001,
+                "name": "Test Boss",
+                "startTime": 1_000,
+                "endTime": 5_000,
+                "kill": False,
+                "inProgress": False,
+                "difficulty": 5,
+                "size": 2,
+                "friendlyPlayers": [10, 11],
+                "friendlySpecs": ["Protection", "Holy"],
+                "friendlyItemLevels": [600, 601],
+                "phaseTransitions": [{"id": 1, "startTime": 1_000}],
+            },
+            {
+                "id": 2,
+                "encounterID": 0,
+                "name": "Trash",
+                "startTime": 6_000,
+                "endTime": 7_000,
+                "kill": False,
+                "inProgress": False,
+                "difficulty": None,
+                "size": None,
+                "friendlyPlayers": [10, 11],
+                "friendlySpecs": ["Protection", "Holy"],
+                "friendlyItemLevels": [600, 601],
+                "phaseTransitions": [],
+            },
+            {
+                "id": 3,
+                "encounterID": 5001,
+                "name": "Test Boss",
+                "startTime": 8_000,
+                "endTime": 10_000,
+                "kill": False,
+                "inProgress": True,
+                "difficulty": 5,
+                "size": 2,
+                "friendlyPlayers": [10, 11],
+                "friendlySpecs": ["Protection", "Holy"],
+                "friendlyItemLevels": [600, 601],
+                "phaseTransitions": [],
+            },
+        ],
+    }
+
+
+class FakeClient:
+    def __init__(self, pages: dict[float | None, dict] | None = None) -> None:
+        self.report = report_fixture()
+        self.pages = pages or {}
+        self.page_starts: list[float | None] = []
+        self.fail_at: float | None | object = object()
+        self.revision = 3
+
+    def fetch_report(self, code: str) -> tuple[dict, dict]:
+        if code != "AbC123":
+            raise AssertionError(code)
+        return copy.deepcopy(self.report), {
+            "limitPerHour": 3600,
+            "pointsSpentThisHour": 10,
+            "pointsResetIn": 100,
+        }
+
+    def fetch_events_page(self, code: str, fight_id: int, start_time: float | None, limit: int = 10_000) -> dict:
+        self.page_starts.append(start_time)
+        if start_time == self.fail_at:
+            raise ApiError("temporary failure")
+        return copy.deepcopy(self.pages[start_time])
+
+    def fetch_report_revision(self, code: str) -> int:
+        return self.revision
+
+
+def event_pages() -> dict[float | None, dict]:
+    return {
+        None: {
+            "data": [
+                {
+                    "timestamp": 1_100,
+                    "type": "damage",
+                    "sourceID": 100,
+                    "sourceInstance": 1,
+                    "targetID": 10,
+                    "abilityGameID": 7001,
+                    "amount": 100,
+                    "absorbed": 20,
+                    "hitPoints": 900,
+                    "targetResources": {"hitPoints": 900, "maxHitPoints": 1_000},
+                    "mystery": "kept only in raw page",
+                }
+            ],
+            "nextPageTimestamp": 2_000,
+        },
+        2_000: {
+            "data": [
+                {
+                    "timestamp": 2_100,
+                    "type": "heal",
+                    "sourceID": 11,
+                    "targetID": 10,
+                    "abilityGameID": 7002,
+                    "amount": 80,
+                    "overheal": 5,
+                }
+            ],
+            "nextPageTimestamp": None,
+        },
+    }
+
+
+class DatasetTests(unittest.TestCase):
+    def make_service(self, temporary: str, client: FakeClient) -> DatasetService:
+        root = Path(temporary)
+        return DatasetService(client, DatasetStore(root / "data", root / "cache"))
+
+    def test_inspect_persists_team_index_without_source_filtering(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient())
+            result = service.inspect(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1&source=10")
+            )
+            index = json.loads(Path(result["index_path"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(result["selected_fight_id"], 1)
+        self.assertEqual(result["input_reference"]["source_hint"], 10)
+        self.assertNotIn("input_reference", index)
+        self.assertEqual([item["actor_id"] for item in index["fights"][0]["participants"]], [10, 11])
+        self.assertEqual(index["fights"][1]["kind"], "trash")
+        self.assertFalse(index["fights"][2]["packable"])
+
+    def test_last_selects_actual_last_fight_without_rewriting_its_meaning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient()
+            client.report["fights"][-1]["endTime"] = 500
+            service = self.make_service(temporary, client)
+            result = service.inspect(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=last")
+            )
+
+        self.assertEqual(result["selected_fight_id"], 3)
+        self.assertEqual(result["selected_fight"]["unpackable_reason"], "in_progress")
+
+    def test_prepare_publishes_complete_bundle_and_query_filters_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient(event_pages())
+            service = self.make_service(temporary, client)
+            result = service.prepare(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1&source=10")
+            )
+            manifest_path = Path(result["bundles"][0]["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            queried = query_bundle(manifest_path, event_types={"damage"}, limit=200)
+
+            with gzip.open(manifest_path.parent / manifest["events_file"], "rt", encoding="utf-8") as handle:
+                canonical = [json.loads(line) for line in handle]
+
+            raw_path = Path(manifest["raw_pages"][0]["path"])
+            with gzip.open(raw_path, "rt", encoding="utf-8") as handle:
+                raw = json.load(handle)
+
+        self.assertTrue(manifest["complete"])
+        self.assertEqual(manifest["event_count"], 2)
+        self.assertEqual(manifest["unknown_fields"], {"mystery": 1})
+        self.assertNotIn("mystery", canonical[0]["fields"])
+        self.assertEqual(canonical[0]["fields"]["hitPoints"], 900)
+        self.assertEqual(canonical[0]["fight_time_ms"], 100)
+        self.assertEqual(raw["data"][0]["mystery"], "kept only in raw page")
+        self.assertEqual(queried["matched"], 1)
+        self.assertEqual(queried["events"][0]["target"]["actor_id"], 10)
+        self.assertFalse(queried["truncated"])
+
+    def test_prepare_resumes_from_last_complete_raw_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first = FakeClient(event_pages())
+            first.fail_at = 2_000
+            service = self.make_service(temporary, first)
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+
+            with self.assertRaises(ApiError):
+                service.prepare(ref)
+
+            second = FakeClient(event_pages())
+            service = self.make_service(temporary, second)
+            result = service.prepare(ref)
+
+        self.assertEqual(first.page_starts, [None, 2_000])
+        self.assertEqual(second.page_starts, [2_000])
+        self.assertEqual(result["bundles"][0]["event_count"], 2)
+
+    def test_revision_change_never_publishes_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient(event_pages())
+            client.revision = 4
+            service = self.make_service(temporary, client)
+
+            with self.assertRaises(RevisionChangedError):
+                service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+            fight_dir = Path(temporary) / "data" / "reports" / "AbC123" / "revisions" / "3" / "fights" / "1"
+
+        self.assertFalse((fight_dir / "manifest.json").exists())
+
+    def test_same_revision_index_is_immutable_across_input_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient())
+            first = service.inspect(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1&source=10")
+            )
+            index_path = Path(first["index_path"])
+            original = index_path.read_bytes()
+            second = service.inspect(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1&source=11")
+            )
+            after = index_path.read_bytes()
+
+        self.assertEqual(original, after)
+        self.assertEqual(second["input_reference"]["source_hint"], 11)
+
+    def test_rejects_mythic_plus_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient()
+            client.report["fights"][0]["keystoneLevel"] = 12
+            service = self.make_service(temporary, client)
+
+            with self.assertRaises(InputError):
+                service.inspect(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123"))
+
+    def test_rejects_non_keystone_dungeon_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient()
+            client.report["zone"]["difficulties"] = [{"id": 2, "name": "Heroic", "sizes": [5]}]
+            service = self.make_service(temporary, client)
+
+            with self.assertRaises(InputError):
+                service.inspect(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123"))
+
+    def test_unknown_completion_state_is_not_packable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient()
+            client.report["fights"][0]["inProgress"] = None
+            service = self.make_service(temporary, client)
+            result = service.inspect(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+        self.assertFalse(result["selected_fight"]["packable"])
+        self.assertEqual(result["selected_fight"]["unpackable_reason"], "completion_unknown")
+
+    def test_url_fight_cannot_be_expanded_by_another_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient())
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+
+            with self.assertRaises(InputError):
+                service.prepare(ref, all_boss_fights=True)
+            with self.assertRaises(InputError):
+                service.prepare(ref, encounter_id=5001)
+            with self.assertRaises(InputError):
+                service.prepare(ref, fight_ids=[1, 2])
+
+    def test_bundle_checksum_is_validated_before_query_or_cache_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(event_pages()))
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            result = service.prepare(ref)
+            manifest_path = Path(result["bundles"][0]["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            events_path = manifest_path.parent / manifest["events_file"]
+            with events_path.open("ab") as handle:
+                handle.write(b"changed")
+
+            with self.assertRaises(DatasetError):
+                query_bundle(manifest_path)
+            with self.assertRaises(DatasetError):
+                service.prepare(ref)
+
+    def test_cache_hit_rejects_manifest_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(event_pages()))
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            result = service.prepare(ref)
+            manifest_path = Path(result["bundles"][0]["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["identity"]["report_revision"] = 999
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaises(DatasetError):
+                service.prepare(ref)
+
+    def test_raw_checkpoint_checksum_is_validated_before_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first = FakeClient(event_pages())
+            first.fail_at = 2_000
+            service = self.make_service(temporary, first)
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            with self.assertRaises(ApiError):
+                service.prepare(ref)
+            checkpoint = json.loads(
+                (Path(temporary) / "cache" / "raw" / "AbC123" / "3" / "1" / "checkpoint.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            with Path(checkpoint["pages"][0]["path"]).open("ab") as handle:
+                handle.write(b"changed")
+
+            with self.assertRaises(DatasetError):
+                self.make_service(temporary, FakeClient(event_pages())).prepare(ref)
+
+    def test_cache_clear_refuses_unowned_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = DatasetStore(root / "data", root / "cache")
+            raw_root = root / "cache" / "raw"
+            raw_root.mkdir(parents=True)
+            unrelated = raw_root / "unrelated.txt"
+            unrelated.write_text("keep", encoding="utf-8")
+
+            with self.assertRaises(DatasetError):
+                store.clear_cache()
+
+            self.assertTrue(unrelated.exists())
+
+    def test_latest_revision_pointer_never_moves_backwards(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = DatasetStore(root / "data", root / "cache")
+            for revision in (4, 3):
+                store.write_index(
+                    {
+                        "schema_version": 1,
+                        "generated_at": f"revision-{revision}",
+                        "report": {"code": "AbC123", "revision": revision},
+                        "actors": [],
+                        "abilities": [],
+                        "fights": [],
+                    }
+                )
+            latest = json.loads((root / "data" / "reports" / "AbC123" / "latest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(latest["revision"], 4)
+
+    def test_removing_latest_revision_repairs_pointer_to_highest_remaining(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = DatasetStore(root / "data", root / "cache")
+            for revision in (3, 4):
+                store.write_index(
+                    {
+                        "schema_version": 1,
+                        "generated_at": f"revision-{revision}",
+                        "report": {"code": "AbC123", "revision": revision},
+                        "actors": [],
+                        "abilities": [],
+                        "fights": [],
+                    }
+                )
+            store.remove_dataset("AbC123", revision=4)
+            latest = json.loads((root / "data" / "reports" / "AbC123" / "latest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(latest["revision"], 3)
+
+    def test_prepare_rejects_trash_and_in_progress_fights(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient())
+
+            for fight_id in (2, 3):
+                with self.subTest(fight_id=fight_id), self.assertRaises(InputError):
+                    service.prepare(
+                        ReportRef.parse(f"https://www.warcraftlogs.com/reports/AbC123#fight={fight_id}")
+                    )
+
+    def test_query_defaults_to_two_hundred_and_returns_cursor(self) -> None:
+        pages = {
+            None: {
+                "data": [
+                    {"timestamp": 1_000 + index, "type": "cast", "sourceID": 10, "abilityGameID": 7001}
+                    for index in range(205)
+                ],
+                "nextPageTimestamp": None,
+            }
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(pages))
+            result = service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+            queried = query_bundle(Path(result["bundles"][0]["manifest_path"]))
+
+        self.assertEqual(queried["matched"], 205)
+        self.assertEqual(queried["returned"], 200)
+        self.assertTrue(queried["truncated"])
+        self.assertEqual(queried["next_cursor"], 199)
+
+
+if __name__ == "__main__":
+    unittest.main()
