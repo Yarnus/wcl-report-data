@@ -27,6 +27,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--data-root", type=Path, default=default_data_root())
     parser.add_argument("--cache-root", type=Path, default=default_cache_root())
+    parser.add_argument("--env-file", type=Path, help="Read WCL credentials from this .env file.")
     commands = parser.add_subparsers(dest="command", required=True)
 
     commands.add_parser("doctor", help="Check credentials, storage, and WCL connectivity.")
@@ -109,7 +110,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise InputError("cache clear requires --confirm.")
         return {"action": "cache_clear"} | store.clear_cache()
 
-    credentials = resolve_credentials()
+    credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
     client = WclClient(credentials)
     if args.command == "doctor":
         if sys.version_info < (3, 11):

@@ -11,6 +11,11 @@ from wcl_report_data.__main__ import create_parser, main
 
 
 class CliTests(unittest.TestCase):
+    def test_parser_accepts_explicit_env_file(self) -> None:
+        args = create_parser().parse_args(["--env-file", "/actual/workspace/.env", "doctor"])
+
+        self.assertEqual(args.env_file, Path("/actual/workspace/.env"))
+
     def test_prepare_parser_accepts_explicit_batch_selection(self) -> None:
         args = create_parser().parse_args(
             [

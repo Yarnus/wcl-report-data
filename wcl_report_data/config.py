@@ -33,7 +33,7 @@ def resolve_credentials(
             return credentials
     raise CredentialError(
         "Set a complete WCL credential pair in the process environment, /workspace/.env, "
-        "or .env in the current working directory."
+        "or .env in the current working directory; use --env-file for another path."
     )
 
 

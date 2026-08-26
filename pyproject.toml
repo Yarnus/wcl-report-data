@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wcl-report-data"
-version = "1.0.3"
+version = "1.0.4"
 description = "为 Agent Skills 准备按修订版本保存的 Warcraft Logs 团队副本数据集"
 readme = "README.md"
 requires-python = ">=3.11"
