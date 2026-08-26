@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from wcl_report_data.__main__ import create_parser, main
 
@@ -49,6 +50,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertTrue(result["ok"])
         self.assertEqual(result["reports"], [])
+
+    def test_invalid_env_file_encoding_returns_a_structured_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            env_file = Path(temporary) / ".env"
+            env_file.write_bytes(b"WCL_CLIENT_ID=\xff\n")
+            output = io.StringIO()
+
+            with patch.dict("os.environ", {}, clear=True), redirect_stdout(output):
+                status = main(["--env-file", str(env_file), "doctor"])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "credentials_unavailable")
 
 
 if __name__ == "__main__":

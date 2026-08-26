@@ -85,6 +85,8 @@ def _unique_paths(paths: Sequence[Path]) -> list[Path]:
 def _read_env_file(path: Path) -> dict[str, str]:
     try:
         lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except UnicodeError as exc:
+        raise CredentialError(f"Credential file is not valid UTF-8: {path}") from exc
     except (FileNotFoundError, OSError):
         return {}
     result: dict[str, str] = {}

@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import copy
 import gzip
+import hashlib
 import json
+import multiprocessing
+import os
 import tempfile
+import threading
 import unittest
+from contextlib import chdir
 from pathlib import Path
+from unittest.mock import patch
 
 from wcl_report_data.dataset import DatasetService, DatasetStore, query_bundle
 from wcl_report_data.errors import ApiError, DatasetError, InputError, RevisionChangedError
@@ -126,6 +132,32 @@ class FakeClient:
         return self.revision
 
 
+class BlockingClient(FakeClient):
+    def __init__(self, pages: dict[float | None, dict]) -> None:
+        super().__init__(pages)
+        self.page_requested = threading.Event()
+        self.resume = threading.Event()
+
+    def fetch_events_page(
+        self,
+        code: str,
+        fight_id: int,
+        start_time: float | None,
+        end_time: float,
+        limit: int = 10_000,
+    ) -> dict:
+        self.page_requested.set()
+        self.resume.wait(timeout=5)
+        return super().fetch_events_page(code, fight_id, start_time, end_time, limit)
+
+
+def _hold_prepare_lock(data_root: str, cache_root: str, ready, resume) -> None:
+    store = DatasetStore(Path(data_root), Path(cache_root))
+    with store.prepare_lock("AbC123"):
+        ready.set()
+        resume.wait(timeout=5)
+
+
 def event_pages() -> dict[float | None, dict]:
     return {
         1_000: {
@@ -141,6 +173,8 @@ def event_pages() -> dict[float | None, dict]:
                     "absorbed": 20,
                     "hitPoints": 900,
                     "killingAbilityGameID": 7001,
+                    "killerInstance": 2,
+                    "healerInstance": 3,
                     "targetResources": {"hitPoints": 900, "maxHitPoints": 1_000},
                     "mystery": "kept only in raw page",
                 }
@@ -162,6 +196,13 @@ def event_pages() -> dict[float | None, dict]:
             "nextPageTimestamp": None,
         },
     }
+
+
+def _capture_error(errors: list[Exception], function, *args) -> None:
+    try:
+        function(*args)
+    except Exception as exc:
+        errors.append(exc)
 
 
 class DatasetTests(unittest.TestCase):
@@ -201,6 +242,17 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(result["selected_fight"]["difficulty_name"], "Heroic")
         self.assertEqual(result["fight_choices"][0]["difficulty_name"], "Heroic")
 
+    def test_inspect_rejects_a_report_code_that_does_not_match_the_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient()
+            client.report["code"] = "../Other456"
+            service = self.make_service(temporary, client)
+
+            with self.assertRaisesRegex(ApiError, "does not match requested report"):
+                service.inspect(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123"))
+
+            self.assertFalse((Path(temporary) / "data" / "Other456").exists())
+
     def test_last_selects_actual_last_fight_without_rewriting_its_meaning(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             client = FakeClient()
@@ -237,6 +289,8 @@ class DatasetTests(unittest.TestCase):
         self.assertNotIn("mystery", canonical[0]["fields"])
         self.assertEqual(canonical[0]["fields"]["hitPoints"], 900)
         self.assertEqual(canonical[0]["fields"]["killingAbilityGameID"], 7001)
+        self.assertEqual(canonical[0]["fields"]["killerInstance"], 2)
+        self.assertEqual(canonical[0]["fields"]["healerInstance"], 3)
         self.assertEqual(canonical[0]["fight_time_ms"], 100)
         self.assertEqual(raw["data"][0]["mystery"], "kept only in raw page")
         self.assertEqual(queried["matched"], 1)
@@ -262,6 +316,218 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(second.page_starts, [2_000])
         self.assertEqual(second.page_ranges, [(2_000, 5_000)])
         self.assertEqual(result["bundles"][0]["event_count"], 2)
+
+    def test_relative_store_roots_remain_stable_after_working_directory_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            other_directory = workspace / "other"
+            other_directory.mkdir()
+            first = FakeClient(event_pages())
+            first.fail_at = 2_000
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+
+            with chdir(workspace):
+                store = DatasetStore(Path("data"), Path("cache"))
+                with self.assertRaises(ApiError):
+                    DatasetService(first, store).prepare(ref)
+
+            second = FakeClient(event_pages())
+            with chdir(other_directory):
+                result = DatasetService(second, store).prepare(ref)
+
+        self.assertEqual(second.page_starts, [2_000])
+        self.assertEqual(result["bundles"][0]["event_count"], 2)
+
+    def test_prepare_rejects_a_pagination_cursor_that_moves_backwards(self) -> None:
+        pages = {
+            1_000: {"data": [{"timestamp": 1_100, "type": "cast"}], "nextPageTimestamp": 900},
+            900: {"data": [{"timestamp": 1_200, "type": "cast"}], "nextPageTimestamp": None},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(pages))
+
+            with self.assertRaisesRegex(ApiError, "did not advance"):
+                service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+    def test_prepare_rejects_a_non_finite_pagination_cursor(self) -> None:
+        pages = {
+            1_000: {
+                "data": [{"timestamp": 1_100, "type": "cast"}],
+                "nextPageTimestamp": float("nan"),
+            }
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(pages))
+
+            with self.assertRaisesRegex(ApiError, "invalid nextPageTimestamp"):
+                service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+    def test_prepare_rejects_an_event_page_without_a_pagination_cursor(self) -> None:
+        pages = {1_000: {"data": [{"timestamp": 1_100, "type": "cast"}]}}
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(pages))
+
+            with self.assertRaisesRegex(ApiError, "nextPageTimestamp"):
+                service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+    def test_prepare_rejects_events_outside_the_boss_attempt_range(self) -> None:
+        pages = {
+            1_000: {"data": [{"timestamp": 5_001, "type": "cast"}], "nextPageTimestamp": None}
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(pages))
+
+            with self.assertRaisesRegex(ApiError, "outside Boss Attempt range"):
+                service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+    def test_prepare_rejects_a_non_finite_event_timestamp(self) -> None:
+        pages = {
+            1_000: {
+                "data": [{"timestamp": float("nan"), "type": "cast"}],
+                "nextPageTimestamp": None,
+            }
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(pages))
+
+            with self.assertRaisesRegex(ApiError, "finite numeric timestamp"):
+                service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+    def test_dataset_remove_rejects_a_report_being_prepared(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = BlockingClient(event_pages())
+            service = self.make_service(temporary, client)
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            errors: list[Exception] = []
+            thread = threading.Thread(target=lambda: _capture_error(errors, service.prepare, ref))
+            thread.start()
+            self.assertTrue(client.page_requested.wait(timeout=5))
+
+            try:
+                with self.assertRaisesRegex(DatasetError, "currently being prepared"):
+                    service.store.remove_dataset("AbC123")
+            finally:
+                client.resume.set()
+                thread.join(timeout=5)
+
+            self.assertFalse(thread.is_alive())
+            self.assertFalse(errors)
+
+    def test_cache_clear_rejects_cache_being_used_by_prepare(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = BlockingClient(event_pages())
+            service = self.make_service(temporary, client)
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            errors: list[Exception] = []
+            thread = threading.Thread(target=lambda: _capture_error(errors, service.prepare, ref))
+            thread.start()
+            self.assertTrue(client.page_requested.wait(timeout=5))
+
+            try:
+                with self.assertRaisesRegex(DatasetError, "cache is currently in use"):
+                    service.store.clear_cache()
+            finally:
+                client.resume.set()
+                thread.join(timeout=5)
+
+            self.assertFalse(thread.is_alive())
+            self.assertFalse(errors)
+
+    @unittest.skipIf(os.name == "nt", "Windows CRT byte-range locks are exclusive.")
+    def test_prepare_locks_for_different_reports_can_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = DatasetStore(root / "data", root / "cache")
+
+            with store.prepare_lock("AbC123"), store.prepare_lock("Other456"):
+                pass
+
+    def test_concurrent_import_roots_do_not_race_cache_initialization(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stores = [
+                DatasetStore(root / "data", root / "cache"),
+                DatasetStore(root / "data", root / "cache"),
+            ]
+            marker_write_started = threading.Event()
+            resume_marker_write = threading.Event()
+            guard = threading.Lock()
+            blocked = False
+            errors: list[Exception] = []
+            original_dump = json.dump
+
+            def blocking_dump(value, handle, *args, **kwargs):
+                nonlocal blocked
+                should_block = False
+                if isinstance(value, dict) and value.get("owner") == "wcl-report-data":
+                    with guard:
+                        if not blocked:
+                            blocked = True
+                            should_block = True
+                if should_block:
+                    marker_write_started.set()
+                    resume_marker_write.wait(timeout=5)
+                return original_dump(value, handle, *args, **kwargs)
+
+            with patch("wcl_report_data.storage.json.dump", side_effect=blocking_dump):
+                first = threading.Thread(
+                    target=lambda: _capture_error(errors, stores[0].import_root, "AbC123", 3, 1)
+                )
+                second = threading.Thread(
+                    target=lambda: _capture_error(errors, stores[1].import_root, "Other456", 3, 1)
+                )
+                first.start()
+                self.assertTrue(marker_write_started.wait(timeout=5))
+                second.start()
+                second.join(timeout=0.1)
+                resume_marker_write.set()
+                first.join(timeout=5)
+                second.join(timeout=5)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertFalse(errors)
+            self.assertTrue((root / "cache" / "raw" / DatasetStore.CACHE_MARKER).is_file())
+
+    def test_prepare_lock_coordinates_destructive_operations_across_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            context = multiprocessing.get_context("spawn")
+            ready = context.Event()
+            resume = context.Event()
+            process = context.Process(
+                target=_hold_prepare_lock,
+                args=(str(root / "data"), str(root / "cache"), ready, resume),
+            )
+            process.start()
+            self.assertTrue(ready.wait(timeout=5))
+            store = DatasetStore(root / "data", root / "cache")
+
+            try:
+                with self.assertRaisesRegex(DatasetError, "currently being prepared"):
+                    store.remove_dataset("AbC123")
+                with self.assertRaisesRegex(DatasetError, "cache is currently in use"):
+                    store.clear_cache()
+            finally:
+                resume.set()
+                process.join(timeout=5)
+
+            self.assertFalse(process.is_alive())
+            self.assertEqual(process.exitcode, 0)
+
+    def test_empty_persistent_lock_files_do_not_block_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = DatasetStore(root / "data", root / "cache")
+            report_lock = root / "data" / ".locks" / "AbC123-operations.lock"
+            cache_lock = root / "cache" / ".locks" / "operations.lock"
+            report_lock.parent.mkdir(parents=True)
+            cache_lock.parent.mkdir(parents=True)
+            report_lock.touch()
+            cache_lock.touch()
+
+            with store.prepare_lock("AbC123"):
+                pass
 
     def test_obsolete_checkpoint_is_discarded_and_downloaded_again(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -292,6 +558,86 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(client.page_ranges, [(1_000, 5_000), (2_000, 5_000)])
         self.assertEqual(result["bundles"][0]["event_count"], 2)
 
+    def test_current_checkpoint_cannot_claim_completion_without_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = DatasetStore(root / "data", root / "cache")
+            import_root = store.import_root("AbC123", 3, 1)
+            import_root.mkdir(parents=True, exist_ok=True)
+            (import_root / "checkpoint.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "collection_protocol_version": 2,
+                        "report_code": "AbC123",
+                        "revision": 3,
+                        "fight_id": 1,
+                        "range_start_time": 1_000.0,
+                        "range_end_time": 5_000.0,
+                        "next_page_timestamp": 1_000.0,
+                        "seen_cursors": [],
+                        "pages": [],
+                        "event_count": 0,
+                        "done": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = DatasetService(FakeClient(event_pages()), store)
+
+            with self.assertRaisesRegex(DatasetError, "completion state"):
+                service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+    def test_prepare_converts_invalid_checkpoint_text_to_a_dataset_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = DatasetStore(root / "data", root / "cache")
+            import_root = store.import_root("AbC123", 3, 1)
+            import_root.mkdir(parents=True, exist_ok=True)
+            (import_root / "checkpoint.json").write_bytes(b"\xff")
+            service = DatasetService(FakeClient(event_pages()), store)
+
+            with self.assertRaisesRegex(DatasetError, "valid UTF-8 JSON"):
+                service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+    def test_current_checkpoint_cannot_claim_completion_before_the_final_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first = FakeClient(event_pages())
+            first.fail_at = 2_000
+            service = self.make_service(temporary, first)
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            with self.assertRaises(ApiError):
+                service.prepare(ref)
+            checkpoint_path = (
+                Path(temporary) / "cache" / "raw" / "AbC123" / "3" / "1" / "checkpoint.json"
+            )
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            checkpoint["done"] = True
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+            with self.assertRaisesRegex(DatasetError, "completion state"):
+                self.make_service(temporary, FakeClient(event_pages())).prepare(ref)
+
+    def test_checkpoint_metadata_must_match_the_raw_page_pagination_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first = FakeClient(event_pages())
+            first.fail_at = 2_000
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            with self.assertRaises(ApiError):
+                self.make_service(temporary, first).prepare(ref)
+            checkpoint_path = (
+                Path(temporary) / "cache" / "raw" / "AbC123" / "3" / "1" / "checkpoint.json"
+            )
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            checkpoint["pages"][0]["next_page_timestamp"] = None
+            checkpoint["next_page_timestamp"] = 1_000.0
+            checkpoint["seen_cursors"] = []
+            checkpoint["done"] = True
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+            with self.assertRaisesRegex(DatasetError, "pagination state"):
+                self.make_service(temporary, FakeClient(event_pages())).prepare(ref)
+
     def test_revision_change_never_publishes_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             client = FakeClient(event_pages())
@@ -302,8 +648,7 @@ class DatasetTests(unittest.TestCase):
                 service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
 
             fight_dir = Path(temporary) / "data" / "reports" / "AbC123" / "revisions" / "3" / "fights" / "1"
-
-        self.assertFalse((fight_dir / "manifest.json").exists())
+            self.assertFalse((fight_dir / "manifest.json").exists())
 
     def test_same_revision_index_is_immutable_across_input_hints(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -409,6 +754,28 @@ class DatasetTests(unittest.TestCase):
             with self.assertRaises(DatasetError):
                 self.make_service(temporary, FakeClient(event_pages())).prepare(ref)
 
+    def test_raw_checkpoint_converts_an_invalid_deflate_stream_to_a_dataset_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first = FakeClient(event_pages())
+            first.fail_at = 2_000
+            service = self.make_service(temporary, first)
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            with self.assertRaises(ApiError):
+                service.prepare(ref)
+            checkpoint_path = (
+                Path(temporary) / "cache" / "raw" / "AbC123" / "3" / "1" / "checkpoint.json"
+            )
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            page_path = Path(checkpoint["pages"][0]["path"])
+            compressed = bytearray(gzip.compress(b'{"data":[],"nextPageTimestamp":null}'))
+            compressed[10] = 0xFF
+            page_path.write_bytes(compressed)
+            checkpoint["pages"][0]["sha256"] = hashlib.sha256(compressed).hexdigest()
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+            with self.assertRaisesRegex(DatasetError, "invalid gzip JSON"):
+                self.make_service(temporary, FakeClient(event_pages())).prepare(ref)
+
     def test_cache_clear_refuses_unowned_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -491,6 +858,45 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(queried["returned"], 200)
         self.assertTrue(queried["truncated"])
         self.assertEqual(queried["next_cursor"], 199)
+
+    def test_query_rejects_a_manifest_that_is_not_an_object(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = Path(temporary) / "manifest.json"
+            manifest_path.write_text("[]", encoding="utf-8")
+
+            with self.assertRaisesRegex(DatasetError, "JSON object"):
+                query_bundle(manifest_path)
+
+    def test_query_rejects_an_unsupported_manifest_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = Path(temporary) / "manifest.json"
+            manifest_path.write_text(
+                json.dumps({"schema_version": 999, "complete": True}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(DatasetError, "unsupported schema"):
+                query_bundle(manifest_path)
+
+    def test_query_rejects_a_boolean_manifest_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = Path(temporary) / "manifest.json"
+            manifest_path.write_text(
+                json.dumps({"schema_version": True, "complete": True}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(DatasetError, "unsupported schema"):
+                query_bundle(manifest_path)
+
+    def test_query_converts_invalid_manifest_text_to_a_dataset_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = Path(temporary) / "manifest.json"
+            for content in (b"{", b"\xff"):
+                with self.subTest(content=content):
+                    manifest_path.write_bytes(content)
+                    with self.assertRaisesRegex(DatasetError, "valid UTF-8 JSON"):
+                        query_bundle(manifest_path)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import io
 import unittest
 from http.client import IncompleteRead
@@ -9,12 +10,13 @@ from urllib.request import Request
 
 from wcl_report_data.api import EVENT_QUERY, REPORT_RESERVATION_POINTS, WclClient
 from wcl_report_data.config import Credentials
-from wcl_report_data.errors import RateLimitError
+from wcl_report_data.errors import ApiError, RateLimitError
 
 
 class Response:
-    def __init__(self, value: bytes | Exception) -> None:
+    def __init__(self, value: bytes | Exception, headers: dict[str, str] | None = None) -> None:
         self.value = value
+        self.headers = headers or {}
 
     def __enter__(self):
         return self
@@ -44,6 +46,32 @@ class WclClientTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         self.assertEqual(request.call_count, 2)
         sleep.assert_called_once_with(0)
+
+    def test_requests_and_decodes_gzip_responses(self) -> None:
+        response = Response(gzip.compress(b'{"ok": true}'), {"Content-Encoding": "GZip"})
+        request = Request("https://example.invalid")
+
+        with patch("wcl_report_data.api.urlopen", return_value=response):
+            result = self.make_client()._request_json(request)
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(request.get_header("Accept-encoding"), "gzip")
+
+    def test_rejects_an_invalid_gzip_response(self) -> None:
+        response = Response(b"not gzip", {"Content-Encoding": "gzip"})
+
+        with patch("wcl_report_data.api.urlopen", return_value=response):
+            with self.assertRaisesRegex(ApiError, "invalid gzip"):
+                self.make_client()._request_json(Request("https://example.invalid"))
+
+    def test_rejects_a_gzip_response_with_an_invalid_deflate_stream(self) -> None:
+        compressed = bytearray(gzip.compress(b'{"ok": true}'))
+        compressed[10] = 0xFF
+        response = Response(bytes(compressed), {"Content-Encoding": "gzip"})
+
+        with patch("wcl_report_data.api.urlopen", return_value=response):
+            with self.assertRaisesRegex(ApiError, "invalid gzip"):
+                self.make_client()._request_json(Request("https://example.invalid"))
 
     def test_first_429_opens_circuit_breaker_without_retrying(self) -> None:
         error = HTTPError(

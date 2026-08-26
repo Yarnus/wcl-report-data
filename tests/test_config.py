@@ -52,6 +52,14 @@ class CredentialTests(unittest.TestCase):
         with self.assertRaises(CredentialError):
             resolve_credentials(environ={"WCL_CLIENT_ID": "id-only"}, env_files=[])
 
+    def test_rejects_an_env_file_that_is_not_utf_8(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            env_file = Path(temporary) / ".env"
+            env_file.write_bytes(b"WCL_CLIENT_ID=\xff\n")
+
+            with self.assertRaisesRegex(CredentialError, "valid UTF-8"):
+                resolve_credentials(environ={}, env_files=[env_file])
+
     def test_missing_credentials_mentions_local_env_file(self) -> None:
         with self.assertRaisesRegex(CredentialError, "current working directory"):
             resolve_credentials(environ={}, env_files=[])

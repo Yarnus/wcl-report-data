@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import http.client
 import json
 import ssl
 import threading
 import time
+import zlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -260,10 +262,13 @@ class WclClient:
             raise RateLimitError("WCL API rate-limit circuit breaker is open; request was not started.")
 
     def _request_json(self, request: Request) -> dict[str, Any]:
+        if not request.has_header("Accept-Encoding"):
+            request.add_header("Accept-Encoding", "gzip")
         for attempt in range(self.max_retries + 1):
             try:
                 with urlopen(request, timeout=self.timeout) as response:
                     raw = response.read()
+                    content_encoding = response.headers.get("Content-Encoding")
                 break
             except HTTPError as exc:
                 if exc.code == 429:
@@ -284,9 +289,14 @@ class WclClient:
                 raise ApiError(f"Unable to reach WCL after {self.max_retries + 1} attempts: {reason}") from exc
         else:
             raise AssertionError("WCL request retry loop exited unexpectedly.")
+        if isinstance(content_encoding, str) and content_encoding.strip().lower() == "gzip":
+            try:
+                raw = gzip.decompress(raw)
+            except (EOFError, OSError, zlib.error) as exc:
+                raise ApiError("WCL returned an invalid gzip response.") from exc
         try:
             payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ApiError("WCL returned a non-JSON response.") from exc
         if not isinstance(payload, dict):
             raise ApiError("WCL returned an unexpected JSON value.")

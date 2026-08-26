@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import errno
 import gzip
 import json
+import math
 import os
 import shutil
 import tempfile
 import time
+import zlib
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -17,10 +20,67 @@ from .errors import ApiError, DatasetError, InputError, RevisionChangedError
 from .models import ReportRef
 from .storage import atomic_write_gzip_json, atomic_write_json, directory_size, read_json, sha256_file
 
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
 
 SCHEMA_VERSION = 1
 COLLECTION_PROTOCOL_VERSION = 2
 RETAIL_GAME_VERSION = 1
+
+
+def _try_file_lock(descriptor: int, *, shared: bool) -> None:
+    if os.name == "nt":
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"\0")
+            os.fsync(descriptor)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                raise BlockingIOError from exc
+            raise
+        return
+    mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+    fcntl.flock(descriptor, mode | fcntl.LOCK_NB)
+
+
+def _unlock(descriptor: int) -> None:
+    if os.name == "nt":
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        return
+    fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _file_lock(
+    path: Path, *, shared: bool = False, timeout_seconds: float, unavailable_message: str
+) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    deadline = time.monotonic() + timeout_seconds
+    acquired = False
+    try:
+        while not acquired:
+            try:
+                _try_file_lock(descriptor, shared=shared)
+                acquired = True
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise DatasetError(unavailable_message)
+                time.sleep(0.05)
+        yield
+    finally:
+        try:
+            if acquired:
+                _unlock(descriptor)
+        finally:
+            os.close(descriptor)
+
 
 COMMON_EVENT_FIELDS = {
     "timestamp",
@@ -70,8 +130,10 @@ DETAIL_EVENT_FIELDS = {
     "extraAbilityGameID",
     "extraAttacks",
     "killerID",
+    "killerInstance",
     "killingAbilityGameID",
     "healerID",
+    "healerInstance",
     "deathSaveAbilityGameID",
     "deathSaveTime",
     "friendly",
@@ -146,8 +208,8 @@ class DatasetStore:
     CACHE_MARKER = ".wcl-report-data-cache"
 
     def __init__(self, data_root: Path, cache_root: Path) -> None:
-        self.data_root = data_root.expanduser()
-        self.cache_root = cache_root.expanduser()
+        self.data_root = data_root.expanduser().resolve()
+        self.cache_root = cache_root.expanduser().resolve()
 
     def report_root(self, code: str) -> Path:
         return self.data_root / "reports" / code
@@ -163,8 +225,14 @@ class DatasetStore:
 
     def import_root(self, code: str, revision: int, fight_id: int) -> Path:
         raw_root = self.cache_root / "raw"
-        self._ensure_owned_cache(raw_root)
+        with self._cache_initialization_lock():
+            self._ensure_owned_cache(raw_root)
         return raw_root / code / str(revision) / str(fight_id)
+
+    @contextmanager
+    def prepare_lock(self, code: str) -> Iterator[None]:
+        with self._report_operation_lock(code), self._cache_operation_lock(shared=os.name != "nt"):
+            yield
 
     def write_index(self, index: dict[str, Any]) -> Path:
         code = str(index["report"]["code"])
@@ -197,12 +265,13 @@ class DatasetStore:
         if not code.isalnum():
             raise InputError("Report code must be alphanumeric.")
         target = self.report_root(code) if revision is None else self.revision_root(code, revision)
-        with self._latest_lock(code):
-            existed = target.exists()
-            if existed:
-                shutil.rmtree(target)
-            if revision is not None:
-                self._repair_latest_unlocked(code)
+        with self._report_operation_lock(code):
+            with self._latest_lock(code):
+                existed = target.exists()
+                if existed:
+                    shutil.rmtree(target)
+                if revision is not None:
+                    self._repair_latest_unlocked(code)
         return {"removed": existed, "path": str(target)}
 
     def cache_status(self) -> dict[str, Any]:
@@ -211,13 +280,14 @@ class DatasetStore:
         return {"cache_root": str(self.cache_root), "files": files, "bytes": directory_size(raw_root)}
 
     def clear_cache(self) -> dict[str, Any]:
-        status = self.cache_status()
-        raw_root = self.cache_root / "raw"
-        if raw_root.exists():
-            marker = raw_root / self.CACHE_MARKER
-            if not marker.is_file():
-                raise DatasetError(f"Refusing to clear unowned cache directory: {raw_root}")
-            shutil.rmtree(raw_root)
+        with self._cache_operation_lock(), self._cache_initialization_lock():
+            status = self.cache_status()
+            raw_root = self.cache_root / "raw"
+            if raw_root.exists():
+                marker = raw_root / self.CACHE_MARKER
+                if not marker.is_file():
+                    raise DatasetError(f"Refusing to clear unowned cache directory: {raw_root}")
+                shutil.rmtree(raw_root)
         return {"cleared": True, "previous": status}
 
     def _ensure_owned_cache(self, raw_root: Path) -> None:
@@ -269,32 +339,48 @@ class DatasetStore:
 
     @contextmanager
     def _latest_lock(self, code: str, timeout_seconds: float = 5.0) -> Iterator[None]:
-        locks_root = self.data_root / ".locks"
-        locks_root.mkdir(parents=True, exist_ok=True)
-        lock_path = locks_root / f"{code}.lock"
-        deadline = time.monotonic() + timeout_seconds
-        descriptor: int | None = None
-        while descriptor is None:
-            try:
-                descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                try:
-                    if time.time() - lock_path.stat().st_mtime > 60:
-                        lock_path.unlink()
-                        continue
-                except FileNotFoundError:
-                    continue
-                if time.monotonic() >= deadline:
-                    raise DatasetError(f"Timed out waiting for report index lock: {lock_path}")
-                time.sleep(0.05)
-        try:
-            os.close(descriptor)
-            descriptor = None
+        lock_path = self.data_root / ".locks" / f"{code}-index.lock"
+        with _file_lock(
+            lock_path,
+            timeout_seconds=timeout_seconds,
+            unavailable_message=f"Timed out waiting for report index lock: {lock_path}",
+        ):
             yield
-        finally:
-            if descriptor is not None:
-                os.close(descriptor)
-            lock_path.unlink(missing_ok=True)
+
+    @contextmanager
+    def _report_operation_lock(self, code: str) -> Iterator[None]:
+        lock_path = self.data_root / ".locks" / f"{code}-operations.lock"
+        with _file_lock(
+            lock_path,
+            timeout_seconds=0,
+            unavailable_message=f"Report {code} is currently being prepared or modified.",
+        ):
+            yield
+
+    @contextmanager
+    def _cache_operation_lock(self, *, shared: bool = False) -> Iterator[None]:
+        lock_path = self.cache_root / ".locks" / "operations.lock"
+        with _file_lock(
+            lock_path,
+            shared=shared,
+            timeout_seconds=0,
+            unavailable_message=(
+                "Raw-page cache is currently being cleared."
+                if shared
+                else "Raw-page cache is currently in use by prepare."
+            ),
+        ):
+            yield
+
+    @contextmanager
+    def _cache_initialization_lock(self) -> Iterator[None]:
+        lock_path = self.cache_root / ".locks" / "initialization.lock"
+        with _file_lock(
+            lock_path,
+            timeout_seconds=5,
+            unavailable_message=f"Timed out waiting for cache initialization lock: {lock_path}",
+        ):
+            yield
 
 
 class DatasetService:
@@ -304,6 +390,12 @@ class DatasetService:
 
     def inspect(self, ref: ReportRef) -> dict[str, Any]:
         report, rate_limit = self.client.fetch_report(ref.code)
+        if not isinstance(report, dict):
+            raise ApiError("WCL returned an invalid report object.")
+        if report.get("code") != ref.code:
+            raise ApiError(
+                f"WCL response report code {report.get('code')!r} does not match requested report {ref.code}."
+            )
         self._validate_report(report)
         fights = self._fight_summaries(report)
         selected_fight_id = self._resolve_url_fight(ref, fights)
@@ -363,47 +455,50 @@ class DatasetService:
         if ref.fight is not None and selectors:
             raise InputError("A URL fight cannot be combined with another selector; use a bare report URL.")
 
-        inspected = self.inspect(ref)
-        index = read_json(Path(inspected["index_path"]))
-        fights = index["fights"]
-        fight_by_id = {fight["fight_id"]: fight for fight in fights}
-        selected_ids: list[int]
-        if explicit_fights:
-            selected_ids = explicit_fights
-        elif encounter_id is not None:
-            selected_ids = [
-                fight["fight_id"]
-                for fight in fights
-                if fight["encounter_id"] == encounter_id and fight["packable"]
-            ]
-            if not selected_ids:
-                raise InputError(f"No completed packable Boss attempts use encounter ID {encounter_id}.")
-        elif all_boss_fights:
-            selected_ids = [fight["fight_id"] for fight in fights if fight["packable"]]
-            if not selected_ids:
-                raise InputError("The report has no completed packable Boss attempts.")
-        elif inspected["selected_fight_id"] is not None:
-            selected_ids = [int(inspected["selected_fight_id"])]
-        else:
-            raise InputError("No fight was selected. Inspect the report, then choose a fight, encounter, or all Boss fights.")
+        with self.store.prepare_lock(ref.code):
+            inspected = self.inspect(ref)
+            index = read_json(Path(inspected["index_path"]))
+            fights = index["fights"]
+            fight_by_id = {fight["fight_id"]: fight for fight in fights}
+            selected_ids: list[int]
+            if explicit_fights:
+                selected_ids = explicit_fights
+            elif encounter_id is not None:
+                selected_ids = [
+                    fight["fight_id"]
+                    for fight in fights
+                    if fight["encounter_id"] == encounter_id and fight["packable"]
+                ]
+                if not selected_ids:
+                    raise InputError(f"No completed packable Boss attempts use encounter ID {encounter_id}.")
+            elif all_boss_fights:
+                selected_ids = [fight["fight_id"] for fight in fights if fight["packable"]]
+                if not selected_ids:
+                    raise InputError("The report has no completed packable Boss attempts.")
+            elif inspected["selected_fight_id"] is not None:
+                selected_ids = [int(inspected["selected_fight_id"])]
+            else:
+                raise InputError(
+                    "No fight was selected. Inspect the report, then choose a fight, encounter, or all Boss fights."
+                )
 
-        bundles = []
-        for fight_id in dict.fromkeys(selected_ids):
-            fight = fight_by_id.get(fight_id)
-            if fight is None:
-                raise InputError(f"Fight {fight_id} is not present in report {ref.code}.")
-            if not fight["packable"]:
-                raise InputError(f"Fight {fight_id} cannot be prepared: {fight['unpackable_reason']}.")
-            bundles.append(self._prepare_fight(index, fight))
-        return {
-            "ok": True,
-            "action": "prepare",
-            "report_code": ref.code,
-            "revision": index["report"]["revision"],
-            "index_path": inspected["index_path"],
-            "bundles": bundles,
-            "rate_limit": inspected["rate_limit"],
-        }
+            bundles = []
+            for fight_id in dict.fromkeys(selected_ids):
+                fight = fight_by_id.get(fight_id)
+                if fight is None:
+                    raise InputError(f"Fight {fight_id} is not present in report {ref.code}.")
+                if not fight["packable"]:
+                    raise InputError(f"Fight {fight_id} cannot be prepared: {fight['unpackable_reason']}.")
+                bundles.append(self._prepare_fight(index, fight))
+            return {
+                "ok": True,
+                "action": "prepare",
+                "report_code": ref.code,
+                "revision": index["report"]["revision"],
+                "index_path": inspected["index_path"],
+                "bundles": bundles,
+                "rate_limit": inspected["rate_limit"],
+            }
 
     def _prepare_fight(self, index: dict[str, Any], fight: dict[str, Any]) -> dict[str, Any]:
         code = str(index["report"]["code"])
@@ -412,14 +507,17 @@ class DatasetService:
         target = self.store.fight_root(code, revision, fight_id)
         manifest_path = target / "manifest.json"
         if manifest_path.exists():
-            manifest = read_json(manifest_path)
+            manifest = _read_bundle_manifest(manifest_path)
             if manifest.get("complete") is True and _has_current_collection_range(manifest, fight):
                 expected_identity = {
                     "report_code": code,
                     "report_revision": revision,
                     "fight_id": fight_id,
                 }
-                if manifest.get("schema_version") != SCHEMA_VERSION or manifest.get("identity") != expected_identity:
+                schema_version = manifest.get("schema_version")
+                if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
+                    raise DatasetError("Fight Bundle uses an unsupported schema version.")
+                if manifest.get("identity") != expected_identity:
                     raise DatasetError("Fight Bundle manifest identity does not match its dataset path.")
                 _validate_bundle_file(manifest_path, manifest)
                 return _bundle_result(manifest_path, manifest, cache_hit=True)
@@ -465,7 +563,12 @@ class DatasetService:
         range_start = float(fight["start_time"])
         range_end = float(fight["end_time"])
         if path.exists():
-            value = read_json(path)
+            try:
+                value = read_json(path)
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise DatasetError("Raw-page checkpoint must be a valid UTF-8 JSON object.") from exc
+            if not isinstance(value, dict):
+                raise DatasetError("Raw-page checkpoint must be a JSON object.")
             if value.get("collection_protocol_version") != COLLECTION_PROTOCOL_VERSION:
                 return _new_checkpoint(code, revision, fight_id, range_start, range_end)
             identity = (value.get("report_code"), value.get("revision"), value.get("fight_id"))
@@ -473,14 +576,101 @@ class DatasetService:
                 raise DatasetError("Raw-page checkpoint identity does not match the requested fight.")
             if (value.get("range_start_time"), value.get("range_end_time")) != (range_start, range_end):
                 raise DatasetError("Raw-page checkpoint time range does not match the requested fight.")
-            for page in value.get("pages") or []:
-                page_path = Path(page.get("path", ""))
-                if page_path.parent.resolve() != path.parent.resolve() or not page_path.name.startswith("page-"):
-                    raise DatasetError("Raw-page checkpoint points outside its import directory.")
-                if not page_path.is_file() or sha256_file(page_path) != page.get("sha256"):
-                    raise DatasetError(f"Raw-page cache failed checksum validation: {page_path}")
+            self._validate_checkpoint(value, path, range_start, range_end)
             return value
         return _new_checkpoint(code, revision, fight_id, range_start, range_end)
+
+    def _validate_checkpoint(
+        self, value: dict[str, Any], path: Path, range_start: float, range_end: float
+    ) -> None:
+        pages = value.get("pages")
+        seen_cursors = value.get("seen_cursors")
+        done = value.get("done")
+        event_count = value.get("event_count")
+        if not isinstance(pages, list):
+            raise DatasetError("Raw-page checkpoint has an invalid page list.")
+        if not isinstance(seen_cursors, list):
+            raise DatasetError("Raw-page checkpoint has an invalid cursor list.")
+        if not isinstance(done, bool):
+            raise DatasetError("Raw-page checkpoint has an invalid completion state.")
+        if isinstance(event_count, bool) or not isinstance(event_count, int) or event_count < 0:
+            raise DatasetError("Raw-page checkpoint has an invalid event count.")
+
+        expected_start = range_start
+        expected_cursors: list[int | float] = []
+        expected_event_count = 0
+        for page_number, page in enumerate(pages, start=1):
+            if not isinstance(page, dict):
+                raise DatasetError("Raw-page checkpoint contains an invalid page entry.")
+            if page.get("number") != page_number:
+                raise DatasetError("Raw-page checkpoint page numbers are not contiguous.")
+            if (page.get("query_start_time"), page.get("query_end_time")) != (
+                expected_start,
+                range_end,
+            ):
+                raise DatasetError("Raw-page checkpoint pagination ranges are inconsistent.")
+            page_events = page.get("events")
+            if isinstance(page_events, bool) or not isinstance(page_events, int) or page_events < 0:
+                raise DatasetError("Raw-page checkpoint contains an invalid page event count.")
+            expected_event_count += page_events
+
+            if "next_page_timestamp" not in page:
+                raise DatasetError("Raw-page checkpoint contains an invalid pagination state.")
+            next_timestamp = page["next_page_timestamp"]
+            if next_timestamp is None:
+                if page_number != len(pages):
+                    raise DatasetError("Raw-page checkpoint continued after its final page.")
+            else:
+                if (
+                    isinstance(next_timestamp, bool)
+                    or not isinstance(next_timestamp, (int, float))
+                    or not math.isfinite(next_timestamp)
+                    or next_timestamp <= expected_start
+                    or next_timestamp > range_end
+                ):
+                    raise DatasetError("Raw-page checkpoint contains an invalid pagination cursor.")
+                expected_cursors.append(next_timestamp)
+                expected_start = next_timestamp
+
+            expected_name = f"page-{page_number:06d}.json.gz"
+            stored_path = page.get("path")
+            if not isinstance(stored_path, str) or Path(stored_path).name != expected_name:
+                raise DatasetError("Raw-page checkpoint points outside its import directory.")
+            page_path = (path.parent / expected_name).resolve()
+            if Path(stored_path).is_absolute() and Path(stored_path).resolve() != page_path:
+                raise DatasetError("Raw-page checkpoint points outside its import directory.")
+            if not page_path.is_file() or sha256_file(page_path) != page.get("sha256"):
+                raise DatasetError(f"Raw-page cache failed checksum validation: {page_path}")
+            try:
+                with gzip.open(page_path, "rt", encoding="utf-8") as handle:
+                    raw_page = json.load(handle)
+            except (EOFError, OSError, UnicodeError, json.JSONDecodeError, zlib.error) as exc:
+                raise DatasetError(f"Raw-page cache contains invalid gzip JSON: {page_path}") from exc
+            raw_events = raw_page.get("data") if isinstance(raw_page, dict) else None
+            if not isinstance(raw_events, list) or any(not isinstance(event, dict) for event in raw_events):
+                raise DatasetError(f"Raw-page cache contains an invalid event page: {page_path}")
+            if (
+                not isinstance(raw_page, dict)
+                or "nextPageTimestamp" not in raw_page
+                or raw_page["nextPageTimestamp"] != next_timestamp
+            ):
+                raise DatasetError("Raw-page checkpoint does not match its page pagination state.")
+            if len(raw_events) != page_events:
+                raise DatasetError("Raw-page checkpoint does not match its page event count.")
+            page["path"] = str(page_path)
+
+        completed_pages = bool(pages) and pages[-1].get("next_page_timestamp") is None
+        if done != completed_pages:
+            raise DatasetError("Raw-page checkpoint has an inconsistent completion state.")
+        if seen_cursors != expected_cursors:
+            raise DatasetError("Raw-page checkpoint cursor history is inconsistent.")
+        if event_count != expected_event_count:
+            raise DatasetError("Raw-page checkpoint event count is inconsistent.")
+        expected_next = range_start if not pages else (
+            pages[-1]["query_start_time"] if done else pages[-1]["next_page_timestamp"]
+        )
+        if value.get("next_page_timestamp") != expected_next:
+            raise DatasetError("Raw-page checkpoint next cursor is inconsistent.")
 
     def _download_pages(
         self,
@@ -497,12 +687,22 @@ class DatasetService:
             events = page.get("data") if isinstance(page, dict) else None
             if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
                 raise ApiError("WCL returned an invalid event page.")
-            next_timestamp = page.get("nextPageTimestamp")
+            if "nextPageTimestamp" not in page:
+                raise ApiError("WCL event page did not contain nextPageTimestamp.")
+            next_timestamp = page["nextPageTimestamp"]
             if next_timestamp is not None:
-                if not isinstance(next_timestamp, (int, float)) or isinstance(next_timestamp, bool):
+                if (
+                    not isinstance(next_timestamp, (int, float))
+                    or isinstance(next_timestamp, bool)
+                    or not math.isfinite(next_timestamp)
+                ):
                     raise ApiError("WCL returned an invalid nextPageTimestamp.")
-                if next_timestamp == start_time or next_timestamp in checkpoint["seen_cursors"]:
-                    raise ApiError(f"WCL event pagination stalled at {next_timestamp}.")
+                if next_timestamp <= start_time:
+                    raise ApiError(
+                        f"WCL event pagination did not advance from {start_time} to {next_timestamp}."
+                    )
+                if next_timestamp in checkpoint["seen_cursors"]:
+                    raise ApiError(f"WCL event pagination repeated cursor {next_timestamp}.")
                 if next_timestamp > end_time:
                     raise ApiError(f"WCL event pagination exceeded fight end time {end_time}.")
 
@@ -540,6 +740,8 @@ class DatasetService:
         event_types: Counter[str] = Counter()
         sequence = 0
         previous_timestamp: float | None = None
+        fight_start = float(fight["start_time"])
+        fight_end = float(fight["end_time"])
         with gzip.open(events_path, "wt", encoding="utf-8") as output:
             for page in checkpoint["pages"]:
                 page_path = Path(page["path"])
@@ -551,11 +753,16 @@ class DatasetService:
                     canonical, unknown = _canonical_event(
                         event,
                         sequence=sequence,
-                        fight_start=float(fight["start_time"]),
+                        fight_start=fight_start,
                         page_number=int(page["number"]),
                         page_index=page_index,
                     )
                     timestamp = canonical["report_time_ms"]
+                    if timestamp < fight_start or timestamp > fight_end:
+                        raise ApiError(
+                            f"WCL event timestamp {timestamp} is outside Boss Attempt range "
+                            f"{fight_start}..{fight_end}."
+                        )
                     if previous_timestamp is not None and timestamp < previous_timestamp:
                         raise ApiError("WCL events were not ordered by timestamp across pages.")
                     previous_timestamp = timestamp
@@ -698,6 +905,16 @@ class DatasetService:
         }
 
 
+def _read_bundle_manifest(path: Path) -> dict[str, Any]:
+    try:
+        manifest = read_json(path)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise DatasetError("Fight Bundle manifest must be a valid UTF-8 JSON object.") from exc
+    if not isinstance(manifest, dict):
+        raise DatasetError("Fight Bundle manifest must be a JSON object.")
+    return manifest
+
+
 def query_bundle(
     manifest_path: Path,
     *,
@@ -712,7 +929,10 @@ def query_bundle(
 ) -> dict[str, Any]:
     if limit <= 0 or limit > 10_000:
         raise InputError("Query limit must be between 1 and 10000.")
-    manifest = read_json(manifest_path)
+    manifest = _read_bundle_manifest(manifest_path)
+    schema_version = manifest.get("schema_version")
+    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
+        raise DatasetError("Fight Bundle uses an unsupported schema version.")
     if manifest.get("complete") is not True:
         raise DatasetError("Only complete Fight Bundles can be queried.")
     events_path = _validate_bundle_file(manifest_path, manifest)
@@ -755,8 +975,12 @@ def _canonical_event(
     event: dict[str, Any], *, sequence: int, fight_start: float, page_number: int, page_index: int
 ) -> tuple[dict[str, Any], set[str]]:
     timestamp = event.get("timestamp")
-    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
-        raise ApiError("A WCL event did not contain a numeric timestamp.")
+    if (
+        isinstance(timestamp, bool)
+        or not isinstance(timestamp, (int, float))
+        or not math.isfinite(timestamp)
+    ):
+        raise ApiError("A WCL event did not contain a finite numeric timestamp.")
     ability_id = event.get("abilityGameID")
     if ability_id is None and isinstance(event.get("ability"), dict):
         ability = event["ability"]
@@ -799,7 +1023,8 @@ def _bundle_result(path: Path, manifest: dict[str, Any], *, cache_hit: bool) -> 
 
 
 def _validate_bundle_file(manifest_path: Path, manifest: dict[str, Any]) -> Path:
-    if manifest.get("collection", {}).get("protocol_version") != COLLECTION_PROTOCOL_VERSION:
+    collection = manifest.get("collection")
+    if not isinstance(collection, dict) or collection.get("protocol_version") != COLLECTION_PROTOCOL_VERSION:
         raise DatasetError("Fight Bundle uses an obsolete event collection protocol; prepare it again.")
     events_name = manifest.get("events_file")
     if not isinstance(events_name, str):
