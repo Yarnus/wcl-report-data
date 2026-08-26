@@ -326,8 +326,15 @@ class DatasetService:
             "fights": fights,
         }
         index_path = self.store.write_index(index)
+        difficulty_names = {
+            item.get("id"): item.get("name")
+            for item in (report.get("zone") or {}).get("difficulties") or []
+            if isinstance(item, dict)
+            and isinstance(item.get("id"), int)
+            and isinstance(item.get("name"), str)
+        }
         selected = next((fight for fight in fights if fight["fight_id"] == selected_fight_id), None)
-        choices = [self._choice(fight) for fight in fights if fight["kind"] == "boss"]
+        choices = [self._choice(fight, difficulty_names) for fight in fights if fight["kind"] == "boss"]
         return {
             "ok": True,
             "action": "inspect",
@@ -336,7 +343,7 @@ class DatasetService:
             "index_path": str(index_path),
             "input_reference": ref.as_dict(),
             "selected_fight_id": selected_fight_id,
-            "selected_fight": self._choice(selected) if selected else None,
+            "selected_fight": self._choice(selected, difficulty_names) if selected else None,
             "fight_choices": choices,
             "rate_limit": rate_limit,
         }
@@ -674,7 +681,9 @@ class DatasetService:
         return ref.fight
 
     @staticmethod
-    def _choice(fight: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _choice(
+        fight: dict[str, Any] | None, difficulty_names: dict[int, str]
+    ) -> dict[str, Any] | None:
         if fight is None:
             return None
         return {
@@ -683,7 +692,10 @@ class DatasetService:
                 "fight_id", "encounter_id", "name", "kill", "in_progress", "difficulty", "duration_ms",
                 "fight_percentage", "boss_percentage", "packable", "unpackable_reason",
             )
-        } | {"participants": len(fight.get("participants") or [])}
+        } | {
+            "difficulty_name": difficulty_names.get(fight.get("difficulty")),
+            "participants": len(fight.get("participants") or []),
+        }
 
 
 def query_bundle(

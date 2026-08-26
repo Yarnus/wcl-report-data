@@ -17,6 +17,8 @@ Client credentials can read public reports and unlisted reports when the code is
 
 Report indexing fetches report revision, archive status, Retail game version, master actors and abilities, and fight participation metadata.
 
+Fight difficulty IDs are interpreted only through the `zone.difficulties { id name }` values returned for that report. They are not mapped through a hardcoded global enum because IDs can differ between WCL contexts.
+
 Fight collection uses `Report.events` with:
 
 - one `fightID`

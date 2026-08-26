@@ -3,7 +3,7 @@ name: wcl-report-data
 description: 从正式服 Warcraft Logs 团队副本报告中准备结构化的全团数据。当用户提供 WCL 报告链接、需要下载报告或战斗数据、希望为后续复盘整理事件，或需要团队死亡与承伤分析的机器可读数据基础时使用。
 slug: wcl-report-data
 displayName: WCL 团队报告数据
-version: 1.0.2
+version: 1.0.3
 summary: 为 WorkBuddy 准备按报告修订版本保存的正式服 WCL 全团数据集。
 license: MIT
 homepage: https://github.com/Yarnus/wcl-report-data
@@ -48,7 +48,7 @@ python -m wcl_report_data inspect "<WCL_URL>"
 - 数字 `fight`：使用该战斗继续第 3 步。
 - `fight=last`：使用报告顺序中的实际最后一场。如果它是小怪战或仍在进行，返回 `unpackable_reason` 并等待用户重新选择。
 
-战斗选项应保持紧凑，只包含 fight ID、首领、击杀或灭团、时长、进度、参与人数和是否可打包。不得静默选择其他战斗。
+战斗选项应保持紧凑，只包含 fight ID、首领、击杀或灭团、`difficulty_name`、时长、进度、参与人数和是否可打包。难度名称必须使用同一报告 `zone.difficulties` 解析出的 `difficulty_name`；不得用静态数字表猜测 `difficulty` 是 Normal、Heroic 还是 Mythic。不得静默选择其他战斗。
 
 完成标准：`index_path` 指向的 `report.json` 已存在；报告属于正式服、公开或未列出；每场可选战斗都有明确数字 ID。
 

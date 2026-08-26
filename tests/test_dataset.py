@@ -184,6 +184,23 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(index["fights"][1]["kind"], "trash")
         self.assertFalse(index["fights"][2]["packable"])
 
+    def test_inspect_resolves_difficulty_name_from_report_zone(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient()
+            client.report["zone"]["difficulties"] = [
+                {"id": 4, "name": "Heroic", "sizes": [10, 20]},
+                {"id": 5, "name": "Mythic", "sizes": [20]},
+            ]
+            client.report["fights"][0]["difficulty"] = 4
+            service = self.make_service(temporary, client)
+            result = service.inspect(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            )
+
+        self.assertEqual(result["selected_fight"]["difficulty"], 4)
+        self.assertEqual(result["selected_fight"]["difficulty_name"], "Heroic")
+        self.assertEqual(result["fight_choices"][0]["difficulty_name"], "Heroic")
+
     def test_last_selects_actual_last_fight_without_rewriting_its_meaning(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             client = FakeClient()

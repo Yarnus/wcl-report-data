@@ -22,6 +22,8 @@ A Fight Bundle adds one numeric `fight_id`. Files from different report revision
 
 Input-specific fight selection and source hints are returned by `inspect` rather than persisted in the immutable index. The source hint never filters actors or events.
 
+Fight `difficulty` is the raw numeric ID returned by WCL. Consumers must resolve it against `report.zone.difficulties` from the same report and must not use a static global mapping. The compact `selected_fight` and `fight_choices` returned by `inspect` include this resolved value as `difficulty_name`; an unmatched ID produces `null` rather than a guessed name.
+
 ## Fight Bundle
 
 `manifest.json` is written last. Its presence with `complete: true` means:
