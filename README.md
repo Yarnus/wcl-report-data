@@ -1,77 +1,85 @@
 # wcl-report-data
 
-`wcl-report-data` 是一个面向 WorkBuddy 的 Agent Skill 和 Python 3.11 软件包，用于把正式服 Warcraft Logs 团队副本报告整理为按修订版本保存的全团数据集。它只使用 WCL 官方 OAuth 和 GraphQL API，不抓取报告网页。
+<p align="center">
+  <img src="assets/timewarp-inn-dog.svg" width="220" alt="大黄狗守护时空旅馆的原创奇幻图标">
+</p>
 
-首个版本只准备事实数据，不判断伤害是否可规避，不为死亡归责，不比较排名，也不生成复盘结论。
+`wcl-report-data` 是一个面向 WorkBuddy 的 Agent Skill 和 Python 3.11+ 软件包，用于把正式服 Warcraft Logs 团队副本报告整理为按 Report Revision 保存的、可复现的全团事实数据集。
 
-## 环境要求
+它只使用 WCL 官方 OAuth 和 GraphQL API，不抓取报告网页。首个版本只准备事实数据，不判断伤害是否可规避、不为死亡归责、不比较排名，也不生成复盘结论。
 
-- WorkBuddy 网页版或 Python 3.11+
-- 能够访问 `warcraftlogs.com`
-- Warcraft Logs API v2 client ID 和 client secret
+[English documentation](README.en.md)
 
-运行时没有第三方 Python 依赖。
+## 适用范围
 
-报告输入支持 `warcraftlogs.com`、`www.warcraftlogs.com` 和 `cn.warcraftlogs.com`。CN 链接会规范化为全球站链接，API 请求仍使用 WCL 官方全球端点。
+- 支持 Retail 团队副本；不支持怀旧服和 Mythic+。
+- 支持公开和未列出报告；私有报告需要用户 OAuth，当前不支持。
+- 支持 `warcraftlogs.com`、`www.warcraftlogs.com` 和 `cn.warcraftlogs.com` 报告链接。
+- CN 链接会规范化为全球站链接，API 请求仍使用 WCL 官方全球端点。
+- 运行时只依赖 Python 标准库，不需要第三方 Python 包。
 
-## 凭据配置
+## 快速开始
 
-先运行 `doctor`：
+环境要求：Python 3.11+、可访问 `warcraftlogs.com`，以及 Warcraft Logs API v2 client ID 和 client secret。
+
+从仓库根目录或已安装的 Skill 目录运行 CLI：
 
 ```bash
 python -m wcl_report_data doctor
 ```
 
-如果结果为 `wcl_api: reachable`，说明平台注入的进程环境变量或已有 `.env` 已生效，无需再创建文件。`credential_source` 只说明凭据来源，不会显示凭据值。
-
-需要自行配置时，WorkBuddy 云端且 `/workspace` 确实存在的环境可使用 `/workspace/.env`。也可以让 AI 先确认真实 workspace 路径、检查目标文件是否已存在，再创建空白 `.env` 模板；AI 不应覆盖已有文件，也不应要求你在对话中提供 secret。模板内容为：
-
-```dotenv
-WCL_CLIENT_ID=
-WCL_CLIENT_SECRET=
-```
-
-通过文件编辑器私下填好凭据后，本地或自定义 workspace 路径使用：
-
-```bash
-python -m wcl_report_data --env-file "<WORKSPACE>/.env" doctor
-```
-
-`--env-file` 是全局参数，必须写在 `doctor`、`inspect` 或 `prepare` 子命令之前。后续 WCL 命令继续传入同一路径。CLI 也兼容成对出现的 `WCL_ID` 和 `WCL_SECRET`。进程环境变量优先于 `.env`。凭据和 access token 不会写入数据集、缓存或命令输出。
-
-当 `/workspace` 存在时，数据集默认保存到 `/workspace/wcl-report-data/`，可续传原始页保存到 `/workspace/.cache/wcl-report-data/`。本地 Unix/macOS 默认分别使用 `~/.local/share/wcl-report-data/` 和 `~/.cache/wcl-report-data/`；Windows 使用 `%LOCALAPPDATA%`。可通过 `WCL_REPORT_DATA_HOME` 或 `WCL_REPORT_DATA_CACHE` 覆盖路径。
-
-## 基本流程
-
-建立报告索引：
+确认输出中的 `wcl_api` 为 `reachable` 后，建立报告索引：
 
 ```bash
 python -m wcl_report_data inspect "https://www.warcraftlogs.com/reports/<code>"
 ```
 
-准备 URL 中已选择的战斗：
+准备 URL 中选中的战斗：
 
 ```bash
 python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>#fight=12"
 ```
 
-准备指定战斗或某个首领的全部已完成尝试：
+也可以从裸报告 URL 准备指定战斗，或准备某个首领的全部已完成尝试：
 
 ```bash
 python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>" --fight 12 --fight 15
 python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>" --encounter 3129
 ```
 
-查询完整 Fight Bundle，避免把整个事件流放入模型上下文：
+通过返回的 manifest 查询事件，避免把整个事件流放入模型上下文：
 
 ```bash
-python -m wcl_report_data query "/workspace/wcl-report-data/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
+python -m wcl_report_data query \
+  "/workspace/wcl-report-data/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
   --type damage --target-id 17 --limit 200
 ```
 
-完整流程参见 `python -m wcl_report_data --help` 和 `SKILL.md`。
+CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。完整参数参见 `python -m wcl_report_data --help`，完整工作流参见 [Skill 使用说明](SKILL.md)。
+
+## 凭据配置
+
+进程环境变量优先于 `.env` 文件。推荐使用规范名称：
+
+```dotenv
+WCL_CLIENT_ID=
+WCL_CLIENT_SECRET=
+```
+
+CLI 也兼容成对出现的 `WCL_ID` 和 `WCL_SECRET`。需要使用明确路径时，把全局参数放在子命令之前：
+
+```bash
+python -m wcl_report_data --env-file "<WORKSPACE>/.env" doctor
+python -m wcl_report_data --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
+```
+
+AI 不应要求用户在对话中提供或粘贴 secret，不应覆盖已有 `.env`，也不应输出 client secret 或 access token。详细规则参见 [WorkBuddy 配置](references/workbuddy-setup.md) 和 [English setup guide](references/workbuddy-setup.en.md)。
 
 ## 数据布局
+
+默认数据目录取决于运行环境：存在 `/workspace` 时使用 `/workspace/wcl-report-data/`；本地 Unix/macOS 使用 `~/.local/share/wcl-report-data/`；Windows 使用 `%LOCALAPPDATA%/wcl-report-data/`。可用 `WCL_REPORT_DATA_HOME` 覆盖。
+
+原始页和可续传检查点默认放在 `/workspace/.cache/wcl-report-data/` 或 `~/.cache/wcl-report-data/`，Windows 使用 `%LOCALAPPDATA%` 下的 `wcl-report-data/Cache`。可用 `WCL_REPORT_DATA_CACHE` 覆盖。
 
 ```text
 reports/<report-code>/
@@ -83,28 +91,53 @@ reports/<report-code>/
         └── events.jsonl.gz
 ```
 
-同一报告修订版本内的 Fight Bundle 不可变。报告重新导出后会创建新的 revision 目录。WCL 原始页单独压缩保存，使中断的下载可以继续，也便于审计已知字段规范化过程。
+同一 Report Revision 内的 Fight Bundle 不可变。重新导出报告会创建新的 revision 目录；`latest.json` 只是指针，可复现的消费者应使用 manifest 中记录的 revision。原始页单独压缩保存，以便中断下载继续并审计字段规范化过程。
 
-事件分页会在每一页固定传入该战斗的 `startTime` 和 `endTime`。省略 `endTime` 可能导致后续页错误返回空数据；旧采集协议生成的 Bundle 会被拒绝并要求重新准备。
+## 数据与安全边界
 
-规范事件流会有意省略未知字段值。`manifest.json` 会列出每个未知字段名和出现次数。清除原始缓存后，这些未知值的本地副本也会被删除。
+- 只有 `manifest.json` 中 `complete: true` 的 Fight Bundle 才能被后续分析使用。
+- Complete Bundle 必须到达显式的 `nextPageTimestamp: null`，事件时间戳有序，未跨 Report Revision，并通过文件哈希校验。
+- 所有分页请求都重复传入该战斗的固定 `startTime` 和 `endTime`；旧采集协议生成的 Bundle 会被拒绝并要求重新准备。
+- Canonical Event 只保留已知字段；未知字段名和次数写入 manifest，未知值留在 Raw Page 缓存中。
+- 角色名和服务器会保留在本地数据集，以便识别团队成员；对话中展示的数据可能由当前配置的模型服务商处理。
+- 查询结果是证据，不是结论。没有独立的首领机制知识来源时，不得把伤害标记为可规避或推断责任。
 
-## 隐私
+## 数据管理
 
-报告索引保留角色名和服务器，以便后续团队复盘识别参与者。数据保留在 WorkBuddy 工作区中，但对话里展示的事件内容可能由当前配置的模型服务商处理。
+```bash
+python -m wcl_report_data dataset list
+python -m wcl_report_data cache status
+python -m wcl_report_data dataset remove <REPORT_CODE> --confirm
+python -m wcl_report_data cache clear --confirm
+```
 
-## 开发
+删除操作必须显式传入 `--confirm`。清理缓存会保留规范 Fight Bundle，但会删除未知字段值的本地副本和下载检查点。
+
+## 开发与文档
+
+```bash
+make check
+```
+
+手动执行等价检查：
 
 ```bash
 python -m unittest -v
 python -m compileall -q wcl_report_data tests
+git diff --check
 ```
 
-使用同一环境中的凭据执行真实检查：
+文档入口：
 
-```bash
-python -m wcl_report_data doctor
-python -m wcl_report_data inspect "<PUBLIC_WCL_URL>"
-```
+- [English README](README.en.md)
+- [领域术语](CONTEXT.md)
+- [数据契约](references/data-contract.md)
+- [English data contract](references/data-contract.en.md)
+- [WCL API 说明](references/wcl-api.md)
+- [English API notes](references/wcl-api.en.md)
+- [WorkBuddy 凭据与存储配置](references/workbuddy-setup.md)
+- [English setup guide](references/workbuddy-setup.en.md)
+- [Skill 使用说明](SKILL.md)
+- [原创图标](assets/timewarp-inn-dog.svg)
 
-本项目与 Warcraft Logs 或 Blizzard Entertainment 没有关联。使用时请遵守 Warcraft Logs API 访问规则和限流要求。
+图标使用原创的大黄狗、旅馆和时空传送门造型，不包含 Warcraft Logs、Blizzard 或游戏内 Logo 与角色素材。本项目与 Warcraft Logs 或 Blizzard Entertainment 没有关联。使用时请遵守 Warcraft Logs API 访问规则和限流要求。

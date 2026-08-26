@@ -4,7 +4,7 @@ REF ?= HEAD
 DIST_DIR ?= dist
 VERSION ?= $(shell git show "$(REF):wcl_report_data/__init__.py" | $(PYTHON) -c 'import re, sys; match = re.search(r"__version__ = \"([^\"]+)\"", sys.stdin.read()); print(match.group(1) if match else "")')
 ARCHIVE := $(DIST_DIR)/wcl-report-data-$(VERSION).zip
-PACKAGE_PATHS := CONTEXT.md LICENSE.md README.md SKILL.md references wcl_report_data
+PACKAGE_PATHS := CONTEXT.md LICENSE.md README.md README.en.md SKILL.md assets references wcl_report_data
 
 .PHONY: check package publish-dry-run publish clean-package
 

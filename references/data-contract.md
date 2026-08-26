@@ -1,46 +1,48 @@
-# Dataset Contract
+# 数据集契约
 
-## Identity
+本文定义已准备数据的稳定身份、内容和完整性规则。[English version](data-contract.en.md)
 
-A prepared dataset is identified by:
+## 身份
+
+一个已准备的数据集由以下三元组标识：
 
 ```text
 (report_code, report_revision, schema_version)
 ```
 
-A Fight Bundle adds one numeric `fight_id`. Files from different report revisions must never be combined. `latest.json` is only a pointer; reproducible consumers use the revision recorded in each manifest.
+Fight Bundle 还包含一个数字 `fight_id`。不同 Report Revision 的文件绝不能混用。`latest.json` 只是指针；需要可复现结果的消费者应使用每个 manifest 中记录的 revision。
 
 ## Report Index
 
-`report.json` contains:
+`report.json` 包含：
 
-- report metadata and archive accessibility
-- report actors and abilities
-- every WCL fight classified as `boss` or `trash`
-- team participants with actor ID, name, server, class, specialization, and item level
-- `packable` and `unpackable_reason`
+- 报告元数据和归档可访问状态
+- 报告中的 actor 和 ability
+- 每场 WCL 战斗，并分类为 `boss` 或 `trash`
+- 团队参与者的 actor ID、名称、服务器、职业、专精和物品等级
+- `packable` 和 `unpackable_reason`
 
-Input-specific fight selection and source hints are returned by `inspect` rather than persisted in the immutable index. The source hint never filters actors or events.
+某次输入特有的战斗选择和 source hint 由 `inspect` 返回，不写入不可变的 Report Index。source hint 绝不能过滤 actor 或事件。
 
-Fight `difficulty` is the raw numeric ID returned by WCL. Consumers must resolve it against `report.zone.difficulties` from the same report and must not use a static global mapping. The compact `selected_fight` and `fight_choices` returned by `inspect` include this resolved value as `difficulty_name`; an unmatched ID produces `null` rather than a guessed name.
+战斗的 `difficulty` 是 WCL 返回的原始数字 ID。消费者必须使用同一报告中的 `report.zone.difficulties` 解析它，不能使用静态全局映射。`inspect` 返回的精简 `selected_fight` 和 `fight_choices` 包含解析后的 `difficulty_name`；无法匹配时返回 `null`，不能猜测难度名称。
 
 ## Fight Bundle
 
-`manifest.json` is written last. Its presence with `complete: true` means:
+`manifest.json` 最后写入。它存在且 `complete: true` 表示：
 
-1. every WCL event page reached `nextPageTimestamp: null`
-2. pagination did not repeat a cursor
-3. event timestamps remained ordered
-4. the report revision was unchanged after collection
-5. `events.jsonl.gz` was closed and hashed
+1. 所有 WCL 事件页最终到达 `nextPageTimestamp: null`。
+2. 分页游标没有重复。
+3. 事件时间戳保持有序。
+4. 采集结束后 Report Revision 没有变化。
+5. `events.jsonl.gz` 已关闭并计算哈希。
 
-All pages use the same inclusive fight start and end timestamps. Bundles created by an older collection protocol are rejected and must be prepared again.
+所有分页都使用相同且包含边界的战斗开始与结束时间。旧采集协议生成的 Bundle 会被拒绝，必须重新准备。
 
-The manifest records event counts by type, raw-page hashes, the canonical stream hash, collection options, and unknown field counts.
+manifest 记录按类型统计的事件数量、Raw Page 哈希、规范事件流哈希、采集选项和未知字段计数。
 
-## Canonical Events
+## Canonical Event
 
-Each gzip JSONL row has this envelope:
+gzip JSONL 中的每一行使用以下结构：
 
 ```json
 {
@@ -56,12 +58,12 @@ Each gzip JSONL row has this envelope:
 }
 ```
 
-Actor and ability names live in `report.json`; IDs are the event identity. Localized names are display data and must not be used as keys.
+actor 和 ability 名称保存在 `report.json`；ID 才是事件身份。已本地化的名称仅用于展示，不能用作键。
 
-Known `fields` cover amounts, mitigation, healing, resources, health, aura stacks, casts, encounter metadata, combatant gear and talents, and observed combat statistics. WCL event JSON is not frozen. New keys are counted under `unknown_fields` but their values remain only in raw-page cache until the schema explicitly adopts them.
+已知 `fields` 覆盖数值、减伤、治疗、资源、生命值、光环层数、施法、首领战元数据、战斗人员装备与天赋，以及观测到的战斗属性。WCL 事件 JSON 并非固定不变。新键会计入 `unknown_fields`，其值只保留在 Raw Page 缓存中，直到 schema 明确接纳这些字段。
 
-## Query Contract
+## 查询契约
 
-`query` streams the gzip file and returns at most `limit` rows. `matched` counts all matching rows after the input cursor. When `truncated` is true, `next_cursor` is the final returned sequence and can be passed to the next call.
+`query` 以流式方式读取 gzip 文件，最多返回 `limit` 行。`matched` 统计输入游标之后的所有匹配行。`truncated` 为 true 时，`next_cursor` 是最后一条已返回事件的 sequence，可用于下一次查询。
 
-Time filters use `fight_time_ms`. Their bounds are inclusive.
+时间过滤使用 `fight_time_ms`，上下界均包含在结果中。

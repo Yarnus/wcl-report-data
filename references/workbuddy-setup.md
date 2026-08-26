@@ -1,5 +1,7 @@
 # WorkBuddy 凭据与存储配置
 
+本文说明凭据查找顺序和各平台的默认存储位置。[English version](workbuddy-setup.en.md)
+
 WorkBuddy 可能运行在带有持久化 `/workspace` 的云端沙盒中，也可能直接运行在本地 macOS、Linux 或 Windows。不得假定 `/workspace` 一定存在。
 
 ## 凭据
@@ -62,6 +64,6 @@ python -m wcl_report_data --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
 ~/.cache/wcl-report-data/            raw pages and resumable checkpoints
 ```
 
-Windows 默认使用 `%LOCALAPPDATA%`。所有环境都可通过 `WCL_REPORT_DATA_HOME` 和 `WCL_REPORT_DATA_CACHE` 覆盖默认路径。
+Windows 数据目录默认使用 `%LOCALAPPDATA%/wcl-report-data/`，缓存目录使用其下的 `Cache/`。所有环境都可通过 `WCL_REPORT_DATA_HOME` 和 `WCL_REPORT_DATA_CACHE` 覆盖默认路径。
 
 清理缓存会保留规范 Fight Bundle，但会删除被省略的未知字段值和下载检查点。

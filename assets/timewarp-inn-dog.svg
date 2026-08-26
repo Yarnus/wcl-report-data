@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Timewarp Inn guardian dog</title>
+  <desc id="desc">A golden dog in front of a warmly lit fantasy inn, framed by a blue and violet time portal.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#171433"/>
+      <stop offset="0.55" stop-color="#29205a"/>
+      <stop offset="1" stop-color="#111022"/>
+    </linearGradient>
+    <linearGradient id="portal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3be0e2"/>
+      <stop offset="0.48" stop-color="#6c67f0"/>
+      <stop offset="1" stop-color="#c451d8"/>
+    </linearGradient>
+    <linearGradient id="roof" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a405c"/>
+      <stop offset="1" stop-color="#3d1f3f"/>
+    </linearGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b87443"/>
+      <stop offset="1" stop-color="#6a362f"/>
+    </linearGradient>
+    <linearGradient id="fur" x1="0" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#ffd46b"/>
+      <stop offset="0.52" stop-color="#d9902e"/>
+      <stop offset="1" stop-color="#a95725"/>
+    </linearGradient>
+    <linearGradient id="furLight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe6a0"/>
+      <stop offset="1" stop-color="#efa83f"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e9d6a0"/>
+      <stop offset="0.45" stop-color="#b99755"/>
+      <stop offset="1" stop-color="#69502f"/>
+    </linearGradient>
+    <filter id="portalGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="windowGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="badgeClip">
+      <rect x="24" y="24" width="976" height="976" rx="218"/>
+    </clipPath>
+  </defs>
+
+  <rect x="24" y="24" width="976" height="976" rx="218" fill="#0d0b1e"/>
+  <g clip-path="url(#badgeClip)">
+    <rect width="1024" height="1024" fill="url(#background)"/>
+
+    <!-- A quiet star field keeps the portal readable at icon size. -->
+    <g fill="#b8c7ff" opacity="0.72">
+      <circle cx="124" cy="206" r="5"/>
+      <circle cx="205" cy="115" r="3"/>
+      <circle cx="827" cy="133" r="5"/>
+      <circle cx="903" cy="269" r="3"/>
+      <circle cx="756" cy="245" r="3"/>
+      <path d="m154 340 7 18 18 7-18 7-7 18-7-18-18-7 18-7z"/>
+      <path d="m867 371 6 15 15 6-15 6-6 15-6-15-15-6 15-6z"/>
+    </g>
+
+    <!-- The portal suggests a clock and a doorway without copying a game emblem. -->
+    <ellipse cx="512" cy="389" rx="347" ry="315" fill="none" stroke="#35306e" stroke-width="54" opacity="0.65"/>
+    <ellipse cx="512" cy="389" rx="326" ry="294" fill="none" stroke="url(#portal)" stroke-width="26" filter="url(#portalGlow)"/>
+    <ellipse cx="512" cy="389" rx="290" ry="259" fill="#272254" stroke="#a1c5ff" stroke-width="4" opacity="0.95"/>
+
+    <g stroke="#8fe8f1" stroke-width="9" stroke-linecap="round" opacity="0.82">
+      <path d="M512 91v28"/>
+      <path d="m674 135-14 24"/>
+      <path d="m797 258-25 14"/>
+      <path d="M837 389h-28"/>
+      <path d="m797 520-25-14"/>
+      <path d="m674 643-14-24"/>
+      <path d="M350 643 364 619"/>
+      <path d="m227 520 25-14"/>
+      <path d="M187 389h28"/>
+      <path d="m227 258 25 14"/>
+      <path d="m350 135 14 24"/>
+    </g>
+
+    <!-- Warm inn behind the guardian. -->
+    <path d="M229 438 512 230l283 208v326H229z" fill="url(#wood)" stroke="#181126" stroke-width="22" stroke-linejoin="round"/>
+    <path d="m183 449 329-249 329 249-34 48L512 278 217 497z" fill="url(#roof)" stroke="#181126" stroke-width="22" stroke-linejoin="round"/>
+    <path d="M512 201v78" stroke="#d2a65d" stroke-width="18" stroke-linecap="round"/>
+    <path d="M477 215h70" stroke="#d2a65d" stroke-width="13" stroke-linecap="round"/>
+    <path d="M512 229 493 254h38z" fill="#e4c276"/>
+
+    <g fill="#ffd968" stroke="#40233b" stroke-width="12" filter="url(#windowGlow)">
+      <path d="M280 472h106v117H280z"/>
+      <path d="M638 472h106v117H638z"/>
+      <path d="M280 472 333 445l53 27z"/>
+      <path d="M638 472 691 445l53 27z"/>
+    </g>
+    <g stroke="#8b543d" stroke-width="10">
+      <path d="M333 472v117"/>
+      <path d="M280 529h106"/>
+      <path d="M691 472v117"/>
+      <path d="M638 529h106"/>
+    </g>
+
+    <path d="M415 482h194v282H415z" fill="#4a2633" stroke="#181126" stroke-width="18"/>
+    <path d="M445 515h134v249H445z" fill="#75402f"/>
+    <path d="M512 515v249" stroke="#4b2630" stroke-width="12"/>
+    <circle cx="497" cy="640" r="9" fill="#f5c864"/>
+    <circle cx="527" cy="640" r="9" fill="#f5c864"/>
+    <path d="M457 570h110" stroke="#c07843" stroke-width="8" opacity="0.65"/>
+
+    <!-- Hanging inn sign. -->
+    <path d="M736 354v94" stroke="#d9af67" stroke-width="13"/>
+    <path d="M690 359h93v90h-93z" fill="#24344c" stroke="#181126" stroke-width="13"/>
+    <path d="m736 376 12 24 27 4-20 19 5 27-24-13-24 13 5-27-20-19 27-4z" fill="#f2c35e"/>
+
+    <!-- Ground and the dog's shadow anchor the badge. -->
+    <path d="M80 800h864v224H80z" fill="#171426"/>
+    <ellipse cx="512" cy="874" rx="316" ry="66" fill="#0c0a18" opacity="0.75"/>
+
+    <!-- Golden dog: broad silhouette, bright muzzle, alert ears. -->
+    <path d="M295 776c-18-59-8-124 17-173l-34-149c-6-25 17-47 42-39l127 40c42-16 93-24 143-16l126-44c26-9 49 14 43 40l-35 160c25 52 34 119 13 181z" fill="url(#fur)" stroke="#1a1323" stroke-width="24" stroke-linejoin="round"/>
+
+    <!-- Ears and forehead planes. -->
+    <path d="m314 437-38-143c-5-20 14-37 33-29l135 52-43 155z" fill="#b86529" stroke="#1a1323" stroke-width="20" stroke-linejoin="round"/>
+    <path d="m710 437 38-143c5-20-14-37-33-29l-135 52 43 155z" fill="#b86529" stroke="#1a1323" stroke-width="20" stroke-linejoin="round"/>
+    <path d="M428 423c30-39 61-55 84-55s54 16 84 55l-24 152H452z" fill="#e6a33b" opacity="0.76"/>
+    <path d="M512 377v174" stroke="#a45d26" stroke-width="12" opacity="0.62"/>
+
+    <!-- Friendly face. -->
+    <path d="M347 507c14-43 55-64 101-39l64 35 64-35c46-25 87-4 101 39l-16 153c-10 93-77 140-149 140s-139-47-149-140z" fill="url(#furLight)" stroke="#1a1323" stroke-width="20"/>
+    <path d="M368 545c25-34 63-38 91-21l31 19-38 44-84-12z" fill="#f8d67b" opacity="0.72"/>
+    <path d="m656 545-31-2-38 44 84-12z" fill="#f8d67b" opacity="0.72"/>
+    <ellipse cx="427" cy="548" rx="31" ry="39" fill="#231b2a"/>
+    <ellipse cx="597" cy="548" rx="31" ry="39" fill="#231b2a"/>
+    <circle cx="419" cy="537" r="9" fill="#fff2c2"/>
+    <circle cx="589" cy="537" r="9" fill="#fff2c2"/>
+    <path d="M472 624c11-18 68-18 79 0l-8 26h-63z" fill="#2b1d25" stroke="#1a1323" stroke-width="12"/>
+    <path d="M512 650v24c0 31-33 47-64 30" fill="none" stroke="#6d3228" stroke-width="13" stroke-linecap="round"/>
+    <path d="M512 674c0 31 33 47 64 30" fill="none" stroke="#6d3228" stroke-width="13" stroke-linecap="round"/>
+    <path d="M467 708c27 19 63 19 90 0" fill="none" stroke="#fff0c0" stroke-width="12" stroke-linecap="round"/>
+
+    <!-- Small adventurer collar and clockwork charm. -->
+    <path d="M316 694c48 45 115 68 196 68s148-23 196-68l-20 100c-49 34-108 51-176 51s-127-17-176-51z" fill="#51324c" stroke="#1a1323" stroke-width="20"/>
+    <path d="M512 756v125" stroke="#d2a252" stroke-width="16"/>
+    <path d="m512 854 25 15 24-15-4 29 19 22-30 3-34 22-34-22-30-3 19-22-4-29 24 15z" fill="url(#metal)" stroke="#1a1323" stroke-width="13" stroke-linejoin="round"/>
+    <circle cx="512" cy="886" r="19" fill="#5ed6d9" stroke="#e5d38f" stroke-width="8"/>
+    <path d="M512 875v12l8 6" fill="none" stroke="#25234b" stroke-width="5" stroke-linecap="round"/>
+
+    <!-- Badge rim and corner highlights. -->
+    <rect x="24" y="24" width="976" height="976" rx="218" fill="none" stroke="#070611" stroke-width="28"/>
+    <path d="M242 78h540" stroke="#8d79ed" stroke-width="7" stroke-linecap="round" opacity="0.58"/>
+    <path d="M115 798c28 75 90 137 165 165" fill="none" stroke="#42d2d3" stroke-width="8" stroke-linecap="round" opacity="0.7"/>
+  </g>
+</svg>

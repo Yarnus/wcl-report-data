@@ -1,43 +1,45 @@
-# Warcraft Logs API Notes
+# Warcraft Logs API 说明
 
-## Authentication
+本文记录影响采集与恢复行为的 API 约束。[English version](wcl-api.en.md)
 
-- Token endpoint: `https://www.warcraftlogs.com/oauth/token`
-- GraphQL endpoint: `https://www.warcraftlogs.com/api/v2/client`
-- Accepted report hosts: `warcraftlogs.com`, `www.warcraftlogs.com`, and `cn.warcraftlogs.com`
+## 认证
 
-CN report URLs are accepted as input and normalized to the global report URL. Authentication and GraphQL requests continue to use the global official endpoints.
-- Grant: OAuth2 client credentials
-- Canonical variables: `WCL_CLIENT_ID`, `WCL_CLIENT_SECRET`
-- Accepted aliases: `WCL_ID`, `WCL_SECRET`
+- Token 端点：`https://www.warcraftlogs.com/oauth/token`
+- GraphQL 端点：`https://www.warcraftlogs.com/api/v2/client`
+- 接受的报告域名：`warcraftlogs.com`、`www.warcraftlogs.com` 和 `cn.warcraftlogs.com`
+- 授权方式：OAuth2 client credentials
+- 规范变量名：`WCL_CLIENT_ID`、`WCL_CLIENT_SECRET`
+- 兼容变量名：`WCL_ID`、`WCL_SECRET`
 
-Client credentials can read public reports and unlisted reports when the code is known. They cannot read private reports requiring user OAuth. Tokens are held in process memory only.
+CN 报告链接可直接作为输入，并会规范化为全球站报告链接。认证和 GraphQL 请求仍使用 WCL 官方全球端点。
 
-## Queries
+已知报告代码时，client credentials 可以读取公开和未列出报告。它不能读取需要用户 OAuth 的私有报告。access token 只保存在进程内存中。
 
-Report indexing fetches report revision, archive status, Retail game version, master actors and abilities, and fight participation metadata.
+## 查询
 
-Fight difficulty IDs are interpreted only through the `zone.difficulties { id name }` values returned for that report. They are not mapped through a hardcoded global enum because IDs can differ between WCL contexts.
+建立 Report Index 时会获取 Report Revision、归档状态、Retail 游戏版本、主 actor 与 ability、战斗参与元数据和报告难度元数据。
 
-Fight collection uses `Report.events` with:
+战斗难度 ID 只能通过该报告返回的 `zone.difficulties { id name }` 解释。不同 WCL 上下文中的 ID 可能不同，因此不能使用硬编码的全局枚举。
 
-- one `fightID`
-- the fight's fixed `startTime` and `endTime` on every page
+采集战斗时，`Report.events` 使用：
+
+- 一个 `fightID`
+- 每一页都传入该战斗固定的 `startTime` 和 `endTime`
 - `dataType: All`
 - `includeResources: true`
-- actor and ability IDs
-- page limit 10,000
+- actor 和 ability ID
+- 每页上限 10,000
 
-WCL may return more than the requested limit when multiple events share a pagination boundary. Every pagination request must repeat the fight `endTime`; omitting it can make a later page return empty. The collector uses `nextPageTimestamp`, preserves event order, allows duplicate timestamps, and rejects repeated cursors.
+当多个事件位于同一分页边界时，WCL 返回的事件可能超过请求上限。每次分页请求都必须重复传入战斗 `endTime`；省略它可能导致后续页返回空数据。采集器跟随 `nextPageTimestamp`，保留事件顺序，允许时间戳重复，并拒绝重复游标。
 
-## Rate Limits
+## 限流
 
-The client retries transient connection failures and HTTP 500, 502, 503, and 504 responses with exponential backoff. HTTP 429 opens a process-local circuit breaker immediately.
+客户端会使用指数退避重试临时连接失败，以及 HTTP 500、502、503 和 504 响应。HTTP 429 会立即打开进程内断路器。
 
-Before WCL data queries, the client preserves at least 15 percent or 50 API points, whichever is larger. Report indexing reserves 500 points because its cost scales with report metadata; event and revision requests reserve the full retry budget and refresh the rate snapshot in the same GraphQL response. Raw pages and checkpoints remain available after a safe-reserve stop so the next invocation can resume.
+执行 WCL 数据查询前，客户端至少保留 15% 或 50 个 API 点数，取两者中较大值。Report Index 查询的成本会随报告元数据增长，因此预留 500 点。事件和 revision 请求为完整重试预算预留点数，并在同一 GraphQL 响应中刷新限流快照。因安全预留而停止后，Raw Page 和检查点会保留，下一次调用可以继续。
 
-## Revisions And Archives
+## Revision 与归档
 
-The report revision is checked after the final event page. A changed revision prevents Fight Bundle publication. The next invocation creates or uses the new revision directory.
+最后一个事件页完成后会再次检查 Report Revision。revision 已变化时不能发布 Fight Bundle。下一次调用会创建或使用新的 revision 目录。
 
-Archived metadata may remain visible while events are inaccessible. A Fight Bundle is allowed only when WCL reports archived events as accessible to the current API client.
+归档报告的元数据可能仍然可见，但事件不可访问。只有 WCL 明确表示当前 API 客户端可以访问归档事件时，才能创建 Fight Bundle。
