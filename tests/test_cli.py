@@ -57,7 +57,13 @@ class CliTests(unittest.TestCase):
             env_file.write_bytes(b"WCL_CLIENT_ID=\xff\n")
             output = io.StringIO()
 
-            with patch.dict("os.environ", {}, clear=True), redirect_stdout(output):
+            without_credentials = {
+                "WCL_CLIENT_ID": "",
+                "WCL_CLIENT_SECRET": "",
+                "WCL_ID": "",
+                "WCL_SECRET": "",
+            }
+            with patch.dict("os.environ", without_credentials), redirect_stdout(output):
                 status = main(["--env-file", str(env_file), "doctor"])
 
         result = json.loads(output.getvalue())
