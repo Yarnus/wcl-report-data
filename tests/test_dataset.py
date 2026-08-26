@@ -95,6 +95,7 @@ class FakeClient:
         self.report = report_fixture()
         self.pages = pages or {}
         self.page_starts: list[float | None] = []
+        self.page_ranges: list[tuple[float | None, float]] = []
         self.fail_at: float | None | object = object()
         self.revision = 3
 
@@ -107,8 +108,16 @@ class FakeClient:
             "pointsResetIn": 100,
         }
 
-    def fetch_events_page(self, code: str, fight_id: int, start_time: float | None, limit: int = 10_000) -> dict:
+    def fetch_events_page(
+        self,
+        code: str,
+        fight_id: int,
+        start_time: float | None,
+        end_time: float,
+        limit: int = 10_000,
+    ) -> dict:
         self.page_starts.append(start_time)
+        self.page_ranges.append((start_time, end_time))
         if start_time == self.fail_at:
             raise ApiError("temporary failure")
         return copy.deepcopy(self.pages[start_time])
@@ -119,7 +128,7 @@ class FakeClient:
 
 def event_pages() -> dict[float | None, dict]:
     return {
-        None: {
+        1_000: {
             "data": [
                 {
                     "timestamp": 1_100,
@@ -131,6 +140,7 @@ def event_pages() -> dict[float | None, dict]:
                     "amount": 100,
                     "absorbed": 20,
                     "hitPoints": 900,
+                    "killingAbilityGameID": 7001,
                     "targetResources": {"hitPoints": 900, "maxHitPoints": 1_000},
                     "mystery": "kept only in raw page",
                 }
@@ -209,6 +219,7 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(manifest["unknown_fields"], {"mystery": 1})
         self.assertNotIn("mystery", canonical[0]["fields"])
         self.assertEqual(canonical[0]["fields"]["hitPoints"], 900)
+        self.assertEqual(canonical[0]["fields"]["killingAbilityGameID"], 7001)
         self.assertEqual(canonical[0]["fight_time_ms"], 100)
         self.assertEqual(raw["data"][0]["mystery"], "kept only in raw page")
         self.assertEqual(queried["matched"], 1)
@@ -229,8 +240,39 @@ class DatasetTests(unittest.TestCase):
             service = self.make_service(temporary, second)
             result = service.prepare(ref)
 
-        self.assertEqual(first.page_starts, [None, 2_000])
+        self.assertEqual(first.page_starts, [1_000, 2_000])
+        self.assertEqual(first.page_ranges, [(1_000, 5_000), (2_000, 5_000)])
         self.assertEqual(second.page_starts, [2_000])
+        self.assertEqual(second.page_ranges, [(2_000, 5_000)])
+        self.assertEqual(result["bundles"][0]["event_count"], 2)
+
+    def test_obsolete_checkpoint_is_discarded_and_downloaded_again(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = DatasetStore(root / "data", root / "cache")
+            import_root = store.import_root("AbC123", 3, 1)
+            import_root.mkdir(parents=True, exist_ok=True)
+            (import_root / "checkpoint.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "report_code": "AbC123",
+                        "revision": 3,
+                        "fight_id": 1,
+                        "next_page_timestamp": None,
+                        "pages": [],
+                        "event_count": 0,
+                        "done": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            client = FakeClient(event_pages())
+            service = DatasetService(client, store)
+
+            result = service.prepare(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"))
+
+        self.assertEqual(client.page_ranges, [(1_000, 5_000), (2_000, 5_000)])
         self.assertEqual(result["bundles"][0]["event_count"], 2)
 
     def test_revision_change_never_publishes_bundle(self) -> None:
@@ -415,7 +457,7 @@ class DatasetTests(unittest.TestCase):
 
     def test_query_defaults_to_two_hundred_and_returns_cursor(self) -> None:
         pages = {
-            None: {
+            1_000: {
                 "data": [
                     {"timestamp": 1_000 + index, "type": "cast", "sourceID": 10, "abilityGameID": 7001}
                     for index in range(205)

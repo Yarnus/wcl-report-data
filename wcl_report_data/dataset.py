@@ -19,6 +19,7 @@ from .storage import atomic_write_gzip_json, atomic_write_json, directory_size, 
 
 
 SCHEMA_VERSION = 1
+COLLECTION_PROTOCOL_VERSION = 2
 RETAIL_GAME_VERSION = 1
 
 COMMON_EVENT_FIELDS = {
@@ -69,8 +70,13 @@ DETAIL_EVENT_FIELDS = {
     "extraAbilityGameID",
     "extraAttacks",
     "killerID",
+    "killingAbilityGameID",
     "healerID",
+    "deathSaveAbilityGameID",
+    "deathSaveTime",
     "friendly",
+    "isBuff",
+    "kill",
     "fake",
     "melee",
     "fight",
@@ -130,7 +136,7 @@ class DatasetClient(Protocol):
     def fetch_report(self, code: str) -> tuple[dict[str, Any], dict[str, Any] | None]: ...
 
     def fetch_events_page(
-        self, code: str, fight_id: int, start_time: float | None, limit: int = 10_000
+        self, code: str, fight_id: int, start_time: float, end_time: float, limit: int = 10_000
     ) -> dict[str, Any]: ...
 
     def fetch_report_revision(self, code: str) -> int: ...
@@ -400,7 +406,7 @@ class DatasetService:
         manifest_path = target / "manifest.json"
         if manifest_path.exists():
             manifest = read_json(manifest_path)
-            if manifest.get("complete") is True:
+            if manifest.get("complete") is True and _has_current_collection_range(manifest, fight):
                 expected_identity = {
                     "report_code": code,
                     "report_revision": revision,
@@ -414,9 +420,16 @@ class DatasetService:
         import_root = self.store.import_root(code, revision, fight_id)
         import_root.mkdir(parents=True, exist_ok=True)
         checkpoint_path = import_root / "checkpoint.json"
-        checkpoint = self._load_checkpoint(checkpoint_path, code, revision, fight_id)
+        checkpoint = self._load_checkpoint(checkpoint_path, code, revision, fight)
         if not checkpoint["done"]:
-            self._download_pages(checkpoint, checkpoint_path, import_root, code, fight_id)
+            self._download_pages(
+                checkpoint,
+                checkpoint_path,
+                import_root,
+                code,
+                fight_id,
+                float(fight["end_time"]),
+            )
 
         observed_revision = self.client.fetch_report_revision(code)
         if observed_revision != revision:
@@ -439,13 +452,20 @@ class DatasetService:
         return _bundle_result(manifest_path, manifest, cache_hit=False)
 
     def _load_checkpoint(
-        self, path: Path, code: str, revision: int, fight_id: int
+        self, path: Path, code: str, revision: int, fight: dict[str, Any]
     ) -> dict[str, Any]:
+        fight_id = int(fight["fight_id"])
+        range_start = float(fight["start_time"])
+        range_end = float(fight["end_time"])
         if path.exists():
             value = read_json(path)
+            if value.get("collection_protocol_version") != COLLECTION_PROTOCOL_VERSION:
+                return _new_checkpoint(code, revision, fight_id, range_start, range_end)
             identity = (value.get("report_code"), value.get("revision"), value.get("fight_id"))
             if identity != (code, revision, fight_id):
                 raise DatasetError("Raw-page checkpoint identity does not match the requested fight.")
+            if (value.get("range_start_time"), value.get("range_end_time")) != (range_start, range_end):
+                raise DatasetError("Raw-page checkpoint time range does not match the requested fight.")
             for page in value.get("pages") or []:
                 page_path = Path(page.get("path", ""))
                 if page_path.parent.resolve() != path.parent.resolve() or not page_path.name.startswith("page-"):
@@ -453,17 +473,7 @@ class DatasetService:
                 if not page_path.is_file() or sha256_file(page_path) != page.get("sha256"):
                     raise DatasetError(f"Raw-page cache failed checksum validation: {page_path}")
             return value
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "report_code": code,
-            "revision": revision,
-            "fight_id": fight_id,
-            "next_page_timestamp": None,
-            "seen_cursors": [],
-            "pages": [],
-            "event_count": 0,
-            "done": False,
-        }
+        return _new_checkpoint(code, revision, fight_id, range_start, range_end)
 
     def _download_pages(
         self,
@@ -472,10 +482,11 @@ class DatasetService:
         import_root: Path,
         code: str,
         fight_id: int,
+        end_time: float,
     ) -> None:
         while not checkpoint["done"]:
             start_time = checkpoint["next_page_timestamp"]
-            page = self.client.fetch_events_page(code, fight_id, start_time)
+            page = self.client.fetch_events_page(code, fight_id, start_time, end_time)
             events = page.get("data") if isinstance(page, dict) else None
             if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
                 raise ApiError("WCL returned an invalid event page.")
@@ -485,6 +496,8 @@ class DatasetService:
                     raise ApiError("WCL returned an invalid nextPageTimestamp.")
                 if next_timestamp == start_time or next_timestamp in checkpoint["seen_cursors"]:
                     raise ApiError(f"WCL event pagination stalled at {next_timestamp}.")
+                if next_timestamp > end_time:
+                    raise ApiError(f"WCL event pagination exceeded fight end time {end_time}.")
 
             page_number = len(checkpoint["pages"]) + 1
             page_path = import_root / f"page-{page_number:06d}.json.gz"
@@ -494,6 +507,7 @@ class DatasetService:
                     "number": page_number,
                     "path": str(page_path),
                     "query_start_time": start_time,
+                    "query_end_time": end_time,
                     "next_page_timestamp": next_timestamp,
                     "events": len(events),
                     "sha256": sha256_file(page_path),
@@ -562,8 +576,11 @@ class DatasetService:
             "unknown_fields": dict(sorted(unknown_fields.items())),
             "raw_pages": checkpoint["pages"],
             "collection": {
+                "protocol_version": COLLECTION_PROTOCOL_VERSION,
                 "data_type": "All",
                 "include_resources": True,
+                "start_time": fight["start_time"],
+                "end_time": fight["end_time"],
                 "page_limit": 10_000,
                 "page_count": len(checkpoint["pages"]),
             },
@@ -770,6 +787,8 @@ def _bundle_result(path: Path, manifest: dict[str, Any], *, cache_hit: bool) -> 
 
 
 def _validate_bundle_file(manifest_path: Path, manifest: dict[str, Any]) -> Path:
+    if manifest.get("collection", {}).get("protocol_version") != COLLECTION_PROTOCOL_VERSION:
+        raise DatasetError("Fight Bundle uses an obsolete event collection protocol; prepare it again.")
     events_name = manifest.get("events_file")
     if not isinstance(events_name, str):
         raise DatasetError("Fight Bundle manifest has no events file.")
@@ -783,6 +802,38 @@ def _validate_bundle_file(manifest_path: Path, manifest: dict[str, Any]) -> Path
 
 def _stable_index(index: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in index.items() if key != "generated_at"}
+
+
+def _has_current_collection_range(manifest: dict[str, Any], fight: dict[str, Any]) -> bool:
+    collection = manifest.get("collection")
+    return isinstance(collection, dict) and (
+        collection.get("protocol_version"),
+        collection.get("start_time"),
+        collection.get("end_time"),
+    ) == (
+        COLLECTION_PROTOCOL_VERSION,
+        fight.get("start_time"),
+        fight.get("end_time"),
+    )
+
+
+def _new_checkpoint(
+    code: str, revision: int, fight_id: int, range_start: float, range_end: float
+) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "collection_protocol_version": COLLECTION_PROTOCOL_VERSION,
+        "report_code": code,
+        "revision": revision,
+        "fight_id": fight_id,
+        "range_start_time": range_start,
+        "range_end_time": range_end,
+        "next_page_timestamp": range_start,
+        "seen_cursors": [],
+        "pages": [],
+        "event_count": 0,
+        "done": False,
+    }
 
 
 def _is_raid_zone(zone: Any) -> bool:

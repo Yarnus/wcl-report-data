@@ -32,6 +32,8 @@ Input-specific fight selection and source hints are returned by `inspect` rather
 4. the report revision was unchanged after collection
 5. `events.jsonl.gz` was closed and hashed
 
+All pages use the same inclusive fight start and end timestamps. Bundles created by an older collection protocol are rejected and must be prepared again.
+
 The manifest records event counts by type, raw-page hashes, the canonical stream hash, collection options, and unknown field counts.
 
 ## Canonical Events

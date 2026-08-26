@@ -61,15 +61,32 @@ class WclClientTests(unittest.TestCase):
 
         self.assertEqual(request.call_count, 1)
         with self.assertRaises(RateLimitError):
-            client.fetch_events_page("AbC123", 1, None)
+            client.fetch_events_page("AbC123", 1, 1_000, 5_000)
 
     def test_event_query_refreshes_rate_limit_in_the_same_request(self) -> None:
         self.assertIn("rateLimitData", EVENT_QUERY)
         self.assertIn("dataType: All", EVENT_QUERY)
         self.assertIn("includeResources: true", EVENT_QUERY)
+        self.assertIn("$endTime: Float", EVENT_QUERY)
+        self.assertIn("endTime: $endTime", EVENT_QUERY)
 
     def test_report_index_uses_a_large_safety_reservation(self) -> None:
         self.assertGreaterEqual(REPORT_RESERVATION_POINTS, 500)
+
+    def test_event_request_sends_the_fixed_fight_end_time(self) -> None:
+        client = self.make_client()
+        client._rate_limit_snapshot = {
+            "limitPerHour": 3600,
+            "pointsSpentThisHour": 0,
+            "pointsResetIn": 3600,
+        }
+        response = {"reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
+
+        with patch.object(client, "graphql", return_value=response) as graphql:
+            client.fetch_events_page("AbC123", 1, 2_000, 5_000)
+
+        self.assertEqual(graphql.call_args.args[1]["startTime"], 2_000)
+        self.assertEqual(graphql.call_args.args[1]["endTime"], 5_000)
 
 
 if __name__ == "__main__":

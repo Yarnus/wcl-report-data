@@ -17,12 +17,13 @@ Report indexing fetches report revision, archive status, Retail game version, ma
 Fight collection uses `Report.events` with:
 
 - one `fightID`
+- the fight's fixed `startTime` and `endTime` on every page
 - `dataType: All`
 - `includeResources: true`
 - actor and ability IDs
 - page limit 10,000
 
-WCL may return more than the requested limit when multiple events share a pagination boundary. The collector uses `nextPageTimestamp`, preserves event order, allows duplicate timestamps, and rejects repeated cursors.
+WCL may return more than the requested limit when multiple events share a pagination boundary. Every pagination request must repeat the fight `endTime`; omitting it can make a later page return empty. The collector uses `nextPageTimestamp`, preserves event order, allows duplicate timestamps, and rejects repeated cursors.
 
 ## Rate Limits
 

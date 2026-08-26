@@ -53,11 +53,11 @@ query ReportIndex($code: String!) {
 
 
 EVENT_QUERY = """
-query FightEvents($code: String!, $fightIDs: [Int], $startTime: Float, $limit: Int!) {
+query FightEvents($code: String!, $fightIDs: [Int], $startTime: Float, $endTime: Float, $limit: Int!) {
   reportData {
     report(code: $code, allowUnlisted: true) {
       events(
-        fightIDs: $fightIDs, dataType: All, startTime: $startTime, limit: $limit,
+        fightIDs: $fightIDs, dataType: All, startTime: $startTime, endTime: $endTime, limit: $limit,
         includeResources: true, translate: true, useAbilityIDs: true, useActorIDs: true
       ) { data nextPageTimestamp }
     }
@@ -167,13 +167,24 @@ class WclClient:
         return report, rate_limit if isinstance(rate_limit, dict) else None
 
     def fetch_events_page(
-        self, code: str, fight_id: int, start_time: float | None, limit: int = 10_000
+        self,
+        code: str,
+        fight_id: int,
+        start_time: float,
+        end_time: float,
+        limit: int = 10_000,
     ) -> dict[str, Any]:
         self._ensure_circuit()
         with self.reserve_api_points():
             data = self.graphql(
                 EVENT_QUERY,
-                {"code": code, "fightIDs": [fight_id], "startTime": start_time, "limit": limit},
+                {
+                    "code": code,
+                    "fightIDs": [fight_id],
+                    "startTime": start_time,
+                    "endTime": end_time,
+                    "limit": limit,
+                },
             )
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None

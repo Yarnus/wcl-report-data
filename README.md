@@ -1,67 +1,67 @@
 # wcl-report-data
 
-`wcl-report-data` is a WorkBuddy Agent Skill and Python 3.11 package that turns Retail Warcraft Logs raid reports into revisioned, team-level datasets. It uses the official WCL OAuth and GraphQL APIs and does not scrape report pages.
+`wcl-report-data` 是一个面向 WorkBuddy 的 Agent Skill 和 Python 3.11 软件包，用于把正式服 Warcraft Logs 团队副本报告整理为按修订版本保存的全团数据集。它只使用 WCL 官方 OAuth 和 GraphQL API，不抓取报告网页。
 
-The first release prepares evidence only. It does not decide whether damage was avoidable, assign responsibility for deaths, compare rankings, or generate coaching conclusions.
+首个版本只准备事实数据，不判断伤害是否可规避，不为死亡归责，不比较排名，也不生成复盘结论。
 
-## Requirements
+## 环境要求
 
-- WorkBuddy web or Python 3.11+
-- Internet access to `warcraftlogs.com`
-- A Warcraft Logs API v2 client ID and client secret
+- WorkBuddy 网页版或 Python 3.11+
+- 能够访问 `warcraftlogs.com`
+- Warcraft Logs API v2 client ID 和 client secret
 
-The runtime has no third-party Python dependencies.
+运行时没有第三方 Python 依赖。
 
-## WorkBuddy Setup
+## WorkBuddy 配置
 
-Create `/workspace/.env` without posting its contents in chat:
+自行创建 `/workspace/.env`，不要在对话中粘贴文件内容：
 
 ```dotenv
 WCL_CLIENT_ID=your-client-id
 WCL_CLIENT_SECRET=your-client-secret
 ```
 
-The CLI also accepts the existing `WCL_ID` and `WCL_SECRET` names as a complete pair. Process environment variables take priority over `.env`. Credentials and access tokens are never written to datasets, cache, or command output.
+CLI 也兼容成对出现的 `WCL_ID` 和 `WCL_SECRET`。进程环境变量优先于 `.env`。凭据和 access token 不会写入数据集、缓存或命令输出。
 
-Run:
+运行环境检查：
 
 ```bash
 python -m wcl_report_data doctor
 ```
 
-WorkBuddy stores prepared datasets under `/workspace/wcl-report-data/` and resumable raw pages under `/workspace/.cache/wcl-report-data/`. Set `WCL_REPORT_DATA_HOME` or `WCL_REPORT_DATA_CACHE` to override either path.
+WorkBuddy 默认把数据集保存到 `/workspace/wcl-report-data/`，把可续传原始页保存到 `/workspace/.cache/wcl-report-data/`。可通过 `WCL_REPORT_DATA_HOME` 或 `WCL_REPORT_DATA_CACHE` 覆盖路径。
 
-## Basic Flow
+## 基本流程
 
-Index a report:
+建立报告索引：
 
 ```bash
 python -m wcl_report_data inspect "https://www.warcraftlogs.com/reports/<code>"
 ```
 
-Prepare a fight already selected in the URL:
+准备 URL 中已选择的战斗：
 
 ```bash
 python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>#fight=12"
 ```
 
-Prepare selected fights or all completed attempts for an encounter:
+准备指定战斗或某个首领的全部已完成尝试：
 
 ```bash
 python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>" --fight 12 --fight 15
 python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>" --encounter 3129
 ```
 
-Query a complete bundle without loading the entire event stream into model context:
+查询完整 Fight Bundle，避免把整个事件流放入模型上下文：
 
 ```bash
 python -m wcl_report_data query "/workspace/wcl-report-data/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
   --type damage --target-id 17 --limit 200
 ```
 
-See `python -m wcl_report_data --help` and `SKILL.md` for the full workflow.
+完整流程参见 `python -m wcl_report_data --help` 和 `SKILL.md`。
 
-## Dataset Layout
+## 数据布局
 
 ```text
 reports/<report-code>/
@@ -73,26 +73,28 @@ reports/<report-code>/
         └── events.jsonl.gz
 ```
 
-Fight Bundles are immutable within a report revision. Re-exported reports create a new revision directory. Raw WCL pages are compressed separately so interrupted downloads can resume and known-field normalization can be audited.
+同一报告修订版本内的 Fight Bundle 不可变。报告重新导出后会创建新的 revision 目录。WCL 原始页单独压缩保存，使中断的下载可以继续，也便于审计已知字段规范化过程。
 
-The canonical stream intentionally omits unknown event values. `manifest.json` lists every omitted field name and occurrence count. Clearing raw cache removes the only local copy of those omitted values.
+事件分页会在每一页固定传入该战斗的 `startTime` 和 `endTime`。省略 `endTime` 可能导致后续页错误返回空数据；旧采集协议生成的 Bundle 会被拒绝并要求重新准备。
 
-## Privacy
+规范事件流会有意省略未知字段值。`manifest.json` 会列出每个未知字段名和出现次数。清除原始缓存后，这些未知值的本地副本也会被删除。
 
-Prepared report indexes retain character names and servers because later team review must identify participants. Data remains in the WorkBuddy workspace, but any event content displayed in chat may be processed by the configured model provider.
+## 隐私
 
-## Development
+报告索引保留角色名和服务器，以便后续团队复盘识别参与者。数据保留在 WorkBuddy 工作区中，但对话里展示的事件内容可能由当前配置的模型服务商处理。
+
+## 开发
 
 ```bash
 python -m unittest -v
 python -m compileall -q wcl_report_data tests
 ```
 
-Live checks use credentials from the same environment:
+使用同一环境中的凭据执行真实检查：
 
 ```bash
 python -m wcl_report_data doctor
 python -m wcl_report_data inspect "<PUBLIC_WCL_URL>"
 ```
 
-This project is not affiliated with Warcraft Logs or Blizzard Entertainment. Respect Warcraft Logs API access rules and rate limits.
+本项目与 Warcraft Logs 或 Blizzard Entertainment 没有关联。使用时请遵守 Warcraft Logs API 访问规则和限流要求。
