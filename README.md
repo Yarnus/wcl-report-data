@@ -12,9 +12,19 @@
 
 运行时没有第三方 Python 依赖。
 
-## WorkBuddy 配置
+报告输入支持 `warcraftlogs.com`、`www.warcraftlogs.com` 和 `cn.warcraftlogs.com`。CN 链接会规范化为全球站链接，API 请求仍使用 WCL 官方全球端点。
 
-自行创建 `/workspace/.env`，不要在对话中粘贴文件内容：
+## 凭据配置
+
+先运行 `doctor`：
+
+```bash
+python -m wcl_report_data doctor
+```
+
+如果结果为 `wcl_api: reachable`，说明平台注入的进程环境变量或已有 `.env` 已生效，无需再创建文件。`credential_source` 只说明凭据来源，不会显示凭据值。
+
+需要自行配置时，WorkBuddy 云端且 `/workspace` 确实存在的环境可使用 `/workspace/.env`；本地 macOS、Linux 或 Windows 应在启动 CLI 时的当前工作目录创建 `.env`：
 
 ```dotenv
 WCL_CLIENT_ID=your-client-id
@@ -23,13 +33,7 @@ WCL_CLIENT_SECRET=your-client-secret
 
 CLI 也兼容成对出现的 `WCL_ID` 和 `WCL_SECRET`。进程环境变量优先于 `.env`。凭据和 access token 不会写入数据集、缓存或命令输出。
 
-运行环境检查：
-
-```bash
-python -m wcl_report_data doctor
-```
-
-WorkBuddy 默认把数据集保存到 `/workspace/wcl-report-data/`，把可续传原始页保存到 `/workspace/.cache/wcl-report-data/`。可通过 `WCL_REPORT_DATA_HOME` 或 `WCL_REPORT_DATA_CACHE` 覆盖路径。
+当 `/workspace` 存在时，数据集默认保存到 `/workspace/wcl-report-data/`，可续传原始页保存到 `/workspace/.cache/wcl-report-data/`。本地 Unix/macOS 默认分别使用 `~/.local/share/wcl-report-data/` 和 `~/.cache/wcl-report-data/`；Windows 使用 `%LOCALAPPDATA%`。可通过 `WCL_REPORT_DATA_HOME` 或 `WCL_REPORT_DATA_CACHE` 覆盖路径。
 
 ## 基本流程
 

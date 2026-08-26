@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlparse
 from .errors import InputError
 
 
-RETAIL_HOSTS = {"warcraftlogs.com", "www.warcraftlogs.com"}
+RETAIL_HOSTS = {"warcraftlogs.com", "www.warcraftlogs.com", "cn.warcraftlogs.com"}
 
 
 @dataclass(frozen=True)

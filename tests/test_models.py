@@ -24,6 +24,13 @@ class ReportRefTests(unittest.TestCase):
         self.assertEqual(ref.fight, "last")
         self.assertEqual(ref.source_hint, 3)
 
+    def test_parses_cn_report_url(self) -> None:
+        ref = ReportRef.parse("https://cn.warcraftlogs.com/reports/AbC123#fight=9")
+
+        self.assertEqual(ref.code, "AbC123")
+        self.assertEqual(ref.fight, 9)
+        self.assertEqual(ref.canonical_url(), "https://www.warcraftlogs.com/reports/AbC123#fight=9")
+
     def test_rejects_classic_and_non_report_urls(self) -> None:
         invalid = (
             "https://classic.warcraftlogs.com/reports/AbC123",

@@ -32,7 +32,8 @@ def resolve_credentials(
         if credentials is not None:
             return credentials
     raise CredentialError(
-        "Set WCL_CLIENT_ID and WCL_CLIENT_SECRET in the process environment or /workspace/.env."
+        "Set a complete WCL credential pair in the process environment, /workspace/.env, "
+        "or .env in the current working directory."
     )
 
 

@@ -52,6 +52,10 @@ class CredentialTests(unittest.TestCase):
         with self.assertRaises(CredentialError):
             resolve_credentials(environ={"WCL_CLIENT_ID": "id-only"}, env_files=[])
 
+    def test_missing_credentials_mentions_local_env_file(self) -> None:
+        with self.assertRaisesRegex(CredentialError, "current working directory"):
+            resolve_credentials(environ={}, env_files=[])
+
     def test_workbuddy_workspace_is_the_default_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)

@@ -4,6 +4,9 @@
 
 - Token endpoint: `https://www.warcraftlogs.com/oauth/token`
 - GraphQL endpoint: `https://www.warcraftlogs.com/api/v2/client`
+- Accepted report hosts: `warcraftlogs.com`, `www.warcraftlogs.com`, and `cn.warcraftlogs.com`
+
+CN report URLs are accepted as input and normalized to the global report URL. Authentication and GraphQL requests continue to use the global official endpoints.
 - Grant: OAuth2 client credentials
 - Canonical variables: `WCL_CLIENT_ID`, `WCL_CLIENT_SECRET`
 - Accepted aliases: `WCL_ID`, `WCL_SECRET`
