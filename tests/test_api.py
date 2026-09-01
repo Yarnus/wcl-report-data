@@ -8,7 +8,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request
 
-from wcl_report_data.api import EVENT_QUERY, REPORT_RESERVATION_POINTS, WclClient
+from wcl_report_data.api import EVENT_QUERY, REPORT_QUERY, REPORT_RESERVATION_POINTS, WclClient
 from wcl_report_data.config import Credentials
 from wcl_report_data.errors import ApiError, RateLimitError
 
@@ -100,6 +100,9 @@ class WclClientTests(unittest.TestCase):
 
     def test_report_index_uses_a_large_safety_reservation(self) -> None:
         self.assertGreaterEqual(REPORT_RESERVATION_POINTS, 500)
+
+    def test_report_query_fetches_zone_encounter_order(self) -> None:
+        self.assertIn("encounters { id name }", REPORT_QUERY)
 
     def test_event_request_sends_the_fixed_fight_end_time(self) -> None:
         client = self.make_client()

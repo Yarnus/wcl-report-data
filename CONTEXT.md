@@ -22,6 +22,10 @@ _Avoid_: Report summary, analysis
 A completed Retail raid fight against a recognized encounter, whether it ended in a kill or a wipe.
 _Avoid_: Pull, run
 
+**Encounter Designator**:
+A difficulty code (`PT`, `H`, or `M`) followed by the one-based position of an encounter in WCL's raid-zone ordering, such as `H6`. It identifies a difficulty and encounter, never one Boss Attempt.
+_Avoid_: Fight ID, Boss Attempt code
+
 **Fight Bundle**:
 The prepared team-level facts for one Boss Attempt at one Report Revision.
 _Avoid_: Player analysis, fight report
@@ -29,6 +33,10 @@ _Avoid_: Player analysis, fight report
 **Canonical Event**:
 A WCL combat event expressed in the dataset's stable vocabulary of known fields.
 _Avoid_: Raw event, conclusion
+
+**Localized Ability Name**:
+The official zhCN display name associated with an ability identity by a specified Retail client build. It is current-client display enrichment, not a fact from the Report Revision.
+_Avoid_: Literal translation, ability identity
 
 **Raw Page**:
 One unmodified page returned by WCL while collecting a Boss Attempt.

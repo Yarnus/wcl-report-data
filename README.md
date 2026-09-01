@@ -57,6 +57,12 @@ python -m wcl_report_data query \
 
 CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。完整参数参见 `python -m wcl_report_data --help`，完整工作流参见 [Skill 使用说明](SKILL.md)。
 
+## Encounter Designator 与技能名称
+
+Skill 能理解 `PT6`、`H6`、`M6` 形式的 Encounter Designator。前缀分别表示 Normal、Heroic、Mythic，数字表示 WCL `zone.encounters` 原始列表中的一基位置。Designator 只确定难度和 encounter；同一报告有多次匹配 Boss Attempt 时，Skill 必须列出明确的 fight ID 等待选择，不能自动选择击杀、最后一次或全部尝试。
+
+[zhCN ability mapping](references/ability-names.zhCN.json) 提供当前 Retail 客户端的官方中文显示名。只有 ID 同时存在于 Report Index 的 `abilities[].gameID` 时才可使用 mapping；缺失时保留 WCL 名称，不进行直译。中文名是当前客户端展示 enrichment，不改写 Report Index，使用时同时保留 ability ID、WCL 原名和 [mapping build metadata](references/ability-names.zhCN.meta.json)。
+
 ## 凭据配置
 
 进程环境变量优先于 `.env` 文件。推荐使用规范名称：
@@ -114,6 +120,17 @@ python -m wcl_report_data cache clear --confirm
 删除操作必须显式传入 `--confirm`。清理缓存会保留规范 Fight Bundle，但会删除未知字段值的本地副本和下载检查点。
 
 ## 开发与文档
+
+维护者可用 wow.export 从 zhCN 客户端导出 `SpellName.csv`，再只导入现有 mapping 与指定 Report Index 所需的 ID：
+
+```bash
+python tools/import_ability_names.py \
+  "/path/to/SpellName.csv" \
+  --report-index "/path/to/report.json" \
+  --build "12.0.7.68974"
+```
+
+导入器保留已有 ID，更新合法改名，并在当前 CSV 缺少任何已有 ID 时拒绝写入。
 
 ```bash
 make check

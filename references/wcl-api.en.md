@@ -17,9 +17,11 @@ Client credentials can read public and unlisted reports when the code is known. 
 
 ## Queries
 
-Report indexing fetches the report revision, archive status, Retail game version, master actors and abilities, fight participation metadata, and report difficulty metadata.
+Report indexing fetches the report revision, archive status, Retail game version, master actors and abilities, fight participation metadata, report difficulty metadata, and WCL zone encounter order. `zone.encounters` is returned only as current `inspect` selection metadata and is not persisted in existing immutable Report Indices.
 
 Fight difficulty IDs are interpreted only through the `zone.difficulties { id name }` values returned for that report. They are not mapped through a hardcoded global enum because IDs can differ between WCL contexts.
+
+WCL `translate: true` normalizes Report master ability names to English and does not accept a target locale. Current zhCN display names come from the repository's lightweight, client-build-sourced mapping. WCL GraphQL `gameData.ability` has no locale argument and returns English names only.
 
 Fight collection uses `Report.events` with:
 

@@ -399,16 +399,24 @@ class DatasetService:
         self._validate_report(report)
         fights = self._fight_summaries(report)
         selected_fight_id = self._resolve_url_fight(ref, fights)
+        report_zone = report.get("zone")
+        zone = (
+            {key: value for key, value in report_zone.items() if key != "encounters"}
+            if isinstance(report_zone, dict)
+            else report_zone
+        )
+        encounters = report_zone.get("encounters") if isinstance(report_zone, dict) else None
         index = {
             "schema_version": SCHEMA_VERSION,
             "generated_at": _now(),
             "report": {
                 key: report.get(key)
                 for key in (
-                    "code", "title", "visibility", "revision", "startTime", "endTime", "archiveStatus", "zone"
+                    "code", "title", "visibility", "revision", "startTime", "endTime", "archiveStatus"
                 )
             }
             | {
+                "zone": zone,
                 "log_version": (report.get("masterData") or {}).get("logVersion"),
                 "game_version": (report.get("masterData") or {}).get("gameVersion"),
                 "locale": (report.get("masterData") or {}).get("lang"),
@@ -436,6 +444,16 @@ class DatasetService:
             "input_reference": ref.as_dict(),
             "selected_fight_id": selected_fight_id,
             "selected_fight": self._choice(selected, difficulty_names) if selected else None,
+            "encounter_choices": [
+                {
+                    "ordinal": ordinal,
+                    "encounter_id": encounter.get("id") if isinstance(encounter, dict) else None,
+                    "name": encounter.get("name") if isinstance(encounter, dict) else None,
+                }
+                for ordinal, encounter in enumerate(
+                    encounters if isinstance(encounters, list) else [], start=1
+                )
+            ],
             "fight_choices": choices,
             "rate_limit": rate_limit,
         }

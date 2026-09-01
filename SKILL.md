@@ -50,6 +50,10 @@ python -m wcl_report_data inspect "<WCL_URL>"
 
 战斗选项应保持紧凑，只包含 fight ID、首领、击杀或灭团、`difficulty_name`、时长、进度、参与人数和是否可打包。难度名称必须使用同一报告 `zone.difficulties` 解析出的 `difficulty_name`；不得用静态数字表猜测 `difficulty` 是 Normal、Heroic 还是 Mythic。不得静默选择其他战斗。
 
+用户可能使用 Encounter Designator 指定难度和首领，例如 `PT6`、`H6` 或 `M6`。只接受大小写不敏感的 `^(PT|H|M)[1-9][0-9]*$`：`PT` 表示 Normal，`H` 表示 Heroic，`M` 表示 Mythic；数字是 `encounter_choices` 原始顺序中的一基位置，不能按报告首次遭遇顺序、名称或已尝试首领重新排序。难度仍必须在同一报告 `zone.difficulties` 中解析为实际 ID，不能硬编码数字。
+
+Encounter Designator 不选择 Boss Attempt。按解析出的 `encounter_id` 和 `difficulty` 同时筛选 `fight_choices`，展示所有匹配项及不可打包原因并等待用户明确选择，即使只有一项也不能自动继续。零匹配、序号越界、元数据缺失或重复时停止，不得回退到其他难度、相邻首领或同名首领。最终只用用户选择的数字 `--fight`；不得把 Encounter Designator 转成 `--encounter`，因为后者会选择该 encounter 的所有难度。
+
 完成标准：`index_path` 指向的 `report.json` 已存在；报告属于正式服、公开或未列出；每场可选战斗都有明确数字 ID。
 
 ### 3. 准备指定战斗
@@ -89,6 +93,8 @@ python -m wcl_report_data query "<MANIFEST_PATH>" --type damage --target-id 17
 可用过滤条件包括 `--type`、`--source-id`、`--target-id`、`--ability-id`、`--from-ms`、`--to-ms` 和 `--cursor`。默认最多返回 200 条。`truncated` 为 true 时，使用 `next_cursor` 继续或进一步缩小过滤范围。
 
 查询结果是证据，不是结论。没有独立的首领机制知识来源时，不得把伤害标记为可规避、推断责任，或声称某次死亡可以避免。
+
+展示技能名时，先确认 `ability_id` 同时存在于 Report Index 的 `abilities[].gameID`。存在时可查询 [zhCN ability mapping](references/ability-names.zhCN.json)：命中则使用当前客户端的 Localized Ability Name，并同时保留 WCL 原名、ability ID 和 [mapping metadata](references/ability-names.zhCN.meta.json) 中的 build；未命中则保留 WCL 原名。事件中的 fallback `guid` 或 `id` 未出现在 Report Index ability 表时不得套用 mapping。不得自行直译技能名。
 
 完成标准：每个返回事件都能通过 `raw_ref` 回指原始页，查询结果不超过指定上限。
 

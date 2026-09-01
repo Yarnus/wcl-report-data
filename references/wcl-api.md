@@ -17,9 +17,11 @@ CN 报告链接可直接作为输入，并会规范化为全球站报告链接�
 
 ## 查询
 
-建立 Report Index 时会获取 Report Revision、归档状态、Retail 游戏版本、主 actor 与 ability、战斗参与元数据和报告难度元数据。
+建立 Report Index 时会获取 Report Revision、归档状态、Retail 游戏版本、主 actor 与 ability、战斗参与元数据、报告难度元数据和 WCL zone encounter 顺序。`zone.encounters` 只作为当前 `inspect` 的选择元数据返回，不写入已有不可变 Report Index。
 
 战斗难度 ID 只能通过该报告返回的 `zone.difficulties { id name }` 解释。不同 WCL 上下文中的 ID 可能不同，因此不能使用硬编码的全局枚举。
+
+WCL 的 `translate: true` 会把 Report master ability 名称统一为英文，不能指定目标 locale。当前 zhCN 显示名来自仓库随附、带客户端 build 来源的轻量 mapping；WCL GraphQL `gameData.ability` 没有 locale 参数，只返回英文名。
 
 采集战斗时，`Report.events` 使用：
 

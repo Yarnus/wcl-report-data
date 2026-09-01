@@ -24,6 +24,8 @@ A Fight Bundle adds one numeric `fight_id`. Files from different Report Revision
 
 Fight selection and source hints from a particular input are returned by `inspect` rather than persisted in the immutable index. A source hint never filters actors or events.
 
+`inspect` also returns one-based `encounter_choices` in the original WCL `zone.encounters` array order. This list is current-query selection metadata used to interpret Encounter Designators and is not persisted in existing Report Indices. Consumers must not sort it or filter out encounters absent from the report's fights.
+
 Fight `difficulty` is the raw numeric ID returned by WCL. Resolve it against `report.zone.difficulties` from the same report. Do not use a static global mapping.
 
 The compact `selected_fight` and `fight_choices` returned by `inspect` include the resolved `difficulty_name`. An unmatched ID produces `null`, not a guessed name.
@@ -61,6 +63,8 @@ Each gzip JSONL row has this envelope:
 ```
 
 Actor and ability names live in `report.json`; IDs are event identity. Localized names are display data and must not be used as keys.
+
+`ability-names.zhCN.json` is current-client display enrichment kept outside the Report Index. It may be applied only when a Canonical Event `ability_id` also matches Report Index `abilities[].gameID`. A hit still retains the WCL name, ability ID, and mapping build provenance; a miss uses the WCL name. Mapping updates do not alter Report Revision facts or Complete Bundle identity.
 
 Known fields cover amounts, mitigation, healing, resources, health, aura stacks, casts, encounter metadata, combatant gear and talents, and observed combat statistics.
 

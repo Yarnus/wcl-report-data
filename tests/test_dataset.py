@@ -31,6 +31,10 @@ def report_fixture() -> dict:
             "id": 42,
             "name": "Test Raid",
             "difficulties": [{"id": 5, "name": "Mythic", "sizes": [20]}],
+            "encounters": [
+                {"id": 4001, "name": "First Boss"},
+                {"id": 5001, "name": "Test Boss"},
+            ],
         },
         "masterData": {
             "logVersion": 99,
@@ -221,6 +225,14 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(result["selected_fight_id"], 1)
         self.assertEqual(result["input_reference"]["source_hint"], 10)
         self.assertNotIn("input_reference", index)
+        self.assertNotIn("encounters", index["report"]["zone"])
+        self.assertEqual(
+            result["encounter_choices"],
+            [
+                {"ordinal": 1, "encounter_id": 4001, "name": "First Boss"},
+                {"ordinal": 2, "encounter_id": 5001, "name": "Test Boss"},
+            ],
+        )
         self.assertEqual([item["actor_id"] for item in index["fights"][0]["participants"]], [10, 11])
         self.assertEqual(index["fights"][1]["kind"], "trash")
         self.assertFalse(index["fights"][2]["packable"])
@@ -241,6 +253,19 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(result["selected_fight"]["difficulty"], 4)
         self.assertEqual(result["selected_fight"]["difficulty_name"], "Heroic")
         self.assertEqual(result["fight_choices"][0]["difficulty_name"], "Heroic")
+
+    def test_encounter_choices_do_not_change_the_immutable_report_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient()
+            service = self.make_service(temporary, client)
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123")
+            first = service.inspect(ref)
+            client.report["zone"]["encounters"].reverse()
+            second = service.inspect(ref)
+
+        self.assertEqual(first["index_path"], second["index_path"])
+        self.assertEqual(first["encounter_choices"][0]["encounter_id"], 4001)
+        self.assertEqual(second["encounter_choices"][0]["encounter_id"], 5001)
 
     def test_inspect_rejects_a_report_code_that_does_not_match_the_request(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

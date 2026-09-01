@@ -24,6 +24,8 @@ Fight Bundle 还包含一个数字 `fight_id`。不同 Report Revision 的文件
 
 某次输入特有的战斗选择和 source hint 由 `inspect` 返回，不写入不可变的 Report Index。source hint 绝不能过滤 actor 或事件。
 
+`inspect` 还按 WCL `zone.encounters` 的原始数组顺序返回一基的 `encounter_choices`。该列表用于解释 Encounter Designator，是当前查询的选择元数据，不写入已有 Report Index。数组项不得排序或按报告中出现过的首领过滤。
+
 战斗的 `difficulty` 是 WCL 返回的原始数字 ID。消费者必须使用同一报告中的 `report.zone.difficulties` 解析它，不能使用静态全局映射。`inspect` 返回的精简 `selected_fight` 和 `fight_choices` 包含解析后的 `difficulty_name`；无法匹配时返回 `null`，不能猜测难度名称。
 
 ## Fight Bundle
@@ -59,6 +61,8 @@ gzip JSONL 中的每一行使用以下结构：
 ```
 
 actor 和 ability 名称保存在 `report.json`；ID 才是事件身份。已本地化的名称仅用于展示，不能用作键。
+
+`ability-names.zhCN.json` 是独立于 Report Index 的当前客户端展示 enrichment。只有 Canonical Event 的 `ability_id` 同时匹配 Report Index `abilities[].gameID` 时才可应用；命中时仍须保留 WCL 名称、ability ID 和 mapping build 来源，未命中时使用 WCL 名称。mapping 更新不得改变 Report Revision 事实或 Complete Bundle 身份。
 
 已知 `fields` 覆盖数值、减伤、治疗、资源、生命值、光环层数、施法、首领战元数据、战斗人员装备与天赋，以及观测到的战斗属性。WCL 事件 JSON 并非固定不变。新键会计入 `unknown_fields`，其值只保留在 Raw Page 缓存中，直到 schema 明确接纳这些字段。
 

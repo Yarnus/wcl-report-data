@@ -59,6 +59,12 @@ python -m wcl_report_data query \
 
 The CLI always writes JSON to standard output, including structured domain errors. See `python -m wcl_report_data --help` for all arguments and [the Skill instructions](SKILL.md) for the complete workflow.
 
+## Encounter Designators And Ability Names
+
+The Skill understands Encounter Designators such as `PT6`, `H6`, and `M6`. The prefixes mean Normal, Heroic, and Mythic; the number is the one-based position in WCL's original `zone.encounters` list. A designator identifies only a difficulty and encounter. When a report has multiple matching Boss Attempts, the Skill lists explicit fight IDs and waits for a choice instead of selecting a kill, the latest attempt, or every attempt.
+
+The [zhCN ability mapping](references/ability-names.zhCN.json) provides official Chinese display names from a current Retail client. A mapping may be used only when the ID also occurs in the Report Index `abilities[].gameID`; a miss keeps the WCL name and is never literally translated. The Chinese name is current-client display enrichment and does not modify the Report Index. Displays retain the ability ID, WCL name, and [mapping build metadata](references/ability-names.zhCN.meta.json).
+
 ## Credentials
 
 Process environment variables take precedence over `.env` files. The canonical names are:
@@ -120,6 +126,17 @@ python -m wcl_report_data cache clear --confirm
 Destructive operations require `--confirm`. Clearing the cache preserves canonical Fight Bundles but removes local copies of unknown field values and download checkpoints.
 
 ## Development And Documentation
+
+Maintainers can export `SpellName.csv` from a zhCN client with wow.export, then import only the IDs required by the existing mapping and selected Report Indices:
+
+```bash
+python tools/import_ability_names.py \
+  "/path/to/SpellName.csv" \
+  --report-index "/path/to/report.json" \
+  --build "12.0.7.68974"
+```
+
+The importer preserves existing IDs, updates legitimate renames, and refuses to write when the current CSV omits an existing ID.
 
 ```bash
 make check

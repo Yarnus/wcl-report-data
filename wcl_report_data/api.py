@@ -34,7 +34,7 @@ query ReportIndex($code: String!) {
     report(code: $code, allowUnlisted: true) {
       code title visibility revision startTime endTime
       archiveStatus { isArchived isAccessible }
-      zone { id name frozen difficulties { id name sizes } }
+      zone { id name frozen difficulties { id name sizes } encounters { id name } }
       masterData(translate: true) {
         logVersion gameVersion lang
         actors { id gameID name server type subType petOwner icon }
