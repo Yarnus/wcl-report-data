@@ -63,7 +63,7 @@ The CLI always writes JSON to standard output, including structured domain error
 
 The Skill understands Encounter Designators such as `PT6`, `H6`, and `M6`. The prefixes mean Normal, Heroic, and Mythic; the number is the one-based position in WCL's original `zone.encounters` list. A designator identifies only a difficulty and encounter. When a report has multiple matching Boss Attempts, the Skill lists explicit fight IDs and waits for a choice instead of selecting a kill, the latest attempt, or every attempt.
 
-The [zhCN ability mapping](references/ability-names.zhCN.json) provides official Chinese display names from a current Retail client. A mapping may be used only when the ID also occurs in the Report Index `abilities[].gameID`; a miss keeps the WCL name and is never literally translated. The Chinese name is current-client display enrichment and does not modify the Report Index. Displays retain the ability ID, WCL name, and [mapping build metadata](references/ability-names.zhCN.meta.json).
+On the first `inspect`, `prepare`, or `query`, the CLI downloads the current Retail zhCN `SpellName` CSV from Wago Tools and creates a complete `ability-names.zhCN.json` plus metadata in the data directory. A valid existing JSON is reused without network access. A mapping may be used only when the ID also occurs in the Report Index `abilities[].gameID`; a miss keeps the WCL name and is never literally translated. The CLI's `ability_names` output provides the actual mapping path and client build. Chinese names are current-client display enrichment and do not modify the Report Index.
 
 ## Credentials
 
@@ -99,6 +99,8 @@ reports/<report-code>/
     `-- fights/<fight-id>/
         |-- manifest.json
         `-- events.jsonl.gz
+ability-names.zhCN.json
+ability-names.zhCN.meta.json
 ```
 
 Fight Bundles are immutable within a Report Revision. Re-exporting a report creates a new revision directory.
@@ -127,14 +129,7 @@ Destructive operations require `--confirm`. Clearing the cache preserves canonic
 
 ## Development And Documentation
 
-Maintainers can download the current zhCN `SpellName` CSV directly from Wago Tools, then import only the IDs required by the existing mapping and selected Report Indices:
-
-```bash
-python tools/import_ability_names.py \
-  --report-index "/path/to/report.json"
-```
-
-The script always downloads `https://wago.tools/db2/SpellName/csv?locale=zhCN` and records the client build from the response filename, such as `SpellName.12.1.0.69587.csv`. The importer preserves existing IDs, updates legitimate renames, and refuses to write when the current CSV omits an existing ID.
+Ability names are first downloaded from `https://wago.tools/db2/SpellName/csv?locale=zhCN`. The CLI records the client build, source filename, and SHA-256 from a response such as `SpellName.12.1.0.69587.csv`. Delete `ability-names.zhCN.json` and `ability-names.zhCN.meta.json` from the data directory to download them again on the next relevant command. A download failure returns a structured `dataset_error`.
 
 ```bash
 make check

@@ -234,6 +234,16 @@ class DatasetStore:
         with self._report_operation_lock(code), self._cache_operation_lock(shared=os.name != "nt"):
             yield
 
+    @contextmanager
+    def ability_names_lock(self) -> Iterator[None]:
+        lock_path = self.data_root / ".locks" / "ability-names.lock"
+        with _file_lock(
+            lock_path,
+            timeout_seconds=300,
+            unavailable_message=f"Timed out waiting for ability-name lock: {lock_path}",
+        ):
+            yield
+
     def write_index(self, index: dict[str, Any]) -> Path:
         code = str(index["report"]["code"])
         revision = int(index["report"]["revision"])

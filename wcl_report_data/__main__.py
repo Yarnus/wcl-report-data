@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import __version__
+from .ability_names import ensure_ability_names
 from .api import WclClient
 from .config import default_cache_root, default_data_root, resolve_credentials
 from .dataset import DatasetService, DatasetStore, query_bundle
@@ -86,7 +87,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     store = DatasetStore(args.data_root, args.cache_root)
     if args.command == "query":
-        return query_bundle(
+        ability_names = _ensure_ability_names(store)
+        result = query_bundle(
             args.manifest,
             event_types=set(args.event_types) if args.event_types else None,
             source_id=args.source_id,
@@ -97,6 +99,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             cursor=args.cursor,
             limit=args.limit,
         )
+        return result | {"ability_names": ability_names}
     if args.command == "dataset":
         if args.dataset_command == "list":
             return {"action": "dataset_list"} | store.list_datasets()
@@ -132,19 +135,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     service = DatasetService(client, store)
     ref = ReportRef.parse(args.url)
     if args.command == "inspect":
-        return service.inspect(ref)
+        ability_names = _ensure_ability_names(store)
+        return service.inspect(ref) | {"ability_names": ability_names}
     if args.command == "prepare":
+        ability_names = _ensure_ability_names(store)
         return service.prepare(
             ref,
             fight_ids=args.fight_ids,
             encounter_id=args.encounter_id,
             all_boss_fights=args.all_boss_fights,
-        )
+        ) | {"ability_names": ability_names}
     raise InputError(f"Unsupported command: {args.command}")
 
 
 def _print_json(value: dict[str, Any]) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _ensure_ability_names(store: DatasetStore) -> dict[str, Any]:
+    with store.ability_names_lock():
+        return ensure_ability_names(store.data_root)
 
 
 def _verify_writable(path: Path) -> None:

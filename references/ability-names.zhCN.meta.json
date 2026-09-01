@@ -1,8 +1,0 @@
-{
-  "locale": "zhCN",
-  "build": "12.1.0.69587",
-  "source": "https://wago.tools/db2/SpellName/csv?locale=zhCN",
-  "source_file": "SpellName.12.1.0.69587.csv",
-  "source_sha256": "d6784c26b4fb9aa079260fd4e19b4b80cf73006a1271106f8b70ec76f81b9bc3",
-  "ability_count": 3
-}

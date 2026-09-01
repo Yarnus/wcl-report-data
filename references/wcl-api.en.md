@@ -21,7 +21,7 @@ Report indexing fetches the report revision, archive status, Retail game version
 
 Fight difficulty IDs are interpreted only through the `zone.difficulties { id name }` values returned for that report. They are not mapped through a hardcoded global enum because IDs can differ between WCL contexts.
 
-WCL `translate: true` normalizes Report master ability names to English and does not accept a target locale. Current zhCN display names come from the repository's lightweight, client-build-sourced mapping. WCL GraphQL `gameData.ability` has no locale argument and returns English names only.
+WCL `translate: true` normalizes Report master ability names to English and does not accept a target locale. Current zhCN display names come from a complete local mapping downloaded from Wago Tools on first use with client-build provenance. WCL GraphQL `gameData.ability` has no locale argument and returns English names only.
 
 Fight collection uses `Report.events` with:
 

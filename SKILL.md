@@ -94,7 +94,7 @@ python -m wcl_report_data query "<MANIFEST_PATH>" --type damage --target-id 17
 
 查询结果是证据，不是结论。没有独立的首领机制知识来源时，不得把伤害标记为可规避、推断责任，或声称某次死亡可以避免。
 
-展示技能名时，先确认 `ability_id` 同时存在于 Report Index 的 `abilities[].gameID`。存在时可查询 [zhCN ability mapping](references/ability-names.zhCN.json)：命中则使用当前客户端的 Localized Ability Name，并同时保留 WCL 原名、ability ID 和 [mapping metadata](references/ability-names.zhCN.meta.json) 中的 build；未命中则保留 WCL 原名。事件中的 fallback `guid` 或 `id` 未出现在 Report Index ability 表时不得套用 mapping。不得自行直译技能名。
+展示技能名时，先确认 `ability_id` 同时存在于 Report Index 的 `abilities[].gameID`。存在时可查询 CLI 输出 `ability_names.mapping_path` 指向的完整 zhCN mapping：命中则使用当前客户端的 Localized Ability Name，并同时保留 WCL 原名、ability ID 和 `ability_names.build`；未命中则保留 WCL 原名。mapping 在首次 `inspect`、`prepare` 或 `query` 时自动下载，禁止要求用户手动导出。事件中的 fallback `guid` 或 `id` 未出现在 Report Index ability 表时不得套用 mapping。不得自行直译技能名。
 
 完成标准：每个返回事件都能通过 `raw_ref` 回指原始页，查询结果不超过指定上限。
 

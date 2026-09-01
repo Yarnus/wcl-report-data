@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from wcl_report_data.__main__ import create_parser, main
+from wcl_report_data.__main__ import create_parser, main, run
 
 
 class CliTests(unittest.TestCase):
@@ -70,6 +70,25 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "credentials_unavailable")
+
+    def test_query_ensures_ability_names_and_returns_their_location(self) -> None:
+        args = create_parser().parse_args(["query", "/tmp/manifest.json"])
+        names = {
+            "mapping_path": "/tmp/ability-names.zhCN.json",
+            "metadata_path": "/tmp/ability-names.zhCN.meta.json",
+            "locale": "zhCN",
+            "build": "12.1.0.69587",
+            "ability_count": 2,
+        }
+
+        with (
+            patch("wcl_report_data.__main__.ensure_ability_names", return_value=names) as ensure,
+            patch("wcl_report_data.__main__.query_bundle", return_value={"events": []}),
+        ):
+            result = run(args)
+
+        ensure.assert_called_once_with(args.data_root.resolve())
+        self.assertEqual(result["ability_names"], names)
 
 
 if __name__ == "__main__":
