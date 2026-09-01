@@ -5,24 +5,25 @@ import csv
 import hashlib
 import json
 import os
+import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).parents[1]
 DEFAULT_MAPPING = ROOT / "references" / "ability-names.zhCN.json"
 DEFAULT_METADATA = ROOT / "references" / "ability-names.zhCN.meta.json"
+WAGO_URL = "https://wago.tools/db2/SpellName/csv?locale=zhCN"
 
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Import current zhCN ability names from a wow.export SpellName CSV."
+        description="Download the current zhCN SpellName CSV from Wago Tools and import ability names."
     )
-    parser.add_argument("csv", type=Path)
     parser.add_argument("--report-index", type=Path, action="append", default=[])
-    parser.add_argument("--build", required=True)
-    parser.add_argument("--locale", default="zhCN", choices=["zhCN"])
     parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
     parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA)
     return parser
@@ -35,26 +36,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         target_ids = set(existing) | _report_ability_ids(args.report_index)
         if not target_ids:
             raise ValueError("No existing or Report Index ability IDs were provided.")
-        imported = _read_spell_names(args.csv, target_ids)
-        missing = sorted(target_ids - imported.keys())
-        if missing:
-            raise ValueError(f"SpellName CSV is missing {len(missing)} required IDs: {missing[:20]}")
+        with tempfile.TemporaryDirectory() as temporary:
+            csv_path, source_file, build = _download_spell_names(Path(temporary))
+            imported = _read_spell_names(csv_path, target_ids)
+            missing = sorted(target_ids - imported.keys())
+            if missing:
+                raise ValueError(
+                    f"Wago SpellName CSV is missing {len(missing)} required IDs: {missing[:20]}"
+                )
 
-        changed = sorted(
-            ability_id
-            for ability_id, name in imported.items()
-            if ability_id in existing and existing[ability_id] != name
-        )
-        added = sorted(imported.keys() - existing.keys())
-        mapping = {str(ability_id): imported[ability_id] for ability_id in sorted(imported)}
-        metadata = {
-            "locale": args.locale,
-            "build": args.build,
-            "source": "wow.export SpellName.csv",
-            "source_file": args.csv.name,
-            "source_sha256": _sha256(args.csv),
-            "ability_count": len(mapping),
-        }
+            changed = sorted(
+                ability_id
+                for ability_id, name in imported.items()
+                if ability_id in existing and existing[ability_id] != name
+            )
+            added = sorted(imported.keys() - existing.keys())
+            mapping = {str(ability_id): imported[ability_id] for ability_id in sorted(imported)}
+            metadata = {
+                "locale": "zhCN",
+                "build": build,
+                "source": WAGO_URL,
+                "source_file": source_file,
+                "source_sha256": _sha256(csv_path),
+                "ability_count": len(mapping),
+            }
         _atomic_write_json(args.mapping, mapping)
         _atomic_write_json(args.metadata, metadata)
     except (OSError, UnicodeError, csv.Error, json.JSONDecodeError, ValueError) as exc:
@@ -91,6 +96,19 @@ def _read_mapping(path: Path) -> dict[int, str]:
             raise ValueError(f"Ability mapping {raw_id} has no name.")
         result[int(raw_id)] = name
     return result
+
+
+def _download_spell_names(directory: Path) -> tuple[Path, str, str]:
+    request = Request(WAGO_URL, headers={"User-Agent": "wcl-report-data ability importer"})
+    with urlopen(request, timeout=120) as response:
+        source_file = response.headers.get_filename()
+        match = re.fullmatch(r"SpellName\.(\d+(?:\.\d+)+)\.csv", source_file or "")
+        if match is None:
+            raise ValueError("Wago response does not identify a SpellName client build.")
+        path = directory / source_file
+        with path.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+    return path, source_file, match.group(1)
 
 
 def _report_ability_ids(paths: Sequence[Path]) -> set[int]:

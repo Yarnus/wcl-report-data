@@ -127,16 +127,14 @@ Destructive operations require `--confirm`. Clearing the cache preserves canonic
 
 ## Development And Documentation
 
-Maintainers can export `SpellName.csv` from a zhCN client with wow.export, then import only the IDs required by the existing mapping and selected Report Indices:
+Maintainers can download the current zhCN `SpellName` CSV directly from Wago Tools, then import only the IDs required by the existing mapping and selected Report Indices:
 
 ```bash
 python tools/import_ability_names.py \
-  "/path/to/SpellName.csv" \
-  --report-index "/path/to/report.json" \
-  --build "12.0.7.68974"
+  --report-index "/path/to/report.json"
 ```
 
-The importer preserves existing IDs, updates legitimate renames, and refuses to write when the current CSV omits an existing ID.
+The script always downloads `https://wago.tools/db2/SpellName/csv?locale=zhCN` and records the client build from the response filename, such as `SpellName.12.1.0.69587.csv`. The importer preserves existing IDs, updates legitimate renames, and refuses to write when the current CSV omits an existing ID.
 
 ```bash
 make check

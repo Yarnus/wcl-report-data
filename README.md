@@ -121,16 +121,14 @@ python -m wcl_report_data cache clear --confirm
 
 ## 开发与文档
 
-维护者可用 wow.export 从 zhCN 客户端导出 `SpellName.csv`，再只导入现有 mapping 与指定 Report Index 所需的 ID：
+维护者可直接从 Wago Tools 下载当前 zhCN `SpellName` CSV，并只导入现有 mapping 与指定 Report Index 所需的 ID：
 
 ```bash
 python tools/import_ability_names.py \
-  "/path/to/SpellName.csv" \
-  --report-index "/path/to/report.json" \
-  --build "12.0.7.68974"
+  --report-index "/path/to/report.json"
 ```
 
-导入器保留已有 ID，更新合法改名，并在当前 CSV 缺少任何已有 ID 时拒绝写入。
+脚本固定从 `https://wago.tools/db2/SpellName/csv?locale=zhCN` 下载，依据响应文件名（例如 `SpellName.12.1.0.69587.csv`）保存客户端 build。导入器保留已有 ID，更新合法改名，并在当前 CSV 缺少任何已有 ID 时拒绝写入。
 
 ```bash
 make check
