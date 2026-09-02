@@ -8,9 +8,9 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request
 
-from wcl_report_data.api import EVENT_QUERY, REPORT_QUERY, REPORT_RESERVATION_POINTS, WclClient
-from wcl_report_data.config import Credentials
-from wcl_report_data.errors import ApiError, RateLimitError
+from wcl_raid_coach.api import EVENT_QUERY, RANKINGS_QUERY, REPORT_QUERY, REPORT_RESERVATION_POINTS, WclClient
+from wcl_raid_coach.config import Credentials
+from wcl_raid_coach.errors import ApiError, RateLimitError
 
 
 class Response:
@@ -38,8 +38,8 @@ class WclClientTests(unittest.TestCase):
         responses = [Response(IncompleteRead(b"", 1)), Response(b'{"ok": true}')]
         client = self.make_client(max_retries=1, retry_backoff_seconds=0)
 
-        with patch("wcl_report_data.api.urlopen", side_effect=responses) as request, patch(
-            "wcl_report_data.api.time.sleep"
+        with patch("wcl_raid_coach.api.urlopen", side_effect=responses) as request, patch(
+            "wcl_raid_coach.api.time.sleep"
         ) as sleep:
             result = client._request_json(Request("https://example.invalid"))
 
@@ -51,7 +51,7 @@ class WclClientTests(unittest.TestCase):
         response = Response(gzip.compress(b'{"ok": true}'), {"Content-Encoding": "GZip"})
         request = Request("https://example.invalid")
 
-        with patch("wcl_report_data.api.urlopen", return_value=response):
+        with patch("wcl_raid_coach.api.urlopen", return_value=response):
             result = self.make_client()._request_json(request)
 
         self.assertEqual(result, {"ok": True})
@@ -60,7 +60,7 @@ class WclClientTests(unittest.TestCase):
     def test_rejects_an_invalid_gzip_response(self) -> None:
         response = Response(b"not gzip", {"Content-Encoding": "gzip"})
 
-        with patch("wcl_report_data.api.urlopen", return_value=response):
+        with patch("wcl_raid_coach.api.urlopen", return_value=response):
             with self.assertRaisesRegex(ApiError, "invalid gzip"):
                 self.make_client()._request_json(Request("https://example.invalid"))
 
@@ -69,7 +69,7 @@ class WclClientTests(unittest.TestCase):
         compressed[10] = 0xFF
         response = Response(bytes(compressed), {"Content-Encoding": "gzip"})
 
-        with patch("wcl_report_data.api.urlopen", return_value=response):
+        with patch("wcl_raid_coach.api.urlopen", return_value=response):
             with self.assertRaisesRegex(ApiError, "invalid gzip"):
                 self.make_client()._request_json(Request("https://example.invalid"))
 
@@ -83,7 +83,7 @@ class WclClientTests(unittest.TestCase):
         )
         client = self.make_client(max_retries=2, retry_backoff_seconds=0)
 
-        with patch("wcl_report_data.api.urlopen", side_effect=[error, error]) as request:
+        with patch("wcl_raid_coach.api.urlopen", side_effect=[error, error]) as request:
             with self.assertRaises(RateLimitError):
                 client._request_json(Request("https://example.invalid"))
 
@@ -103,6 +103,11 @@ class WclClientTests(unittest.TestCase):
 
     def test_report_query_fetches_zone_encounter_order(self) -> None:
         self.assertIn("encounters { id name }", REPORT_QUERY)
+
+    def test_rankings_query_uses_exact_raid_hard_conditions(self) -> None:
+        for field in ("encounterID", "difficulty", "partition", "className", "specName"):
+            self.assertIn(field, RANKINGS_QUERY)
+        self.assertIn("externalBuffs: Exclude", RANKINGS_QUERY)
 
     def test_event_request_sends_the_fixed_fight_end_time(self) -> None:
         client = self.make_client()

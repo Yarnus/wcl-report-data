@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from wcl_report_data.config import CredentialError, default_cache_root, default_data_root, resolve_credentials
+from wcl_raid_coach.config import CredentialError, default_cache_root, default_data_root, resolve_credentials
 
 
 class CredentialTests(unittest.TestCase):
@@ -70,8 +70,8 @@ class CredentialTests(unittest.TestCase):
             data = default_data_root(environ={}, workspace=workspace)
             cache = default_cache_root(environ={}, workspace=workspace)
 
-        self.assertEqual(data, workspace / "wcl-report-data")
-        self.assertEqual(cache, workspace / ".cache" / "wcl-report-data")
+        self.assertEqual(data, workspace / "wcl-raid-coach")
+        self.assertEqual(cache, workspace / ".cache" / "wcl-raid-coach")
 
 
 if __name__ == "__main__":

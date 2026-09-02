@@ -8,7 +8,7 @@ from email.message import Message
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from wcl_report_data import ability_names
+from wcl_raid_coach import ability_names
 
 
 class FakeResponse(io.BytesIO):

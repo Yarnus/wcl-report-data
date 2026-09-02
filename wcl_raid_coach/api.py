@@ -84,6 +84,52 @@ query RateLimit {
 """
 
 
+CURRENT_RAIDS_QUERY = """
+query CurrentRetailRaids {
+  worldData {
+    zones {
+      id name frozen
+      difficulties { id name }
+      encounters { id name }
+      partitions { id name compactName default }
+    }
+  }
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
+
+RANKINGS_QUERY = """
+query RankedReferences(
+  $encounterID: Int!, $difficulty: Int!, $partition: Int!, $className: String!, $specName: String!, $page: Int!
+) {
+  worldData {
+    encounter(id: $encounterID) {
+      id
+      characterRankings(
+        difficulty: $difficulty, partition: $partition, className: $className, specName: $specName,
+        metric: dps, page: $page, includeCombatantInfo: true, externalBuffs: Exclude
+      )
+    }
+  }
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
+
+CANDIDATE_SOURCE_QUERY = """
+query CandidateSource($code: String!, $fightID: Int!) {
+  reportData {
+    report(code: $code, allowUnlisted: true) {
+      masterData(translate: true) { actors { id name server subType } }
+      fights(fightIDs: [$fightID], translate: true) { id friendlyPlayers friendlySpecs }
+    }
+  }
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
+
 class WclClient:
     def __init__(
         self,
@@ -216,6 +262,88 @@ class WclClient:
             raise ApiError("WCL did not return rate-limit data.")
         return dict(value)
 
+    def fetch_raid_zones(self) -> list[dict[str, Any]]:
+        self._ensure_circuit()
+        with self.reserve_api_points():
+            data = self.graphql(CURRENT_RAIDS_QUERY)
+        world = data.get("worldData")
+        zones = world.get("zones") if isinstance(world, dict) else None
+        if not isinstance(zones, list) or any(not isinstance(item, dict) for item in zones):
+            raise ApiError("WCL did not return Retail raid zone metadata.")
+        return zones
+
+    def fetch_rankings(
+        self,
+        *,
+        encounter_id: int,
+        difficulty_id: int,
+        partition_id: int,
+        class_name: str,
+        spec_name: str,
+        page: int = 1,
+    ) -> dict[str, Any]:
+        self._ensure_circuit()
+        with self.reserve_api_points():
+            data = self.graphql(
+                RANKINGS_QUERY,
+                {
+                    "encounterID": encounter_id,
+                    "difficulty": difficulty_id,
+                    "partition": partition_id,
+                    "className": class_name,
+                    "specName": spec_name,
+                    "page": page,
+                },
+            )
+        world = data.get("worldData")
+        encounter = world.get("encounter") if isinstance(world, dict) else None
+        rankings = encounter.get("characterRankings") if isinstance(encounter, dict) else None
+        if isinstance(rankings, str):
+            try:
+                rankings = json.loads(rankings)
+            except json.JSONDecodeError as exc:
+                raise ApiError("WCL returned malformed ranking JSON.") from exc
+        if not isinstance(rankings, dict):
+            raise ApiError("WCL did not return character rankings for the requested encounter.")
+        return rankings
+
+    def resolve_candidate_source(self, candidate: dict[str, Any]) -> int | None:
+        with self.reserve_api_points():
+            data = self.graphql(
+                CANDIDATE_SOURCE_QUERY,
+                {"code": candidate.get("report_code"), "fightID": candidate.get("fight_id")},
+            )
+        report_data = data.get("reportData")
+        report = report_data.get("report") if isinstance(report_data, dict) else None
+        if not isinstance(report, dict):
+            return None
+        actors = (report.get("masterData") or {}).get("actors")
+        fights = report.get("fights")
+        if not isinstance(actors, list) or not isinstance(fights, list) or len(fights) != 1:
+            return None
+        fight = fights[0]
+        player_ids = fight.get("friendlyPlayers") if isinstance(fight, dict) else None
+        specs = fight.get("friendlySpecs") if isinstance(fight, dict) else None
+        if not isinstance(player_ids, list) or not isinstance(specs, list):
+            return None
+        actors_by_id = {item.get("id"): item for item in actors if isinstance(item, dict)}
+        matches = []
+        for position, actor_id in enumerate(player_ids):
+            actor = actors_by_id.get(actor_id)
+            spec = specs[position] if position < len(specs) else None
+            if not isinstance(actor, dict):
+                continue
+            if (
+                actor.get("name") != candidate.get("name")
+                or actor.get("subType") != candidate.get("class_name")
+                or spec != candidate.get("spec_name")
+            ):
+                continue
+            server = candidate.get("server")
+            if isinstance(server, str) and server and _server_key(actor.get("server")) != _server_key(server):
+                continue
+            matches.append(actor_id)
+        return matches[0] if len(matches) == 1 and isinstance(matches[0], int) else None
     @contextmanager
     def reserve_api_points(
         self, reserve_fraction: float = 0.15, required_points: float | None = None
@@ -316,3 +444,7 @@ class WclClient:
                 except (TypeError, ValueError, OverflowError):
                     pass
         time.sleep(max(0.0, delay))
+
+
+def _server_key(value: Any) -> str:
+    return "".join(character for character in str(value).casefold() if character.isalnum())

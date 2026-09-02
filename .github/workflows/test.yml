@@ -17,4 +17,4 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest -v
-      - run: python -m compileall -q wcl_report_data tests
+      - run: python -m compileall -q wcl_raid_coach tests

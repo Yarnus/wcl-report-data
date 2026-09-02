@@ -1,0 +1,3 @@
+# Unify raid evidence and coaching in one standalone Skill
+
+The product is renamed to `wcl-raid-coach` and contains separate evidence and coaching contexts in one standalone release. Coaching consumes Complete Bundles rather than maintaining a second actor-focused event cache. This costs more API points and local storage, but preserves one Report Revision-safe evidence model for report queries, Personal Reviews, and Raid Guides. The release uses a new storage root and does not read artifacts produced by `wcl-report-data`. The private `wcl-coach` Skill remains available until this replacement passes independent release verification.

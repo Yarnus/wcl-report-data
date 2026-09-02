@@ -1,14 +1,14 @@
-# wcl-report-data
+# wcl-raid-coach
 
 <p align="center">
   <img src="assets/timewarp-inn-dog.svg" width="220" alt="Original fantasy icon of a golden dog guarding a timewarp inn">
 </p>
 
-`wcl-report-data` is a WorkBuddy Agent Skill and Python 3.11+ package for turning Retail Warcraft Logs raid reports into reproducible, team-level fact datasets stored by Report Revision.
+`wcl-raid-coach` is a WorkBuddy Agent Skill and Python 3.11+ package for preparing Retail Warcraft Logs raid evidence, reviewing personal performance, and generating Boss guides from ranked references.
 
 It uses only the official Warcraft Logs OAuth and GraphQL APIs; it does not scrape report pages.
 
-The first release prepares facts only. It does not classify avoidable damage, assign blame for deaths, compare rankings, or produce review conclusions.
+Version 2.0 keeps Report Revision-safe evidence as the foundation and adds Personal Reviews plus current-raid guides built from validated ranked references and sourced Profiles.
 
 [Chinese documentation](README.md)
 
@@ -27,37 +27,45 @@ Requirements: Python 3.11 or newer, network access to `warcraftlogs.com`, and a 
 Run the CLI from the repository root or an installed Skill directory:
 
 ```bash
-python -m wcl_report_data doctor
+python -m wcl_raid_coach doctor
 ```
 
 After `wcl_api` reports `reachable`, create a report index:
 
 ```bash
-python -m wcl_report_data inspect "https://www.warcraftlogs.com/reports/<code>"
+python -m wcl_raid_coach inspect "https://www.warcraftlogs.com/reports/<code>"
 ```
+
+Resolve a general guide request for Unholy Death Knight on the current raid's H7/H8:
+
+```bash
+python -m wcl_raid_coach coach resolve --spec "Unholy DK" --encounter H7 --encounter H8
+```
+
+This only resolves current-raid context and creates a task awaiting confirmation. See [the Skill instructions](SKILL.md) for the complete workflow.
 
 Prepare the fight selected in the URL:
 
 ```bash
-python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>#fight=12"
+python -m wcl_raid_coach prepare "https://www.warcraftlogs.com/reports/<code>#fight=12"
 ```
 
 You can also prepare explicit fights or all completed attempts for an encounter:
 
 ```bash
-python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>" --fight 12 --fight 15
-python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>" --encounter 3129
+python -m wcl_raid_coach prepare "https://www.warcraftlogs.com/reports/<code>" --fight 12 --fight 15
+python -m wcl_raid_coach prepare "https://www.warcraftlogs.com/reports/<code>" --encounter 3129
 ```
 
 Use the returned manifest to query events without loading the entire event stream into a model context:
 
 ```bash
-python -m wcl_report_data query \
-  "/workspace/wcl-report-data/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
+python -m wcl_raid_coach query \
+  "/workspace/wcl-raid-coach/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
   --type damage --target-id 17 --limit 200
 ```
 
-The CLI always writes JSON to standard output, including structured domain errors. See `python -m wcl_report_data --help` for all arguments and [the Skill instructions](SKILL.md) for the complete workflow.
+The CLI always writes JSON to standard output, including structured domain errors. See `python -m wcl_raid_coach --help` for all arguments and [the Skill instructions](SKILL.md) for the complete workflow.
 
 ## Encounter Designators And Ability Names
 
@@ -77,19 +85,19 @@ WCL_CLIENT_SECRET=
 The CLI also accepts the paired aliases `WCL_ID` and `WCL_SECRET`. When using an explicit file, put the global option before the subcommand:
 
 ```bash
-python -m wcl_report_data --env-file "<WORKSPACE>/.env" doctor
-python -m wcl_report_data --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
+python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" doctor
+python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
 ```
 
 Never ask a user to paste a secret into chat, never overwrite an existing `.env`, and never print a client secret or access token. See [the setup guide](references/workbuddy-setup.en.md) for lookup order and storage paths.
 
 ## Storage Layout
 
-The default data directory is `/workspace/wcl-report-data/` when `/workspace` exists, `~/.local/share/wcl-report-data/` on local Unix/macOS, and `%LOCALAPPDATA%/wcl-report-data/` on Windows.
+The default data directory is `/workspace/wcl-raid-coach/` when `/workspace` exists, `~/.local/share/wcl-raid-coach/` on local Unix/macOS, and `%LOCALAPPDATA%/wcl-raid-coach/` on Windows.
 
-Override the data directory with `WCL_REPORT_DATA_HOME`.
+Override the data directory with `WCL_RAID_COACH_HOME`.
 
-Raw pages and resumable checkpoints default to `/workspace/.cache/wcl-report-data/` or `~/.cache/wcl-report-data/`; Windows uses `wcl-report-data/Cache` below `%LOCALAPPDATA%`. Override it with `WCL_REPORT_DATA_CACHE`.
+Raw pages and resumable checkpoints default to `/workspace/.cache/wcl-raid-coach/` or `~/.cache/wcl-raid-coach/`; Windows uses `wcl-raid-coach/Cache` below `%LOCALAPPDATA%`. Override it with `WCL_RAID_COACH_CACHE`.
 
 ```text
 reports/<report-code>/
@@ -119,10 +127,10 @@ Fight Bundles are immutable within a Report Revision. Re-exporting a report crea
 ## Dataset Management
 
 ```bash
-python -m wcl_report_data dataset list
-python -m wcl_report_data cache status
-python -m wcl_report_data dataset remove <REPORT_CODE> --confirm
-python -m wcl_report_data cache clear --confirm
+python -m wcl_raid_coach dataset list
+python -m wcl_raid_coach cache status
+python -m wcl_raid_coach dataset remove <REPORT_CODE> --confirm
+python -m wcl_raid_coach cache clear --confirm
 ```
 
 Destructive operations require `--confirm`. Clearing the cache preserves canonical Fight Bundles but removes local copies of unknown field values and download checkpoints.
@@ -139,7 +147,7 @@ Equivalent manual checks:
 
 ```bash
 python -m unittest -v
-python -m compileall -q wcl_report_data tests
+python -m compileall -q wcl_raid_coach tests
 git diff --check
 ```
 

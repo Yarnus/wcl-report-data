@@ -2,15 +2,15 @@ PYTHON ?= python
 SKILLHUB ?= skillhub
 REF ?= HEAD
 DIST_DIR ?= dist
-VERSION ?= $(shell git show "$(REF):wcl_report_data/__init__.py" | $(PYTHON) -c 'import re, sys; match = re.search(r"__version__ = \"([^\"]+)\"", sys.stdin.read()); print(match.group(1) if match else "")')
-ARCHIVE := $(DIST_DIR)/wcl-report-data-$(VERSION).zip
-PACKAGE_PATHS := CONTEXT.md LICENSE.md README.md README.en.md SKILL.md assets references wcl_report_data
+VERSION ?= $(shell if git cat-file -e "$(REF):wcl_raid_coach/__init__.py" 2>/dev/null; then git show "$(REF):wcl_raid_coach/__init__.py"; else $(PYTHON) -c 'print(open("wcl_raid_coach/__init__.py", encoding="utf-8").read())'; fi | $(PYTHON) -c 'import sys; text = sys.stdin.read(); marker = "__version__ = " + chr(34); print(text.split(marker, 1)[1].split(chr(34), 1)[0] if marker in text else "")')
+ARCHIVE := $(DIST_DIR)/wcl-raid-coach-$(VERSION).zip
+PACKAGE_PATHS := CONTEXT.md LICENSE.md README.md README.en.md SKILL.md assets references wcl_raid_coach
 
 .PHONY: check package publish-dry-run publish clean-package
 
 check:
 	$(PYTHON) -m unittest -v
-	$(PYTHON) -m compileall -q wcl_report_data tests
+	$(PYTHON) -m compileall -q wcl_raid_coach tests
 	git diff --check
 
 package:

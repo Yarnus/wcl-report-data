@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from wcl_report_data.errors import InputError
-from wcl_report_data.models import ReportRef
+from wcl_raid_coach.errors import InputError
+from wcl_raid_coach.models import ReportRef
 
 
 class ReportRefTests(unittest.TestCase):

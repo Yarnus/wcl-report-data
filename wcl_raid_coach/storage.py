@@ -5,6 +5,9 @@ import hashlib
 import json
 import os
 import tempfile
+import time
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -79,3 +82,23 @@ def directory_size(path: Path) -> int:
             except OSError:
                 pass
     return total
+
+
+@contextmanager
+def artifact_lock(path: Path, timeout_seconds: float = 10.0) -> Iterator[None]:
+    """Coordinate coaching artifact mutations with an atomic lock directory."""
+    lock_path = path.with_name(f".{path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            lock_path.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise OSError(f"Timed out waiting for artifact lock: {lock_path}")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        lock_path.rmdir()

@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wcl-report-data"
-version = "1.0.7"
-description = "为 Agent Skills 准备按修订版本保存的 Warcraft Logs 团队副本数据集"
+name = "wcl-raid-coach"
+version = "2.0.0"
+description = "为 Agent Skills 准备 Warcraft Logs 团队副本证据、复盘和攻略"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE.md"}
@@ -13,7 +13,7 @@ authors = [{name = "Yarnus"}]
 dependencies = []
 
 [project.scripts]
-wcl-report-data = "wcl_report_data.__main__:main"
+wcl-raid-coach = "wcl_raid_coach.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["wcl_report_data*"]
+include = ["wcl_raid_coach*"]

@@ -71,3 +71,15 @@ actor 和 ability 名称保存在 `report.json`；ID 才是事件身份。已本
 `query` 以流式方式读取 gzip 文件，最多返回 `limit` 行。`matched` 统计输入游标之后的所有匹配行。`truncated` 为 true 时，`next_cursor` 是最后一条已返回事件的 sequence，可用于下一次查询。
 
 时间过滤使用 `fight_time_ms`，上下界均包含在结果中。
+
+## 教练 Artifact
+
+教练层只消费通过上述完整性检查的 Complete Bundle，不能重写 Report Index、Fight Bundle 或 Canonical Event。
+
+- `profiles/` 保存声明式 Specialization Profile 和 Encounter Profile。Profile 身份包括 game version 与 ranking partition；Encounter Profile 还包括 encounter 和 difficulty。Profile ID 是校验后规范 JSON 的 SHA-256。
+- `cohorts/` 保存单一 encounter、difficulty、class、spec 与 partition 的 Ranking Cohort。Ranking Candidate 只有在 Complete Bundle、硬条件和 Encounter Profile eligibility 全部通过后才成为 Reference Sample。
+- Encounter Benchmark 只能聚合同一 Ranking Cohort 中至少三个不重复的 Reference Sample。不同 Encounter Designator 必须使用不同 benchmark。
+- `tasks/` 保存 Coach Request Manifest。部分完成状态必须保留每个 encounter 的 blocker 与 artifact 引用。
+- `guides/` 保存不可变 Guide Snapshot。一个 snapshot 可以引用多个 Encounter Benchmark，但不能覆盖旧 snapshot。
+
+个人复盘分析必须记录 Report Revision、fight ID、actor ID 和比较硬条件。分析与 benchmark 的 encounter、difficulty、class、spec 和 partition 不完全相同时，比较必须失败。

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import errno
 import gzip
+import hashlib
+import hmac
 import json
 import math
 import os
@@ -205,7 +207,7 @@ class DatasetClient(Protocol):
 
 
 class DatasetStore:
-    CACHE_MARKER = ".wcl-report-data-cache"
+    CACHE_MARKER = ".wcl-raid-coach-cache"
 
     def __init__(self, data_root: Path, cache_root: Path) -> None:
         self.data_root = data_root.expanduser().resolve()
@@ -306,7 +308,7 @@ class DatasetStore:
             raise DatasetError(f"Refusing to use non-empty unowned cache directory: {raw_root}")
         raw_root.mkdir(parents=True, exist_ok=True)
         if not marker.exists():
-            atomic_write_json(marker, {"owner": "wcl-report-data", "schema_version": SCHEMA_VERSION})
+            atomic_write_json(marker, {"owner": "wcl-raid-coach", "schema_version": SCHEMA_VERSION})
 
     def _repair_latest_unlocked(self, code: str) -> None:
         report_root = self.report_root(code)
@@ -574,6 +576,10 @@ class DatasetService:
         temporary = Path(tempfile.mkdtemp(prefix=f".{fight_id}.", dir=target.parent))
         try:
             manifest = self._normalize_bundle(index, fight, checkpoint, temporary)
+            credentials = getattr(self.client, "credentials", None)
+            signing_key = getattr(credentials, "client_secret", None)
+            if isinstance(signing_key, str) and signing_key:
+                manifest = sign_bundle_manifest(manifest, signing_key)
             atomic_write_json(temporary / "manifest.json", manifest)
             if target.exists():
                 shutil.rmtree(target)
@@ -811,6 +817,7 @@ class DatasetService:
             },
             "fight": fight,
             "report_index": "../../report.json",
+            "report_index_sha256": _json_sha256(index),
             "events_file": events_path.name,
             "events_sha256": sha256_file(events_path),
             "event_count": sequence,
@@ -957,13 +964,7 @@ def query_bundle(
 ) -> dict[str, Any]:
     if limit <= 0 or limit > 10_000:
         raise InputError("Query limit must be between 1 and 10000.")
-    manifest = _read_bundle_manifest(manifest_path)
-    schema_version = manifest.get("schema_version")
-    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
-        raise DatasetError("Fight Bundle uses an unsupported schema version.")
-    if manifest.get("complete") is not True:
-        raise DatasetError("Only complete Fight Bundles can be queried.")
-    events_path = _validate_bundle_file(manifest_path, manifest)
+    manifest, events_path = validate_complete_bundle(manifest_path)
     returned: list[dict[str, Any]] = []
     matched = 0
     with gzip.open(events_path, "rt", encoding="utf-8") as handle:
@@ -997,6 +998,77 @@ def query_bundle(
         "next_cursor": returned[-1]["sequence"] if truncated and returned else None,
         "events": returned,
     }
+
+
+def validate_complete_bundle(manifest_path: Path) -> tuple[dict[str, Any], Path]:
+    manifest = _read_bundle_manifest(manifest_path)
+    schema_version = manifest.get("schema_version")
+    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
+        raise DatasetError("Fight Bundle uses an unsupported schema version.")
+    if manifest.get("complete") is not True:
+        raise DatasetError("Only complete Fight Bundles can be queried.")
+    collection = manifest.get("collection")
+    if not isinstance(collection, dict) or collection.get("protocol_version") != COLLECTION_PROTOCOL_VERSION:
+        raise DatasetError("Fight Bundle uses an obsolete event collection protocol; prepare it again.")
+    raw_pages = manifest.get("raw_pages")
+    if not isinstance(raw_pages, list) or not raw_pages:
+        raise DatasetError("Complete Bundle has no Raw Page pagination record.")
+    if raw_pages[-1].get("next_page_timestamp") is not None:
+        raise DatasetError("Complete Bundle did not reach an explicit terminal pagination cursor.")
+    if collection.get("page_count") != len(raw_pages):
+        raise DatasetError("Complete Bundle page count does not match its Raw Page record.")
+    if any(
+        not isinstance(page, dict)
+        or page.get("number") != number
+        or page.get("query_start_time") is None
+        or page.get("query_end_time") != collection.get("end_time")
+        or not isinstance(page.get("sha256"), str)
+        or isinstance(page.get("events"), bool)
+        or not isinstance(page.get("events"), int)
+        or page.get("events") < 0
+        for number, page in enumerate(raw_pages, 1)
+    ):
+        raise DatasetError("Complete Bundle Raw Page pagination record is malformed.")
+    if sum(page["events"] for page in raw_pages) != manifest.get("event_count"):
+        raise DatasetError("Complete Bundle event count does not match its Raw Page record.")
+    for page in raw_pages:
+        page_path = Path(page.get("path", ""))
+        if page_path.exists() and (not page_path.is_file() or sha256_file(page_path) != page["sha256"]):
+            raise DatasetError("Complete Bundle Raw Page failed checksum validation.")
+    events_path = _validate_bundle_file(manifest_path, manifest)
+    observed = 0
+    with gzip.open(events_path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise DatasetError("Canonical Event stream contains invalid JSON.") from exc
+            if not isinstance(event, dict) or event.get("sequence") != observed:
+                raise DatasetError("Canonical Event stream sequence is malformed.")
+            observed += 1
+    if observed != manifest.get("event_count"):
+        raise DatasetError("Canonical Event stream count does not match the manifest.")
+    return manifest, events_path
+
+
+def sign_bundle_manifest(manifest: dict[str, Any], key: str) -> dict[str, Any]:
+    unsigned = dict(manifest)
+    unsigned.pop("coaching_signature", None)
+    message = json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    signature = hmac.new(key.encode(), message, hashlib.sha256).hexdigest()
+    return unsigned | {"coaching_signature": signature}
+
+
+def verify_bundle_signature(manifest: dict[str, Any], key: str) -> None:
+    signature = manifest.get("coaching_signature")
+    expected = sign_bundle_manifest(manifest, key)["coaching_signature"]
+    if not isinstance(signature, str) or not hmac.compare_digest(signature, expected):
+        raise DatasetError("Complete Bundle coaching signature is missing or invalid.")
+
+
+def _json_sha256(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _canonical_event(

@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 
-class WclReportDataError(Exception):
-    code = "wcl_report_data_error"
+class WclRaidCoachError(Exception):
+    code = "wcl_raid_coach_error"
 
 
-class InputError(WclReportDataError):
+class InputError(WclRaidCoachError):
     code = "invalid_input"
 
 
-class CredentialError(WclReportDataError):
+class CredentialError(WclRaidCoachError):
     code = "credentials_unavailable"
 
 
-class ApiError(WclReportDataError):
+class ApiError(WclRaidCoachError):
     code = "wcl_api_error"
 
 
@@ -25,5 +25,5 @@ class RevisionChangedError(ApiError):
     code = "report_revision_changed"
 
 
-class DatasetError(WclReportDataError):
+class DatasetError(WclRaidCoachError):
     code = "dataset_error"

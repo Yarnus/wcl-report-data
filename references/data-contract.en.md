@@ -75,3 +75,15 @@ WCL event JSON is not frozen. New keys are counted under `unknown_fields`; their
 `query` streams the gzip file and returns at most `limit` rows. `matched` counts all matching rows after the input cursor. When `truncated` is true, `next_cursor` is the final returned sequence and can be passed to the next call.
 
 Time filters use `fight_time_ms`, and their bounds are inclusive.
+
+## Coaching Artifacts
+
+The coaching layer consumes only Complete Bundles that pass the integrity rules above. It cannot rewrite a Report Index, Fight Bundle, or Canonical Event.
+
+- `profiles/` stores declarative Specialization Profiles and Encounter Profiles. Profile identity includes game version and ranking partition; an Encounter Profile also includes encounter and difficulty. The Profile ID is the SHA-256 of validated canonical JSON.
+- `cohorts/` stores a Ranking Cohort for exactly one encounter, difficulty, class, specialization, and partition. A Ranking Candidate becomes a Reference Sample only after Complete Bundle, hard-condition, and Encounter Profile eligibility checks pass.
+- An Encounter Benchmark aggregates at least three unique Reference Samples from one Ranking Cohort. Different Encounter Designators require different benchmarks.
+- `tasks/` stores Coach Request Manifests. Partial work retains each encounter's blocker and artifact references.
+- `guides/` stores immutable Guide Snapshots. A snapshot may reference multiple Encounter Benchmarks but cannot overwrite an older snapshot.
+
+A Personal Review analysis records Report Revision, fight ID, actor ID, and comparison hard conditions. Comparison fails unless analysis and benchmark encounter, difficulty, class, specialization, and partition match exactly.

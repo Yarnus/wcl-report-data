@@ -41,30 +41,30 @@ def default_data_root(
     *, environ: Mapping[str, str] | None = None, workspace: Path = Path("/workspace")
 ) -> Path:
     values = os.environ if environ is None else environ
-    override = values.get("WCL_REPORT_DATA_HOME")
+    override = values.get("WCL_RAID_COACH_HOME")
     if override:
         return Path(override).expanduser()
     if workspace.is_dir():
-        return workspace / "wcl-report-data"
+        return workspace / "wcl-raid-coach"
     if os.name == "nt" and values.get("LOCALAPPDATA"):
-        return Path(values["LOCALAPPDATA"]) / "wcl-report-data"
+        return Path(values["LOCALAPPDATA"]) / "wcl-raid-coach"
     base = Path(values["XDG_DATA_HOME"]).expanduser() if values.get("XDG_DATA_HOME") else Path.home() / ".local" / "share"
-    return base / "wcl-report-data"
+    return base / "wcl-raid-coach"
 
 
 def default_cache_root(
     *, environ: Mapping[str, str] | None = None, workspace: Path = Path("/workspace")
 ) -> Path:
     values = os.environ if environ is None else environ
-    override = values.get("WCL_REPORT_DATA_CACHE")
+    override = values.get("WCL_RAID_COACH_CACHE")
     if override:
         return Path(override).expanduser()
     if workspace.is_dir():
-        return workspace / ".cache" / "wcl-report-data"
+        return workspace / ".cache" / "wcl-raid-coach"
     if os.name == "nt" and values.get("LOCALAPPDATA"):
-        return Path(values["LOCALAPPDATA"]) / "wcl-report-data" / "Cache"
+        return Path(values["LOCALAPPDATA"]) / "wcl-raid-coach" / "Cache"
     base = Path(values["XDG_CACHE_HOME"]).expanduser() if values.get("XDG_CACHE_HOME") else Path.home() / ".cache"
-    return base / "wcl-report-data"
+    return base / "wcl-raid-coach"
 
 
 def _default_env_files() -> list[Path]:

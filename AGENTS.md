@@ -24,7 +24,7 @@ These rules apply to code, documentation, SkillHub packaging, and release work i
 - Prefer concise, task-oriented examples that match the current CLI. If a path, flag, output field, or default changes, update the Chinese and English documentation together.
 - Use ASCII for new source and documentation unless the existing language requires otherwise. Keep markdown links relative and verify that renamed files have no stale references.
 - Original branding assets belong under `assets/`. Avoid Warcraft Logs, Blizzard, or in-game copyrighted logos and character art; use original shapes and clearly label original artwork when needed.
-- `README.md`, `README.en.md`, `SKILL.md`, `references/`, `wcl_report_data/`, and `assets/` are release inputs. Repository instructions, tests, build metadata, and repository tooling are not part of the SkillHub archive.
+- `README.md`, `README.en.md`, `SKILL.md`, `references/`, `wcl_raid_coach/`, and `assets/` are release inputs. Repository instructions, tests, build metadata, and repository tooling are not part of the SkillHub archive.
 
 ## Verification
 
@@ -35,7 +35,7 @@ These rules apply to code, documentation, SkillHub packaging, and release work i
 
 ## Releases
 
-- Keep the version synchronized in `SKILL.md`, `pyproject.toml`, and `wcl_report_data/__init__.py`.
+- Keep the version synchronized in `SKILL.md`, `pyproject.toml`, and `wcl_raid_coach/__init__.py`.
 - Commit and tag the release before packaging. Build the artifact from that immutable ref with `make package REF=vX.Y.Z`.
 - Run `make publish-dry-run REF=vX.Y.Z` before `make publish REF=vX.Y.Z CHANGELOG="..."`.
 - `PACKAGE_PATHS` in `Makefile` is the release allowlist. Keep it synchronized with user-facing runtime documentation and assets.

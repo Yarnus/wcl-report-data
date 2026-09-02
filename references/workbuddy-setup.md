@@ -9,7 +9,7 @@ WorkBuddy 可能运行在带有持久化 `/workspace` 的云端沙盒中，也�
 先运行：
 
 ```bash
-python -m wcl_report_data doctor
+python -m wcl_raid_coach doctor
 ```
 
 如果结果包含 `"wcl_api": "reachable"`，现有凭据已经可用，直接继续即可。`credential_source` 会安全地标明来源，例如 `environment:WCL_ID`，但不会输出 client secret 或 access token。
@@ -42,8 +42,8 @@ WCL_CLIENT_SECRET=
 用户通过文件编辑器或平台密钥设置私下填写后，AI 从 Skill 目录运行命令并显式传入文件：
 
 ```bash
-python -m wcl_report_data --env-file "<WORKSPACE>/.env" doctor
-python -m wcl_report_data --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
+python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" doctor
+python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
 ```
 
 `--env-file` 必须放在子命令之前，后续 `prepare` 也使用同一路径。不要把 `.env` 提交到 Git，不要在对话中粘贴 secret。
@@ -53,17 +53,17 @@ python -m wcl_report_data --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
 当 `/workspace` 存在时：
 
 ```text
-/workspace/wcl-report-data/          prepared datasets
-/workspace/.cache/wcl-report-data/   raw pages and resumable checkpoints
+/workspace/wcl-raid-coach/          evidence, profiles, tasks, and guides
+/workspace/.cache/wcl-raid-coach/   raw pages and resumable checkpoints
 ```
 
 本地 Unix/macOS 默认使用：
 
 ```text
-~/.local/share/wcl-report-data/      prepared datasets
-~/.cache/wcl-report-data/            raw pages and resumable checkpoints
+~/.local/share/wcl-raid-coach/      evidence, profiles, tasks, and guides
+~/.cache/wcl-raid-coach/            raw pages and resumable checkpoints
 ```
 
-Windows 数据目录默认使用 `%LOCALAPPDATA%/wcl-report-data/`，缓存目录使用其下的 `Cache/`。所有环境都可通过 `WCL_REPORT_DATA_HOME` 和 `WCL_REPORT_DATA_CACHE` 覆盖默认路径。
+Windows 数据目录默认使用 `%LOCALAPPDATA%/wcl-raid-coach/`，缓存目录使用其下的 `Cache/`。所有环境都可通过 `WCL_RAID_COACH_HOME` 和 `WCL_RAID_COACH_CACHE` 覆盖默认路径。2.0 使用全新目录，不读取旧 `wcl-report-data` 数据。
 
 清理缓存会保留规范 Fight Bundle，但会删除被省略的未知字段值和下载检查点。

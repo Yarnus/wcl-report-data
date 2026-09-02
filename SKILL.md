@@ -1,127 +1,190 @@
 ---
-name: wcl-report-data
-description: 从正式服 Warcraft Logs 团队副本报告中准备结构化的全团数据。当用户提供 WCL 报告链接、需要下载报告或战斗数据、希望为后续复盘整理事件，或需要团队死亡与承伤分析的机器可读数据基础时使用。
-slug: wcl-report-data
-displayName: WCL 团队报告数据
-version: 1.0.7
-summary: 为 WorkBuddy 准备按报告修订版本保存的正式服 WCL 全团数据集。
+name: wcl-raid-coach
+description: 分析正式服 Warcraft Logs 团队副本。用户提供 WCL 报告链接、要求个人复盘、需要团队事件数据，或询问当前团本指定 Boss 和专精的高分日志攻略时使用。
+slug: wcl-raid-coach
+displayName: WCL 团队副本教练
+version: 2.0.0
+summary: 准备可复现的全团证据，复盘个人表现，并从当前高分日志生成 Boss 攻略。
 license: MIT
-homepage: https://github.com/Yarnus/wcl-report-data
+homepage: https://github.com/Yarnus/wcl-raid-coach
 compatibility: 需要 WorkBuddy 或 Python 3.11+、互联网连接，以及用户自己的 Warcraft Logs API 客户端凭据。
 metadata:
-  tags: [warcraft-logs, world-of-warcraft, raid, structured-data]
+  tags: [warcraft-logs, world-of-warcraft, raid, coaching]
 ---
 
-# WCL 团队报告数据
+# WCL 团队副本教练
 
-把 Warcraft Logs 官方数据准备为可复现的全团事实。使用中文返回结构化结果和文件路径。战斗指导、可规避伤害分类和责任判断属于后续独立工作，不在本 Skill 中完成。
+只使用 Warcraft Logs 官方 GraphQL API 建立日志事实。使用当前、有来源的资料解释事实。始终使用中文回答。
 
-在本 Skill 目录中使用 `python -m wcl_report_data` 运行命令。CLI 始终向标准输出写入 JSON。
+在 Skill 目录中运行 `python -m wcl_raid_coach`。CLI 始终向标准输出写入 JSON。
 
-## 工作流程
+## 1. 路由请求
 
-### 1. 检查运行环境
+将用户请求归入一个主要工作流：
 
-首次请求 WCL 前运行：
+- **报告数据**：用户要求下载、准备或查询一份 WCL Report 的团队事实。
+- **个人复盘**：用户提供 WCL URL，并要求评价一个玩家在一个 Boss Attempt 中的表现。
+- **通用攻略**：用户没有提供个人日志，要求当前 Retail 团本中某专精打一个或多个 Boss 的攻略。
+- **混合请求**：先完成个人复盘；用户明确要求通用打法时，再附同一 Boss 的通用原则。个人结论和群体结论必须分开。
 
-```bash
-python -m wcl_report_data doctor
-```
+不支持 Mythic+、Classic、私有报告和历史团本通用攻略。不得把不支持的请求静默改成其他工作流。
 
-`doctor` 已返回 `wcl_api: reachable` 时直接继续，不要求用户创建 `.env`。凭据不可用时，引导用户阅读 [WorkBuddy 配置](references/workbuddy-setup.md)。可以主动帮助创建 `.env`：先让用户只提供或确认真实 workspace 目录路径，不得询问凭据值；检查 `<WORKSPACE>/.env` 是否存在，已有文件绝不能覆盖；不存在时创建只含空白 `WCL_CLIENT_ID=` 和 `WCL_CLIENT_SECRET=` 的模板，再让用户通过文件编辑器私下填写。`/workspace` 确实存在时可直接使用 `/workspace/.env`；其他路径在所有后续 WCL 命令中使用全局参数 `--env-file "<WORKSPACE>/.env"`。绝不能在对话中粘贴、检查或输出 client secret。
+## 2. 检查环境
 
-完成标准：Python 不低于 3.11，数据和缓存目录均可写，WCL 认证成功。
-
-### 2. 建立报告索引
-
-对每个报告 URL 运行：
+首次访问 WCL 前运行：
 
 ```bash
-python -m wcl_report_data inspect "<WCL_URL>"
+python -m wcl_raid_coach doctor
 ```
 
-可直接使用 `warcraftlogs.com`、`www.warcraftlogs.com` 或 `cn.warcraftlogs.com` 的正式服报告链接。CN 报告链接会规范化为全球站链接，报告数据仍通过 WCL 官方 OAuth 和 GraphQL 端点读取。
+不得询问、输出、记录或持久化 client secret/access token。凭据不可用时阅读 [WorkBuddy 配置](references/workbuddy-setup.md)。
 
-索引始终覆盖报告中的整个团队。URL 的 `source` 参数只作为输入提示记录，绝不能用于过滤参与者或事件。
+## 3. 报告数据
 
-- 没有 `fight`：返回 `fight_choices`，等待用户选择单场战斗、一个首领的全部尝试或全部已完成首领战。
-- 数字 `fight`：使用该战斗继续第 3 步。
-- `fight=last`：使用报告顺序中的实际最后一场。如果它是小怪战或仍在进行，返回 `unpackable_reason` 并等待用户重新选择。
-
-战斗选项应保持紧凑，只包含 fight ID、首领、击杀或灭团、`difficulty_name`、时长、进度、参与人数和是否可打包。难度名称必须使用同一报告 `zone.difficulties` 解析出的 `difficulty_name`；不得用静态数字表猜测 `difficulty` 是 Normal、Heroic 还是 Mythic。不得静默选择其他战斗。
-
-用户可能使用 Encounter Designator 指定难度和首领，例如 `PT6`、`H6` 或 `M6`。只接受大小写不敏感的 `^(PT|H|M)[1-9][0-9]*$`：`PT` 表示 Normal，`H` 表示 Heroic，`M` 表示 Mythic；数字是 `encounter_choices` 原始顺序中的一基位置，不能按报告首次遭遇顺序、名称或已尝试首领重新排序。难度仍必须在同一报告 `zone.difficulties` 中解析为实际 ID，不能硬编码数字。
-
-Encounter Designator 不选择 Boss Attempt。按解析出的 `encounter_id` 和 `difficulty` 同时筛选 `fight_choices`，展示所有匹配项及不可打包原因并等待用户明确选择，即使只有一项也不能自动继续。零匹配、序号越界、元数据缺失或重复时停止，不得回退到其他难度、相邻首领或同名首领。最终只用用户选择的数字 `--fight`；不得把 Encounter Designator 转成 `--encounter`，因为后者会选择该 encounter 的所有难度。
-
-完成标准：`index_path` 指向的 `report.json` 已存在；报告属于正式服、公开或未列出；每场可选战斗都有明确数字 ID。
-
-### 3. 准备指定战斗
-
-准备 URL 中已选择的一场战斗：
+建立整个团队的 Report Index：
 
 ```bash
-python -m wcl_report_data prepare "<WCL_URL_WITH_NUMERIC_FIGHT>"
+python -m wcl_raid_coach inspect "<WCL_URL>"
 ```
 
-从裸报告 URL 准备明确指定的多场战斗：
+没有数字 fight 时，展示 Boss Attempt 与参与者选择并等待用户确认。不得自动选择最后一场、击杀场或 URL source hint。Encounter Designator 只用于解释用户选择，不能代替数字 fight ID。
+
+准备用户明确选择的 Boss Attempt：
 
 ```bash
-python -m wcl_report_data prepare "<WCL_URL>" --fight 12 --fight 15
+python -m wcl_raid_coach prepare "<WCL_URL_WITH_NUMERIC_FIGHT>"
 ```
 
-准备某个首领的全部已完成尝试：
+只有 `complete: true`、到达显式 `nextPageTimestamp: null`、通过哈希检查且没有跨 Report Revision 的 Complete Bundle 才能进入分析。
+
+按需查询 Canonical Event：
 
 ```bash
-python -m wcl_report_data prepare "<WCL_URL>" --encounter 3129
+python -m wcl_raid_coach query "<MANIFEST_PATH>" --type damage --source-id 10
 ```
 
-只有用户明确要求全部已完成首领战时，才能使用 `--all-boss-fights`。开始大批量任务前，先报告索引中的战斗数量和当前限流状态。
+## 4. 个人复盘
 
-采集器会在临时错误后从原始页检查点继续。遇到 `wcl_rate_limit` 时应保留已完成数据，稍后继续。只有 `manifest.json` 中 `complete: true` 的 Fight Bundle 才可使用。
+裸报告 URL 先执行 `inspect`，让用户明确选择一个 Boss Attempt 和一个参与者。完整 URL 仍须确认 URL 中的 fight/source 指向预期对象。
 
-完成标准：每场指定战斗都返回 `manifest_path`；小怪战、进行中战斗、未完成分页或混合报告修订版本的数据绝不能标记为完整。
-
-### 4. 查询事件，避免挤占上下文
-
-使用 `prepare` 返回的 manifest 路径：
+准备 Complete Bundle 后计算个人日志事实：
 
 ```bash
-python -m wcl_report_data query "<MANIFEST_PATH>" --type damage --target-id 17
+python -m wcl_raid_coach coach review \
+  "<MANIFEST_PATH>" \
+  --index "<REPORT_INDEX_PATH>" \
+  --source-id <ACTOR_ID> \
+  --partition-id <PARTITION_ID>
 ```
 
-可用过滤条件包括 `--type`、`--source-id`、`--target-id`、`--ability-id`、`--from-ms`、`--to-ms` 和 `--cursor`。默认最多返回 200 条。`truncated` 为 true 时，使用 `next_cursor` 继续或进一步缩小过滤范围。
+`coach review` 只产生结构化日志事实。要评价表现，必须再建立同 encounter、difficulty、class、spec 和 partition 的 Encounter Benchmark。不得把总排名差距写成可实现提升。
 
-查询结果是证据，不是结论。没有独立的首领机制知识来源时，不得把伤害标记为可规避、推断责任，或声称某次死亡可以避免。
+## 5. 通用攻略
 
-展示技能名时，先确认 `ability_id` 同时存在于 Report Index 的 `abilities[].gameID`。存在时可查询 CLI 输出 `ability_names.mapping_path` 指向的完整 zhCN mapping：命中则使用当前客户端的 Localized Ability Name，并同时保留 WCL 原名、ability ID 和 `ability_names.build`；未命中则保留 WCL 原名。mapping 在首次 `inspect`、`prepare` 或 `query` 时自动下载，禁止要求用户手动导出。事件中的 fallback `guid` 或 `id` 未出现在 Report Index ability 表时不得套用 mapping。不得自行直译技能名。
-
-完成标准：每个返回事件都能通过 `raw_ref` 回指原始页，查询结果不超过指定上限。
-
-## 数据管理
-
-查看已准备的数据集和原始缓存：
+例如用户说“给我一个邪 DK 打 H7 H8 的攻略”，先解析请求：
 
 ```bash
-python -m wcl_report_data dataset list
-python -m wcl_report_data cache status
+python -m wcl_raid_coach coach resolve \
+  --spec "邪 DK" \
+  --encounter H7 \
+  --encounter H8
 ```
 
-删除操作必须显式确认：
+该命令使用 WCL 官方元数据解析唯一当前 Retail 团本、Heroic 难度、原始 encounter 顺序和默认 ranking partition。向用户展示 Boss 名称、encounter ID、难度、partition 和规范专精；用户确认前不得发现排名或下载候选事件。
+
+确认任务：
 
 ```bash
-python -m wcl_report_data dataset remove <REPORT_CODE> --confirm
-python -m wcl_report_data cache clear --confirm
+python -m wcl_raid_coach coach confirm "<TASK_ID>"
 ```
 
-直接消费文件或构建后续分析时阅读 [数据契约](references/data-contract.md)。WCL 响应变化、分页失败或归档报告无法访问时阅读 [WCL API 说明](references/wcl-api.md)。
+H7 与 H8 是两个 Encounter Benchmark。不得混合它们的 cohort、分析或样本数量。
 
-## 使用边界
+### 准备 Profiles
 
-- 仅支持正式服团队副本；不支持怀旧服和 Mythic+。
-- 仅支持公开和未列出报告；私有报告需要用户 OAuth，当前不支持。
-- 只使用 WCL 官方 OAuth 和 GraphQL 端点；不抓取网页，不做浏览器自动化。
-- 只打包已完成的首领战；索引可列出小怪战和进行中战斗，但不能打包。
-- 规范事件保留已知字段。未知字段的名称和次数会明确记录，未知值只保留在原始页缓存中。
-- 角色名和服务器保留在本地数据集中。除官方 WCL API 请求外，不向其他位置发送数据。
-- 本 Skill 只准备数据，不分类机制、不评价玩家，也不生成复盘结论。
+每个攻略需要：
+
+- 一个匹配 game version/partition/class/spec 的 Specialization Profile。
+- 每个 Boss 一个匹配 game version/partition/encounter/difficulty 的 Encounter Profile。
+
+资料优先级：Blizzard/WCL 官方资料；维护中的职业社区、专精指南和模拟文档；Wowhead/Icy Veins 交叉验证。Profile 保存 URL、标题、访问时间、引用摘要和内容哈希，不保存整篇第三方文章。
+
+```bash
+python -m wcl_raid_coach coach profile "/tmp/profile.json"
+```
+
+Encounter Profile 必须声明优先目标与排除目标。Profile 缺失或校验失败时，可以展示排名候选，但禁止生成稳定高分打法 benchmark。
+
+### 发现近期高分候选
+
+每个 Boss 分别运行：
+
+```bash
+python -m wcl_raid_coach coach candidates \
+  --game-version <GAME_VERSION> \
+  --encounter-id <ENCOUNTER_ID> \
+  --difficulty-id <DIFFICULTY_ID> \
+  --partition-id <PARTITION_ID> \
+  --class-name DeathKnight \
+  --spec-name Unholy
+```
+
+默认只使用最近 14 天且身份完整的候选。Ranking Candidate 不是 Reference Sample。目标为每个 Boss 10 个有效样本；3 到 9 个只能给低置信度聚合；少于 3 个只能做个案观察，不能生成稳定打法。
+
+排名结果不包含 source ID 时，CLI 通过候选报告的官方 actor/fight metadata 按角色名、服务器、职业和专精唯一补全；无法唯一补全的候选必须拒绝。
+
+候选必须逐一：
+
+1. `inspect` 并验证 encounter、difficulty、partition、class 和 spec。
+2. `prepare` 为候选 Boss Attempt 建立 Complete Bundle。
+3. `coach review` 生成分析。
+4. 根据 Encounter Profile 检查死亡、优先目标伤害和排除目标伤害。
+
+正文匿名使用“样本 N（排名/分数）”，但保留公开 WCL 链接供审计。
+
+### 聚合和生成攻略
+
+每个 Boss 分别聚合：
+
+```bash
+python -m wcl_raid_coach coach benchmark \
+  /tmp/analysis-1.json /tmp/analysis-2.json /tmp/analysis-3.json \
+  --cohort /tmp/cohort.json \
+  --encounter-profile /tmp/encounter-profile.json \
+  --specialization-profile /tmp/specialization-profile.json \
+  --output /tmp/benchmark.json
+```
+
+最后将多个独立 benchmark 合并成不可变 Guide Snapshot：
+
+```bash
+python -m wcl_raid_coach coach guide \
+  /tmp/h7-benchmark.json /tmp/h8-benchmark.json \
+  --spec-display-name "邪恶死亡骑士"
+```
+
+输出包括中文 Markdown 和 JSON 索引。报告必须区分：
+
+- **日志事实**：Complete Bundle 直接计算的事实。
+- **资料结论**：当前 Profile 来源支持的规则或机制。
+- **推断**：事实与资料结合后的建议，必须说明置信度。
+
+## 6. 限流与恢复
+
+API 点数低于 15% 或 50 点的较高者时停止。遇到 `wcl_rate_limit`，保留 Complete Bundle 检查点和已完成 Boss 章节，不降低证据要求。使用以下命令查看任务：
+
+```bash
+python -m wcl_raid_coach coach status
+```
+
+多 Boss 请求允许 `partial`：已完成章节可以交付，未完成章节必须显示阻塞原因，不能用低证据内容填充。
+
+## 7. 使用边界
+
+- 仅支持 Retail 团队副本；Mythic+ 留待后续版本。
+- 仅支持公开和未列出 WCL Report。
+- 官方 WCL API only；不抓取 WCL 网页或私有端点。
+- 统一使用 Complete Bundle，不维护另一套按玩家下载的事件缓存。
+- 没有独立 Encounter Profile 时，不判断 padding、机制责任或可规避伤害。
+- 坦克和治疗建议必须先满足相应的生存/治疗 guardrail；证据不足时停止建议。
+- 不建立持久玩家历史；只分析当前请求明确提供的报告。

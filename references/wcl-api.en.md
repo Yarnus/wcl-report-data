@@ -19,6 +19,10 @@ Client credentials can read public and unlisted reports when the code is known. 
 
 Report indexing fetches the report revision, archive status, Retail game version, master actors and abilities, fight participation metadata, report difficulty metadata, and WCL zone encounter order. `zone.encounters` is returned only as current `inspect` selection metadata and is not persisted in existing immutable Report Indices.
 
+General-guide resolution uses `worldData.zones` for the current unfrozen Retail raid zone, original encounter order, difficulties, and default partition. Exactly one current zone, one Heroic difficulty, and one default partition must exist; otherwise resolution stops rather than guessing.
+
+Ranking candidates use the official `Encounter.characterRankings` query with exact encounter, difficulty, partition, class, and specialization, plus `externalBuffs: Exclude`. Ranking JSON remains untrusted input. WCL rankings normally omit source ID; the CLI must uniquely resolve it from the candidate report's actor/fight metadata before the candidate can enter the signed recent cohort.
+
 Fight difficulty IDs are interpreted only through the `zone.difficulties { id name }` values returned for that report. They are not mapped through a hardcoded global enum because IDs can differ between WCL contexts.
 
 WCL `translate: true` normalizes Report master ability names to English and does not accept a target locale. Current zhCN display names come from a complete local mapping downloaded from Wago Tools on first use with client-build provenance. WCL GraphQL `gameData.ability` has no locale argument and returns English names only.
@@ -43,6 +47,8 @@ The client retries transient connection failures and HTTP 500, 502, 503, and 504
 Before WCL data queries, the client preserves at least 15 percent or 50 API points, whichever is larger. Report indexing reserves 500 points because its cost scales with report metadata.
 
 Event and revision requests reserve the full retry budget and refresh the rate snapshot in the same GraphQL response. Raw Pages and checkpoints remain available after a safe-reserve stop so the next invocation can resume.
+
+The Ranking Cohort uses the process-local client secret for an HMAC integrity signature. The secret itself is never written to the cohort, logs, or standard output. Benchmarking rejects a signed cohort after modification.
 
 ## Revisions And Archives
 

@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from wcl_report_data.__main__ import create_parser, main, run
+from wcl_raid_coach.__main__ import create_parser, main, run
 
 
 class CliTests(unittest.TestCase):
@@ -82,13 +82,66 @@ class CliTests(unittest.TestCase):
         }
 
         with (
-            patch("wcl_report_data.__main__.ensure_ability_names", return_value=names) as ensure,
-            patch("wcl_report_data.__main__.query_bundle", return_value={"events": []}),
+            patch("wcl_raid_coach.__main__.ensure_ability_names", return_value=names) as ensure,
+            patch("wcl_raid_coach.__main__.query_bundle", return_value={"events": []}),
         ):
             result = run(args)
 
         ensure.assert_called_once_with(args.data_root.resolve())
         self.assertEqual(result["ability_names"], names)
+
+    def test_coach_resolve_creates_a_confirmable_unholy_guide_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = io.StringIO()
+            zones = [{
+                "id": 42,
+                "name": "Current Raid",
+                "frozen": False,
+                "difficulties": [{"id": 4, "name": "Heroic"}],
+                "partitions": [{"id": 2, "name": "Current", "compactName": "12.1", "default": True}],
+                "encounters": [{"id": 1000 + index, "name": f"Boss {index}"} for index in range(1, 9)],
+            }]
+            with (
+                patch("wcl_raid_coach.__main__.resolve_credentials"),
+                patch("wcl_raid_coach.__main__.WclClient") as client,
+                redirect_stdout(output),
+            ):
+                client.return_value.fetch_raid_zones.return_value = zones
+                status = main(
+                    [
+                        "--data-root",
+                        str(Path(temporary) / "data"),
+                        "--cache-root",
+                        str(Path(temporary) / "cache"),
+                        "coach",
+                        "resolve",
+                        "--spec",
+                        "邪 DK",
+                        "--encounter",
+                        "H7",
+                        "--encounter",
+                        "H8",
+                    ]
+                )
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertTrue(result["confirmation_required"])
+        self.assertEqual(result["task"]["request"]["specialization"]["spec_name"], "Unholy")
+        self.assertEqual(result["task"]["status"], "pending_confirmation")
+        self.assertEqual(result["task"]["context"]["encounters"][1]["encounter_name"], "Boss 8")
+
+    def test_coach_review_labels_complete_bundle_analysis_as_log_fact(self) -> None:
+        args = create_parser().parse_args(
+            ["coach", "review", "/tmp/manifest.json", "--index", "/tmp/report.json", "--source-id", "10"]
+        )
+        with (
+            patch("wcl_raid_coach.__main__.resolve_credentials"),
+            patch("wcl_raid_coach.__main__.analyze_player", return_value={"metrics": {"deaths": 0}}),
+        ):
+            result = run(args)
+        self.assertEqual(result["evidence_class"], "log_fact")
+        self.assertEqual(result["analysis"]["metrics"]["deaths"], 0)
 
 
 if __name__ == "__main__":

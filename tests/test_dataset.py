@@ -13,9 +13,9 @@ from contextlib import chdir
 from pathlib import Path
 from unittest.mock import patch
 
-from wcl_report_data.dataset import DatasetService, DatasetStore, query_bundle
-from wcl_report_data.errors import ApiError, DatasetError, InputError, RevisionChangedError
-from wcl_report_data.models import ReportRef
+from wcl_raid_coach.dataset import DatasetService, DatasetStore, query_bundle
+from wcl_raid_coach.errors import ApiError, DatasetError, InputError, RevisionChangedError
+from wcl_raid_coach.models import ReportRef
 
 
 def report_fixture() -> dict:
@@ -484,7 +484,7 @@ class DatasetTests(unittest.TestCase):
             def blocking_dump(value, handle, *args, **kwargs):
                 nonlocal blocked
                 should_block = False
-                if isinstance(value, dict) and value.get("owner") == "wcl-report-data":
+                if isinstance(value, dict) and value.get("owner") == "wcl-raid-coach":
                     with guard:
                         if not blocked:
                             blocked = True
@@ -494,7 +494,7 @@ class DatasetTests(unittest.TestCase):
                     resume_marker_write.wait(timeout=5)
                 return original_dump(value, handle, *args, **kwargs)
 
-            with patch("wcl_report_data.storage.json.dump", side_effect=blocking_dump):
+            with patch("wcl_raid_coach.storage.json.dump", side_effect=blocking_dump):
                 first = threading.Thread(
                     target=lambda: _capture_error(errors, stores[0].import_root, "AbC123", 3, 1)
                 )

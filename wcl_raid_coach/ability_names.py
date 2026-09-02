@@ -98,7 +98,7 @@ def _read_existing(mapping_path: Path, metadata_path: Path) -> dict[str, Any] | 
 
 
 def _download(directory: Path) -> tuple[Path, str, str]:
-    request = Request(WAGO_URL, headers={"User-Agent": "wcl-report-data ability names"})
+    request = Request(WAGO_URL, headers={"User-Agent": "wcl-raid-coach ability names"})
     with urlopen(request, timeout=120) as response:
         source_file = response.headers.get_filename()
         match = re.fullmatch(r"SpellName\.(\d+(?:\.\d+)+)\.csv", source_file or "")

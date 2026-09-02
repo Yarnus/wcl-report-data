@@ -1,12 +1,12 @@
-# wcl-report-data
+# wcl-raid-coach
 
 <p align="center">
   <img src="assets/timewarp-inn-dog.svg" width="220" alt="大黄狗守护时空旅馆的原创奇幻图标">
 </p>
 
-`wcl-report-data` 是一个面向 WorkBuddy 的 Agent Skill 和 Python 3.11+ 软件包，用于把正式服 Warcraft Logs 团队副本报告整理为按 Report Revision 保存的、可复现的全团事实数据集。
+`wcl-raid-coach` 是一个面向 WorkBuddy 的 Agent Skill 和 Python 3.11+ 软件包，用于准备正式服 Warcraft Logs 团队副本证据、复盘个人表现，以及基于当前 Boss 高分日志生成攻略。
 
-它只使用 WCL 官方 OAuth 和 GraphQL API，不抓取报告网页。首个版本只准备事实数据，不判断伤害是否可规避、不为死亡归责、不比较排名，也不生成复盘结论。
+它只使用 WCL 官方 OAuth 和 GraphQL API，不抓取报告网页。所有复盘和攻略都以 Report Revision 隔离的 Complete Bundle 为事实基础；高分攻略还要求签名 Ranking Cohort 和带来源的 Profile。
 
 [English documentation](README.en.md)
 
@@ -25,37 +25,45 @@
 从仓库根目录或已安装的 Skill 目录运行 CLI：
 
 ```bash
-python -m wcl_report_data doctor
+python -m wcl_raid_coach doctor
 ```
 
 确认输出中的 `wcl_api` 为 `reachable` 后，建立报告索引：
 
 ```bash
-python -m wcl_report_data inspect "https://www.warcraftlogs.com/reports/<code>"
+python -m wcl_raid_coach inspect "https://www.warcraftlogs.com/reports/<code>"
 ```
+
+解析“邪 DK 打当前团本 H7/H8”的通用攻略请求：
+
+```bash
+python -m wcl_raid_coach coach resolve --spec "邪 DK" --encounter H7 --encounter H8
+```
+
+该命令只解析当前团本上下文并返回待确认任务。完整工作流见 [Skill 使用说明](SKILL.md)。
 
 准备 URL 中选中的战斗：
 
 ```bash
-python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>#fight=12"
+python -m wcl_raid_coach prepare "https://www.warcraftlogs.com/reports/<code>#fight=12"
 ```
 
 也可以从裸报告 URL 准备指定战斗，或准备某个首领的全部已完成尝试：
 
 ```bash
-python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>" --fight 12 --fight 15
-python -m wcl_report_data prepare "https://www.warcraftlogs.com/reports/<code>" --encounter 3129
+python -m wcl_raid_coach prepare "https://www.warcraftlogs.com/reports/<code>" --fight 12 --fight 15
+python -m wcl_raid_coach prepare "https://www.warcraftlogs.com/reports/<code>" --encounter 3129
 ```
 
 通过返回的 manifest 查询事件，避免把整个事件流放入模型上下文：
 
 ```bash
-python -m wcl_report_data query \
-  "/workspace/wcl-report-data/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
+python -m wcl_raid_coach query \
+  "/workspace/wcl-raid-coach/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
   --type damage --target-id 17 --limit 200
 ```
 
-CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。完整参数参见 `python -m wcl_report_data --help`，完整工作流参见 [Skill 使用说明](SKILL.md)。
+CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。完整参数参见 `python -m wcl_raid_coach --help`，完整工作流参见 [Skill 使用说明](SKILL.md)。
 
 ## Encounter Designator 与技能名称
 
@@ -75,17 +83,17 @@ WCL_CLIENT_SECRET=
 CLI 也兼容成对出现的 `WCL_ID` 和 `WCL_SECRET`。需要使用明确路径时，把全局参数放在子命令之前：
 
 ```bash
-python -m wcl_report_data --env-file "<WORKSPACE>/.env" doctor
-python -m wcl_report_data --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
+python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" doctor
+python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
 ```
 
 AI 不应要求用户在对话中提供或粘贴 secret，不应覆盖已有 `.env`，也不应输出 client secret 或 access token。详细规则参见 [WorkBuddy 配置](references/workbuddy-setup.md) 和 [English setup guide](references/workbuddy-setup.en.md)。
 
 ## 数据布局
 
-默认数据目录取决于运行环境：存在 `/workspace` 时使用 `/workspace/wcl-report-data/`；本地 Unix/macOS 使用 `~/.local/share/wcl-report-data/`；Windows 使用 `%LOCALAPPDATA%/wcl-report-data/`。可用 `WCL_REPORT_DATA_HOME` 覆盖。
+默认数据目录取决于运行环境：存在 `/workspace` 时使用 `/workspace/wcl-raid-coach/`；本地 Unix/macOS 使用 `~/.local/share/wcl-raid-coach/`；Windows 使用 `%LOCALAPPDATA%/wcl-raid-coach/`。可用 `WCL_RAID_COACH_HOME` 覆盖。
 
-原始页和可续传检查点默认放在 `/workspace/.cache/wcl-report-data/` 或 `~/.cache/wcl-report-data/`，Windows 使用 `%LOCALAPPDATA%` 下的 `wcl-report-data/Cache`。可用 `WCL_REPORT_DATA_CACHE` 覆盖。
+原始页和可续传检查点默认放在 `/workspace/.cache/wcl-raid-coach/` 或 `~/.cache/wcl-raid-coach/`，Windows 使用 `%LOCALAPPDATA%` 下的 `wcl-raid-coach/Cache`。可用 `WCL_RAID_COACH_CACHE` 覆盖。
 
 ```text
 reports/<report-code>/
@@ -113,10 +121,10 @@ ability-names.zhCN.meta.json
 ## 数据管理
 
 ```bash
-python -m wcl_report_data dataset list
-python -m wcl_report_data cache status
-python -m wcl_report_data dataset remove <REPORT_CODE> --confirm
-python -m wcl_report_data cache clear --confirm
+python -m wcl_raid_coach dataset list
+python -m wcl_raid_coach cache status
+python -m wcl_raid_coach dataset remove <REPORT_CODE> --confirm
+python -m wcl_raid_coach cache clear --confirm
 ```
 
 删除操作必须显式传入 `--confirm`。清理缓存会保留规范 Fight Bundle，但会删除未知字段值的本地副本和下载检查点。
@@ -133,7 +141,7 @@ make check
 
 ```bash
 python -m unittest -v
-python -m compileall -q wcl_report_data tests
+python -m compileall -q wcl_raid_coach tests
 git diff --check
 ```
 

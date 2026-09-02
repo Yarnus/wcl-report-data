@@ -9,7 +9,7 @@ WorkBuddy may run in a cloud sandbox with a persistent `/workspace`, or directly
 Start with:
 
 ```bash
-python -m wcl_report_data doctor
+python -m wcl_raid_coach doctor
 ```
 
 If the result contains `"wcl_api": "reachable"`, existing credentials are ready. `credential_source` identifies the source safely, for example `environment:WCL_ID`, but never prints a client secret or access token.
@@ -37,8 +37,8 @@ Never overwrite an existing file. Fill the template privately through a file edi
 When `/workspace` is absent, use the real workspace path and pass its environment file explicitly:
 
 ```bash
-python -m wcl_report_data --env-file "<WORKSPACE>/.env" doctor
-python -m wcl_report_data --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
+python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" doctor
+python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
 ```
 
 Do not ask the user to provide a client ID or secret in chat. Do not paste `.env` contents into chat, and do not commit `.env` to Git.
@@ -48,17 +48,17 @@ Do not ask the user to provide a client ID or secret in chat. Do not paste `.env
 When `/workspace` exists:
 
 ```text
-/workspace/wcl-report-data/          prepared datasets
-/workspace/.cache/wcl-report-data/   raw pages and resumable checkpoints
+/workspace/wcl-raid-coach/          evidence, profiles, tasks, and guides
+/workspace/.cache/wcl-raid-coach/   raw pages and resumable checkpoints
 ```
 
 Local Unix/macOS defaults are:
 
 ```text
-~/.local/share/wcl-report-data/      prepared datasets
-~/.cache/wcl-report-data/            raw pages and resumable checkpoints
+~/.local/share/wcl-raid-coach/      evidence, profiles, tasks, and guides
+~/.cache/wcl-raid-coach/            raw pages and resumable checkpoints
 ```
 
-Windows uses `%LOCALAPPDATA%` for both locations, with the cache below `wcl-report-data/Cache`. All environments can override the paths with `WCL_REPORT_DATA_HOME` and `WCL_REPORT_DATA_CACHE`.
+Windows uses `%LOCALAPPDATA%` for both locations, with the cache below `wcl-raid-coach/Cache`. All environments can override the paths with `WCL_RAID_COACH_HOME` and `WCL_RAID_COACH_CACHE`. Version 2.0 uses a fresh root and does not read old `wcl-report-data` artifacts.
 
 Clearing the cache preserves canonical Fight Bundles but deletes omitted unknown field values and download checkpoints.
