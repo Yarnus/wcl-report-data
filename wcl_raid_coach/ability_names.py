@@ -21,7 +21,7 @@ MIN_COMPLETE_ROWS = 400_000
 
 
 def ensure_ability_names(data_root: Path) -> dict[str, Any]:
-    root = data_root.expanduser().resolve()
+    root = data_root.expanduser()
     mapping_path = root / MAPPING_NAME
     metadata_path = root / METADATA_NAME
     existing = _read_existing(mapping_path, metadata_path)

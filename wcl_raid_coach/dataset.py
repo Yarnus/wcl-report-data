@@ -31,6 +31,7 @@ else:
 SCHEMA_VERSION = 1
 COLLECTION_PROTOCOL_VERSION = 2
 RETAIL_GAME_VERSION = 1
+PRODUCT_NAME = "wcl-raid-coach"
 
 
 def _try_file_lock(descriptor: int, *, shared: bool) -> None:
@@ -243,6 +244,16 @@ class DatasetStore:
             lock_path,
             timeout_seconds=300,
             unavailable_message=f"Timed out waiting for ability-name lock: {lock_path}",
+        ):
+            yield
+
+    @contextmanager
+    def content_names_lock(self) -> Iterator[None]:
+        lock_path = self.data_root / ".locks" / "content-names.lock"
+        with _file_lock(
+            lock_path,
+            timeout_seconds=300,
+            unavailable_message=f"Timed out waiting for content-name lock: {lock_path}",
         ):
             yield
 
@@ -807,6 +818,7 @@ class DatasetService:
                     sequence += 1
 
         return {
+            "product": PRODUCT_NAME,
             "schema_version": SCHEMA_VERSION,
             "complete": True,
             "generated_at": _now(),
@@ -1010,6 +1022,8 @@ def validate_complete_bundle(manifest_path: Path) -> tuple[dict[str, Any], Path]
     collection = manifest.get("collection")
     if not isinstance(collection, dict) or collection.get("protocol_version") != COLLECTION_PROTOCOL_VERSION:
         raise DatasetError("Fight Bundle uses an obsolete event collection protocol; prepare it again.")
+    if manifest.get("product") != PRODUCT_NAME:
+        raise DatasetError("Fight Bundle was not produced by wcl-raid-coach.")
     raw_pages = manifest.get("raw_pages")
     if not isinstance(raw_pages, list) or not raw_pages:
         raise DatasetError("Complete Bundle has no Raw Page pagination record.")

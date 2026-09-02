@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from wcl_raid_coach.comparison import compare_player
+from wcl_raid_coach.cohort import sign_benchmark
 from wcl_raid_coach.errors import InputError
 
 
@@ -26,6 +27,12 @@ class ComparisonTests(unittest.TestCase):
     def test_rejects_non_object_inputs_as_domain_error(self) -> None:
         with self.assertRaises(InputError):
             compare_player([], {})
+
+    def test_signed_comparison_requires_verified_analysis_evidence(self) -> None:
+        benchmark = sign_benchmark({"identity": IDENTITY}, "secret")
+        target = {"comparison_identity": IDENTITY, "metrics": {}}
+        with self.assertRaises(InputError):
+            compare_player(target, benchmark, signing_key="secret")
 
 
 if __name__ == "__main__":

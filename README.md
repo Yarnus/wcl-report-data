@@ -65,11 +65,13 @@ python -m wcl_raid_coach query \
 
 CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。完整参数参见 `python -m wcl_raid_coach --help`，完整工作流参见 [Skill 使用说明](SKILL.md)。
 
-## Encounter Designator 与技能名称
+## Encounter Designator 与名称映射
 
 Skill 能理解 `PT6`、`H6`、`M6` 形式的 Encounter Designator。前缀分别表示 Normal、Heroic、Mythic，数字表示 WCL `zone.encounters` 原始列表中的一基位置。Designator 只确定难度和 encounter；同一报告有多次匹配 Boss Attempt 时，Skill 必须列出明确的 fight ID 等待选择，不能自动选择击杀、最后一次或全部尝试。
 
-首次运行 `inspect`、`prepare` 或 `query` 时，CLI 会从 Wago Tools 下载当前 Retail zhCN `SpellName` CSV，并在数据目录生成完整的 `ability-names.zhCN.json` 及 metadata；已有有效 JSON 时不会再次联网。只有 ID 同时存在于 Report Index 的 `abilities[].gameID` 时才可使用 mapping；缺失时保留 WCL 名称，不进行直译。CLI 输出的 `ability_names` 包含实际 mapping 路径和客户端 build。中文名是当前客户端展示 enrichment，不改写 Report Index。
+首次运行 `inspect`、`prepare`、`query` 或生成 Guide 时，CLI 会从 Wago Tools 下载当前 Retail zhCN `SpellName` CSV，并在数据目录生成完整的 `ability-names.zhCN.json` 及 metadata；已有有效 JSON 时不会再次联网。只有 ID 同时存在于 Report Index 的 `abilities[].gameID` 时才可使用 mapping。Guide 和 Skill 面向用户的正文必须使用 mapping 中的中文 SpellName，不得自行直译；机制 Spell ID 缺少中文 mapping 时停止生成最终攻略。中文名是当前客户端展示 enrichment，不改写 Report Index。
+
+CLI 另行维护 `content-names.zhCN.json`，从同一 Wago 客户端 build 的 `Map`、`DungeonEncounter`、`JournalEncounter` 和 `JournalEncounterCreature` 中生成 Encounter/NPC 中英文映射。它只包含当前团队副本的 Normal、Heroic、Mythic 三个难度，以及当前配置的 8 个 Mythic+ 地图。WCL 原始英文名和 ID 继续作为审计数据；Wago 未提供 WCL NPC `gameID` 的可靠直连，因此 NPC 中文名只作为所属 Encounter 内的展示 enrichment，不能作为事件身份。
 
 ## 凭据配置
 
@@ -105,6 +107,8 @@ reports/<report-code>/
         └── events.jsonl.gz
 ability-names.zhCN.json
 ability-names.zhCN.meta.json
+content-names.zhCN.json
+content-names.zhCN.meta.json
 ```
 
 同一 Report Revision 内的 Fight Bundle 不可变。重新导出报告会创建新的 revision 目录；`latest.json` 只是指针，可复现的消费者应使用 manifest 中记录的 revision。原始页单独压缩保存，以便中断下载继续并审计字段规范化过程。
@@ -132,6 +136,8 @@ python -m wcl_raid_coach cache clear --confirm
 ## 开发与文档
 
 技能名称首次使用时固定从 `https://wago.tools/db2/SpellName/csv?locale=zhCN` 下载。CLI 依据响应文件名（例如 `SpellName.12.1.0.69587.csv`）保存客户端 build、来源文件和 SHA-256。删除数据目录中的 `ability-names.zhCN.json` 和 `ability-names.zhCN.meta.json` 后，下次相关命令会重新下载；无法下载时返回结构化 `dataset_error`。
+
+Encounter/NPC mapping 使用代码中声明的当前地图范围，并要求所有 Wago 来源表具有同一客户端 build。删除 `content-names.zhCN.json` 和 `content-names.zhCN.meta.json` 后，下次 `inspect`、`coach resolve` 或 `coach guide` 会重新生成；下载不完整、build 不一致或当前地图缺失时返回结构化 `dataset_error`。
 
 ```bash
 make check

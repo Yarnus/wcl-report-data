@@ -212,6 +212,7 @@ def build_benchmark(
         "encounter_profile_id": profile["profile_id"],
         "specialization_profile_id": spec_profile["profile_id"],
         "sources": {"encounter": profile["sources"], "specialization": spec_profile["sources"]},
+        "mechanic_anchors": [dict(anchor) for anchor in profile["mechanic_anchors"]],
         "reference_samples": [
             {"identity": item["identity"], "player": item["player"], "evidence": item["evidence"]}
             for item in accepted

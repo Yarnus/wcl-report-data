@@ -6,13 +6,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .content_names import RAID_DIFFICULTY_IDS, RAID_MAP_ID
 from .errors import InputError
 from .cohort import verify_benchmark
 from .storage import artifact_lock, atomic_write_json, read_json, sha256_file
 
 
 def create_guide_snapshot(
-    benchmarks: list[dict[str, Any]], *, specialization_name: str, output_dir: Path, signing_key: str
+    benchmarks: list[dict[str, Any]], *, specialization_name: str, output_dir: Path, signing_key: str,
+    ability_names: dict[str, str], encounter_names: dict[str, dict[str, Any]],
+    content_names_build: str, content_names_sha256: str, ability_names_build: str = "unknown",
 ) -> dict[str, Any]:
     if not benchmarks:
         raise InputError("A Raid Guide requires at least one Encounter Benchmark.")
@@ -26,6 +29,8 @@ def create_guide_snapshot(
         identity = benchmark.get("identity")
         if not isinstance(identity, dict):
             raise InputError("Encounter Benchmark identity is missing.")
+        if identity.get("difficulty_id") not in RAID_DIFFICULTY_IDS:
+            raise InputError("Raid Guide difficulty is outside the zhCN content mapping scope.")
         key = (identity.get("encounter_id"), identity.get("difficulty_id"))
         if key in seen:
             raise InputError("A Guide Snapshot cannot contain duplicate Encounter Benchmarks.")
@@ -40,19 +45,44 @@ def create_guide_snapshot(
             raise InputError("Guide Snapshot Encounter Benchmarks have incompatible hard conditions.")
         if benchmark.get("sample_count", 0) < 3 or benchmark.get("stable_pattern_claims_allowed") is not True:
             raise InputError("Encounter Benchmark does not permit stable high-ranked pattern claims.")
+        mechanic_anchors = _localize_mechanic_anchors(benchmark.get("mechanic_anchors", []), ability_names)
+        encounter_id = identity.get("encounter_id")
+        encounter_name = encounter_names.get(str(encounter_id))
+        if (
+            not isinstance(encounter_name, dict)
+            or encounter_name.get("map_id") != RAID_MAP_ID
+            or not isinstance(encounter_name.get("name_en"), str)
+            or not encounter_name["name_en"].strip()
+            or not isinstance(encounter_name.get("name_zh"), str)
+            or not encounter_name["name_zh"].strip()
+        ):
+            raise InputError(f"Encounter ID {encounter_id} has no current-raid zhCN content-name mapping.")
         chapters.append(
             {
                 "identity": dict(identity),
+                "encounter_name_en": encounter_name["name_en"],
+                "encounter_name_zh": encounter_name["name_zh"],
                 "sample_count": benchmark["sample_count"],
                 "confidence": benchmark.get("confidence"),
                 "metrics": benchmark.get("metrics", {}),
+                "mechanic_anchors": mechanic_anchors,
                 "encounter_profile_id": benchmark.get("encounter_profile_id"),
                 "specialization_profile_id": benchmark.get("specialization_profile_id"),
                 "sources": benchmark.get("sources", {}),
                 "reference_samples": benchmark.get("reference_samples", []),
             }
         )
-    snapshot_body = {"specialization": specialization_name, "chapters": chapters}
+    snapshot_body = {
+        "specialization": specialization_name,
+        "ability_names_build": ability_names_build,
+        "ability_names_sha256": hashlib.sha256(
+            json.dumps(ability_names, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "content_names_build": content_names_build,
+        "content_names_sha256": content_names_sha256,
+        "render_schema_version": 2,
+        "chapters": chapters,
+    }
     snapshot_id = hashlib.sha256(
         json.dumps(snapshot_body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -63,6 +93,11 @@ def create_guide_snapshot(
             snapshot = read_json(index_path)
             stored_body = {
                 "specialization": snapshot.get("specialization"),
+                "ability_names_build": snapshot.get("ability_names_build"),
+                "ability_names_sha256": snapshot.get("ability_names_sha256"),
+                "content_names_build": snapshot.get("content_names_build"),
+                "content_names_sha256": snapshot.get("content_names_sha256"),
+                "render_schema_version": snapshot.get("render_schema_version"),
                 "chapters": snapshot.get("chapters"),
             } if isinstance(snapshot, dict) else {}
             stored_id = hashlib.sha256(
@@ -78,7 +113,7 @@ def create_guide_snapshot(
                 raise InputError("Existing Guide Snapshot is incomplete or has an invalid identity.")
             return snapshot | {"index_path": str(index_path)}
         output_dir.mkdir(parents=True, exist_ok=True)
-        markdown_path.write_text(_render_markdown(specialization_name, chapters), encoding="utf-8")
+        markdown_path.write_text(_render_markdown(specialization_name, chapters, ability_names), encoding="utf-8")
         snapshot = {
             "schema_version": 1,
             "snapshot_id": snapshot_id,
@@ -91,15 +126,18 @@ def create_guide_snapshot(
         return snapshot | {"index_path": str(index_path)}
 
 
-def _render_markdown(specialization_name: str, chapters: list[dict[str, Any]]) -> str:
+def _render_markdown(
+    specialization_name: str, chapters: list[dict[str, Any]], ability_names: dict[str, str]
+) -> str:
     lines = [f"# {specialization_name} 当前团队副本高分日志攻略", "", "## 使用范围", ""]
     lines.append("以下模式来自同一首领、难度、专精和排名分区的有效参考样本。不同首领的样本不会混合。")
     for chapter in chapters:
         identity = chapter["identity"]
+        encounter_heading = chapter["encounter_name_zh"]
         lines.extend(
             [
                 "",
-                f"## Encounter {identity.get('encounter_id')}",
+                f"## {encounter_heading}",
                 "",
                 f"- 样本数：{chapter['sample_count']}",
                 f"- 置信度：{chapter['confidence']}",
@@ -108,9 +146,13 @@ def _render_markdown(specialization_name: str, chapters: list[dict[str, Any]]) -
                 "### 日志事实",
                 "",
                 f"- 有效伤害中位数：{chapter['metrics'].get('damage_total_median', '不可用')}",
-                f"- 技能施放中位数：{json.dumps(chapter['metrics'].get('casts_median', {}), ensure_ascii=False, sort_keys=True)}",
-                f"- 首次施放时间中位数（毫秒）：{json.dumps(chapter['metrics'].get('first_cast_ms_median', {}), ensure_ascii=False, sort_keys=True)}",
+                f"- 技能施放中位数：{_localized_values(chapter['metrics'].get('casts_median', {}), ability_names)}",
+                f"- 首次施放时间中位数（毫秒）：{_localized_values(chapter['metrics'].get('first_cast_ms_median', {}), ability_names)}",
                 f"- 目标伤害中位数：{json.dumps(chapter['metrics'].get('damage_by_target_median', {}), ensure_ascii=False, sort_keys=True)}",
+                "",
+                "### 机制时间线",
+                "",
+                *_render_mechanic_anchors(chapter.get("mechanic_anchors", [])),
                 "",
                 "### 资料结论",
                 "",
@@ -125,6 +167,48 @@ def _render_markdown(specialization_name: str, chapters: list[dict[str, Any]]) -
         )
     lines.extend(["", "## 下一把动作", "", "- 按各 Boss 章节核对爆发、目标选择和个人减伤锚点。", ""])
     return "\n".join(lines)
+
+
+def _localize_mechanic_anchors(value: Any, ability_names: dict[str, str]) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise InputError("Encounter Benchmark mechanic anchors are malformed.")
+    result = []
+    for anchor in value:
+        if (
+            not isinstance(anchor, dict)
+            or not isinstance(anchor.get("ability_id"), int)
+            or isinstance(anchor["ability_id"], bool)
+        ):
+            raise InputError("Encounter Benchmark mechanic anchor ID is malformed.")
+        ability_id = str(anchor["ability_id"])
+        name = ability_names.get(ability_id)
+        if not isinstance(name, str) or not name.strip():
+            raise InputError(f"Spell ID {ability_id} has no zhCN SpellName mapping.")
+        result.append(dict(anchor) | {"name_zh": name})
+    return result
+
+
+def _localized_values(value: Any, ability_names: dict[str, str]) -> str:
+    if not isinstance(value, dict) or not value:
+        return "不可用"
+    return "；".join(
+        f"{ability_names.get(str(ability), f'未本地化技能（ID {ability}）')}：{amount}"
+        for ability, amount in sorted(value.items(), key=lambda item: str(item[0]))
+    )
+
+
+def _render_mechanic_anchors(value: Any) -> list[str]:
+    if not value:
+        return ["暂无已验证的机制 Spell 时间锚点。"]
+    lines = ["| 观察时间 | 机制 Spell |", "| --- | --- | "]
+    for anchor in value:
+        timestamp = anchor.get("observed_anchor_ms")
+        if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
+            time_text = f"约 {timestamp / 1000:g} 秒"
+        else:
+            time_text = "时间未确定"
+        lines.append(f"| {time_text} | {anchor['name_zh']} |")
+    return lines
 
 
 def _source_summaries(value: Any) -> str:

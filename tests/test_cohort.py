@@ -83,6 +83,7 @@ class CohortTests(unittest.TestCase):
         self.assertEqual(benchmark["sample_count"], 3)
         self.assertEqual(benchmark["metrics"]["damage_total_median"], 200)
         self.assertEqual(benchmark["confidence"], "low")
+        self.assertEqual(benchmark["mechanic_anchors"], PROFILE["mechanic_anchors"])
 
     def test_rejects_mixed_encounter_samples(self) -> None:
         analyses = [self.analysis({"deaths": 0, "damage_total": 100, "damage_by_target": {"20": 100}, "casts": {}}, EXPECTED | {"encounter_id": 1008}, str(index)) for index in range(1, 4)]

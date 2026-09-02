@@ -67,11 +67,13 @@ python -m wcl_raid_coach query \
 
 The CLI always writes JSON to standard output, including structured domain errors. See `python -m wcl_raid_coach --help` for all arguments and [the Skill instructions](SKILL.md) for the complete workflow.
 
-## Encounter Designators And Ability Names
+## Encounter Designators And Name Mappings
 
 The Skill understands Encounter Designators such as `PT6`, `H6`, and `M6`. The prefixes mean Normal, Heroic, and Mythic; the number is the one-based position in WCL's original `zone.encounters` list. A designator identifies only a difficulty and encounter. When a report has multiple matching Boss Attempts, the Skill lists explicit fight IDs and waits for a choice instead of selecting a kill, the latest attempt, or every attempt.
 
-On the first `inspect`, `prepare`, or `query`, the CLI downloads the current Retail zhCN `SpellName` CSV from Wago Tools and creates a complete `ability-names.zhCN.json` plus metadata in the data directory. A valid existing JSON is reused without network access. A mapping may be used only when the ID also occurs in the Report Index `abilities[].gameID`; a miss keeps the WCL name and is never literally translated. The CLI's `ability_names` output provides the actual mapping path and client build. Chinese names are current-client display enrichment and do not modify the Report Index.
+On the first `inspect`, `prepare`, `query`, or Guide generation, the CLI downloads the current Retail zhCN `SpellName` CSV from Wago Tools and creates a complete `ability-names.zhCN.json` plus metadata in the data directory. A valid existing JSON is reused without network access. A mapping may be used only when the ID also occurs in the Report Index `abilities[].gameID`. Guide and Skill user-facing text must use the mapped Chinese SpellName and must not translate names ad hoc; final guide generation stops when a mechanic Spell ID has no Chinese mapping. Chinese names are current-client display enrichment and do not modify the Report Index.
+
+The CLI separately maintains `content-names.zhCN.json`, generated from `Map`, `DungeonEncounter`, `JournalEncounter`, and `JournalEncounterCreature` tables from one Wago client build. Its scope is limited to the current raid on Normal, Heroic, and Mythic plus the configured eight Mythic+ maps. Original WCL English names and IDs remain audit data. Wago does not provide a reliable direct link to WCL NPC `gameID`, so localized NPC names are encounter-scoped display enrichment and cannot be used as event identity.
 
 ## Credentials
 
@@ -109,6 +111,8 @@ reports/<report-code>/
         `-- events.jsonl.gz
 ability-names.zhCN.json
 ability-names.zhCN.meta.json
+content-names.zhCN.json
+content-names.zhCN.meta.json
 ```
 
 Fight Bundles are immutable within a Report Revision. Re-exporting a report creates a new revision directory.
@@ -138,6 +142,8 @@ Destructive operations require `--confirm`. Clearing the cache preserves canonic
 ## Development And Documentation
 
 Ability names are first downloaded from `https://wago.tools/db2/SpellName/csv?locale=zhCN`. The CLI records the client build, source filename, and SHA-256 from a response such as `SpellName.12.1.0.69587.csv`. Delete `ability-names.zhCN.json` and `ability-names.zhCN.meta.json` from the data directory to download them again on the next relevant command. A download failure returns a structured `dataset_error`.
+
+The Encounter/NPC mapping uses the current map scope declared in the package and requires all Wago source tables to have the same client build. Delete `content-names.zhCN.json` and `content-names.zhCN.meta.json` to rebuild it on the next `inspect`, `coach resolve`, or `coach guide`. An incomplete download, mismatched build, or missing current map returns a structured `dataset_error`.
 
 ```bash
 make check

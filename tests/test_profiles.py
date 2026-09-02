@@ -40,6 +40,18 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(InputError):
             validate_profile(value)
 
+    def test_rejects_an_encounter_profile_with_a_malformed_mechanic_anchor(self) -> None:
+        value = {
+            "kind": "encounter",
+            "identity": {"game_version": "retail", "partition_id": 2, "encounter_id": 1007, "difficulty_id": 4},
+            "eligibility": {"priority_target_ids": [10], "excluded_target_ids": [20]},
+            "phases": [{"id": 1, "name": "Phase 1"}],
+            "mechanic_anchors": [{"ability_id": True, "name": "Mechanic"}],
+            "sources": [SOURCE],
+        }
+        with self.assertRaises(InputError):
+            validate_profile(value)
+
 
 if __name__ == "__main__":
     unittest.main()

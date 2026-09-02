@@ -6,9 +6,11 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from wcl_raid_coach.__main__ import create_parser, main, run
+from wcl_raid_coach.cohort import sign_benchmark
 
 
 class CliTests(unittest.TestCase):
@@ -104,6 +106,19 @@ class CliTests(unittest.TestCase):
             with (
                 patch("wcl_raid_coach.__main__.resolve_credentials"),
                 patch("wcl_raid_coach.__main__.WclClient") as client,
+                patch(
+                    "wcl_raid_coach.__main__._ensure_content_names",
+                    return_value={"mapping_path": "/tmp/content-names.json", "build": "12.1.0.69587"},
+                ),
+                patch(
+                    "wcl_raid_coach.__main__.load_content_names",
+                    return_value={
+                        "encounters": {
+                            "1007": {"map_id": 3004, "name_en": "Boss 7", "name_zh": "中文首领七"},
+                            "1008": {"map_id": 3004, "name_en": "Boss 8", "name_zh": "中文首领八"},
+                        }
+                    },
+                ),
                 redirect_stdout(output),
             ):
                 client.return_value.fetch_raid_zones.return_value = zones
@@ -129,7 +144,8 @@ class CliTests(unittest.TestCase):
         self.assertTrue(result["confirmation_required"])
         self.assertEqual(result["task"]["request"]["specialization"]["spec_name"], "Unholy")
         self.assertEqual(result["task"]["status"], "pending_confirmation")
-        self.assertEqual(result["task"]["context"]["encounters"][1]["encounter_name"], "Boss 8")
+        self.assertEqual(result["task"]["context"]["encounters"][1]["encounter_name"], "中文首领八")
+        self.assertEqual(result["task"]["context"]["encounters"][1]["encounter_name_en"], "Boss 8")
 
     def test_coach_review_labels_complete_bundle_analysis_as_log_fact(self) -> None:
         args = create_parser().parse_args(
@@ -142,6 +158,98 @@ class CliTests(unittest.TestCase):
             result = run(args)
         self.assertEqual(result["evidence_class"], "log_fact")
         self.assertEqual(result["analysis"]["metrics"]["deaths"], 0)
+
+    def test_invalid_coach_profile_encoding_returns_a_structured_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            profile = Path(temporary) / "profile.json"
+            profile.write_bytes(b"{\xff")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(["coach", "profile", str(profile)])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "dataset_io_error")
+
+    def test_coach_guide_uses_zhcn_spell_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_root = root / "data"
+            cache_root = root / "cache"
+            mapping_path = data_root / "ability-names.zhCN.json"
+            mapping_path.parent.mkdir(parents=True)
+            mapping_path.write_text(json.dumps({"1": "中文技能", "2": "中文机制"}), encoding="utf-8")
+            benchmark_path = root / "benchmark.json"
+            benchmark_path.write_text(
+                json.dumps(
+                    sign_benchmark(
+                        {
+                            "identity": {
+                                "game_version": "retail",
+                                "partition_id": 2,
+                                "encounter_id": 1007,
+                                "difficulty_id": 4,
+                                "class_name": "DeathKnight",
+                                "spec_name": "Unholy",
+                            },
+                            "sample_count": 3,
+                            "confidence": "low",
+                            "stable_pattern_claims_allowed": True,
+                            "mechanic_anchors": [{"ability_id": 2, "name": "English Mechanic", "observed_anchor_ms": 10000}],
+                            "metrics": {"casts_median": {"1": 2}},
+                        },
+                        "secret",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with (
+                patch("wcl_raid_coach.__main__.resolve_credentials", return_value=SimpleNamespace(client_secret="secret")),
+                patch(
+                    "wcl_raid_coach.__main__._ensure_ability_names",
+                    return_value={"mapping_path": str(mapping_path), "build": "12.1.0.69587"},
+                ),
+                patch(
+                    "wcl_raid_coach.__main__._ensure_content_names",
+                    return_value={
+                        "mapping_path": str(root / "content-names.json"),
+                        "build": "12.1.0.69587",
+                        "mapping_sha256": "a" * 64,
+                    },
+                ),
+                patch(
+                    "wcl_raid_coach.__main__.load_content_names",
+                    return_value={
+                        "encounters": {
+                            "1007": {"map_id": 3004, "name_en": "Boss 7", "name_zh": "中文首领七"}
+                        }
+                    },
+                ),
+                redirect_stdout(output),
+            ):
+                status = main(
+                    [
+                        "--data-root",
+                        str(data_root),
+                        "--cache-root",
+                        str(cache_root),
+                        "coach",
+                        "guide",
+                        str(benchmark_path),
+                        "--spec-display-name",
+                        "邪恶死亡骑士",
+                    ]
+                )
+
+            result = json.loads(output.getvalue())
+            markdown = Path(result["guide"]["markdown_path"]).read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertIn("中文技能", markdown)
+        self.assertIn("中文机制", markdown)
+        self.assertNotIn("English Mechanic", markdown)
 
 
 if __name__ == "__main__":

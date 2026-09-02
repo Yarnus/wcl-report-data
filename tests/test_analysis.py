@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from wcl_raid_coach.analysis import analyze_player
-from wcl_raid_coach.dataset import sign_bundle_manifest
+from wcl_raid_coach.dataset import query_bundle, sign_bundle_manifest
 from wcl_raid_coach.errors import DatasetError, InputError
 
 
@@ -38,6 +38,7 @@ class AnalysisTests(unittest.TestCase):
         index_hash = hashlib.sha256(json.dumps(index_value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         manifest_path = root / "manifest.json"
         manifest_value = {
+            "product": "wcl-raid-coach",
             "schema_version": 1,
             "complete": True,
             "identity": {"report_code": "ABC", "report_revision": 1, "fight_id": 7},
@@ -80,6 +81,15 @@ class AnalysisTests(unittest.TestCase):
             manifest.write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaises(DatasetError):
                 analyze_player(manifest, index, 10, signing_key="secret")
+
+    def test_query_rejects_a_bundle_from_the_old_product(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, _ = self.make_bundle(Path(directory))
+            value = json.loads(manifest.read_text(encoding="utf-8"))
+            value.pop("product")
+            manifest.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(DatasetError):
+                query_bundle(manifest)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from typing import Any, Sequence
 from . import __version__
 from .analysis import analyze_player
 from .ability_names import ensure_ability_names
+from .content_names import RAID_DIFFICULTY_IDS, ensure_content_names, load_content_names, localize_encounter
 from .api import WclClient
 from .config import default_cache_root, default_data_root, resolve_credentials
 from .dataset import DatasetService, DatasetStore, query_bundle
@@ -139,7 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except WclRaidCoachError as exc:
         _print_json({"ok": False, "error": exc.code, "message": str(exc)})
         return 1
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         _print_json({"ok": False, "error": "dataset_io_error", "message": str(exc)})
         return 1
 
@@ -275,15 +276,31 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if args.coach_command == "guide":
             credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
             benchmarks = [read_json(path) for path in args.benchmarks]
+            ability_names_info = _ensure_ability_names(store)
+            ability_names = read_json(Path(ability_names_info["mapping_path"]))
+            if not isinstance(ability_names, dict) or any(
+                not isinstance(key, str) or not isinstance(value, str) for key, value in ability_names.items()
+            ):
+                raise InputError("zhCN ability names mapping is malformed.")
+            content_names_info = _ensure_content_names(store)
+            content_names = load_content_names(Path(content_names_info["mapping_path"]))
             result = create_guide_snapshot(
                 benchmarks,
                 specialization_name=args.spec_display_name,
                 output_dir=args.data_root / "guides",
                 signing_key=credentials.client_secret,
+                ability_names=ability_names,
+                ability_names_build=ability_names_info["build"],
+                encounter_names=_encounter_names(content_names),
+                content_names_build=content_names_info["build"],
+                content_names_sha256=content_names_info["mapping_sha256"],
             )
-            return {"action": "coach_guide", "guide": result}
+            return {"action": "coach_guide", "guide": result, "content_names": content_names_info}
         if args.coach_command == "compare":
-            result = compare_player(read_json(args.analysis), read_json(args.benchmark))
+            credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
+            result = compare_player(
+                read_json(args.analysis), read_json(args.benchmark), signing_key=credentials.client_secret
+            )
             response = {"action": "coach_compare", "comparison": result}
             if args.output:
                 atomic_write_json(args.output, result)
@@ -309,11 +326,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if args.mode == "raid_guide":
             credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
             client = WclClient(credentials)
-            context = resolve_current_raid(client.fetch_raid_zones(), request.encounter_designators)
+            content_names_info = _ensure_content_names(store)
+            content_names = load_content_names(Path(content_names_info["mapping_path"]))
+            context = resolve_current_raid(
+                client.fetch_raid_zones(),
+                request.encounter_designators,
+                _encounter_names(content_names),
+            )
         else:
             context = {"report": report_ref.as_dict() if report_ref else None}
         task = task_store.create_or_resume(request, context=context)
-        return {"action": "coach_resolve", "confirmation_required": True, "task": task}
+        result = {"action": "coach_resolve", "confirmation_required": True, "task": task}
+        if args.mode == "raid_guide":
+            result["content_names"] = content_names_info
+        return result
     if args.command == "query":
         ability_names = _ensure_ability_names(store)
         result = query_bundle(
@@ -364,7 +390,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ref = ReportRef.parse(args.url)
     if args.command == "inspect":
         ability_names = _ensure_ability_names(store)
-        return service.inspect(ref) | {"ability_names": ability_names}
+        content_names_info = _ensure_content_names(store)
+        content_names = load_content_names(Path(content_names_info["mapping_path"]))
+        result = _localize_inspection(service.inspect(ref), content_names)
+        return result | {"ability_names": ability_names, "content_names": content_names_info}
     if args.command == "prepare":
         ability_names = _ensure_ability_names(store)
         return service.prepare(
@@ -383,6 +412,48 @@ def _print_json(value: dict[str, Any]) -> None:
 def _ensure_ability_names(store: DatasetStore) -> dict[str, Any]:
     with store.ability_names_lock():
         return ensure_ability_names(store.data_root)
+
+
+def _ensure_content_names(store: DatasetStore) -> dict[str, Any]:
+    with store.content_names_lock():
+        return ensure_content_names(store.data_root)
+
+
+def _encounter_names(mapping: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    encounters = mapping.get("encounters")
+    if not isinstance(encounters, dict):
+        raise InputError("zhCN content names encounters mapping is malformed.")
+    return encounters
+
+
+def _localize_inspection(result: dict[str, Any], mapping: dict[str, Any]) -> dict[str, Any]:
+    localized = dict(result)
+    for field in ("selected_fight",):
+        choice = localized.get(field)
+        if isinstance(choice, dict):
+            localized[field] = _localize_fight_choice(choice, mapping)
+    for field in ("encounter_choices", "fight_choices"):
+        choices = localized.get(field)
+        if isinstance(choices, list):
+            localized[field] = [
+                _localize_fight_choice(choice, mapping) if isinstance(choice, dict) else choice
+                for choice in choices
+            ]
+    return localized
+
+
+def _localize_fight_choice(choice: dict[str, Any], mapping: dict[str, Any]) -> dict[str, Any]:
+    difficulty = choice.get("difficulty")
+    if difficulty is not None and difficulty not in RAID_DIFFICULTY_IDS:
+        return choice
+    encounter_id = choice.get("encounter_id")
+    name = choice.get("name")
+    if not isinstance(name, str):
+        return choice
+    localized = localize_encounter(mapping, encounter_id, name)
+    if localized == name:
+        return choice
+    return dict(choice) | {"name": localized, "name_en": name}
 
 
 def _verify_writable(path: Path) -> None:

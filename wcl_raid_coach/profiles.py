@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .errors import InputError
-from .storage import atomic_write_json, read_json
+from .storage import artifact_lock, atomic_write_json, read_json
 
 
 ProfileKind = Literal["specialization", "encounter"]
@@ -54,6 +54,14 @@ def validate_profile(value: Any, expected_kind: ProfileKind | None = None) -> di
         for field in ("phases", "mechanic_anchors"):
             if not isinstance(value.get(field), list) or not value[field]:
                 raise InputError(f"Encounter Profile requires non-empty {field}.")
+        for anchor in value["mechanic_anchors"]:
+            if (
+                not isinstance(anchor, dict)
+                or not _positive_int(anchor.get("ability_id"))
+                or not isinstance(anchor.get("name"), str)
+                or not anchor["name"].strip()
+            ):
+                raise InputError("Every encounter mechanic anchor requires a positive ability ID and name.")
     sources = value.get("sources")
     if not isinstance(sources, list) or not sources:
         raise InputError("Profile requires at least one sourced assertion.")
@@ -84,7 +92,8 @@ class ProfileStore:
     def store(self, value: Any) -> Path:
         profile = validate_profile(value)
         path = self.root / profile["kind"] / f"{profile['profile_id']}.json"
-        return atomic_write_json(path, profile)
+        with artifact_lock(path):
+            return atomic_write_json(path, profile)
 
     def load(self, path: Path, expected_kind: ProfileKind | None = None) -> dict[str, Any]:
         return validate_profile(read_json(path), expected_kind)

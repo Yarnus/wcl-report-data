@@ -7,7 +7,9 @@ from .errors import ApiError, InputError
 
 
 def resolve_current_raid(
-    zones: Iterable[dict[str, Any]], designators: tuple[EncounterDesignator, ...]
+    zones: Iterable[dict[str, Any]],
+    designators: tuple[EncounterDesignator, ...],
+    encounter_names: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     current = [
         zone
@@ -57,11 +59,16 @@ def resolve_current_raid(
                 f"{value} is outside the current raid's {len(encounters)}-encounter WCL ordering."
             )
         encounter = encounters[designator.position - 1]
+        encounter_id = _integer(encounter, "id", value)
+        encounter_name = _text(encounter, "name", value)
+        mapped_name = (encounter_names or {}).get(str(encounter_id))
+        localized_name = mapped_name.get("name_zh") if isinstance(mapped_name, dict) else None
         resolved.append(
             {
                 "designator": value,
-                "encounter_id": _integer(encounter, "id", value),
-                "encounter_name": _text(encounter, "name", value),
+                "encounter_id": encounter_id,
+                "encounter_name": localized_name if isinstance(localized_name, str) else encounter_name,
+                "encounter_name_en": encounter_name,
                 "difficulty": difficulty,
             }
         )

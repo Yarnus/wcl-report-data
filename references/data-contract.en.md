@@ -34,6 +34,8 @@ The compact `selected_fight` and `fight_choices` returned by `inspect` include t
 
 `manifest.json` is written last. Its presence with `complete: true` means that:
 
+The manifest must contain `product: "wcl-raid-coach"`; Bundles produced by another product are not valid inputs to this product.
+
 1. Every WCL event page reached `nextPageTimestamp: null`.
 2. Pagination did not repeat a cursor.
 3. Event timestamps remained ordered.
@@ -66,9 +68,13 @@ Actor and ability names live in `report.json`; IDs are event identity. Localized
 
 `ability-names.zhCN.json` in the data directory is current-client display enrichment kept outside the Report Index. When `inspect`, `prepare`, or `query` first needs it and the file is absent, the CLI downloads the complete zhCN `SpellName` table from Wago Tools; metadata records the client build, source, and hash. It may be applied only when a Canonical Event `ability_id` also matches Report Index `abilities[].gameID`. A hit still retains the WCL name, ability ID, and mapping build provenance; a miss uses the WCL name. Mapping updates do not alter Report Revision facts or Complete Bundle identity.
 
+`content-names.zhCN.json` is separate current-content display enrichment limited to the current raid on Normal, Heroic, and Mythic and the configured eight Mythic+ maps. Maps and encounters use Wago IDs; each NPC record contains its `JournalEncounterCreature` ID, encounter, English name, and Chinese name. Wago data does not provide a reliable direct link to WCL NPC `gameID`, so the English-name index may be used only for display within encounter context and must not replace actor ID. Metadata records the shared client build, sources, and mapping hash for all Wago tables. Mapping updates do not modify a Report Index or Complete Bundle.
+
 Known fields cover amounts, mitigation, healing, resources, health, aura stacks, casts, encounter metadata, combatant gear and talents, and observed combat statistics.
 
 WCL event JSON is not frozen. New keys are counted under `unknown_fields`; their values remain only in the Raw Page cache until the schema explicitly adopts them.
+
+Guide Snapshot Markdown must display Chinese SpellName and encounter names from verified Wago zhCN mappings; the JSON index may retain IDs, original WCL names, and mapping builds for audit.
 
 ## Query Contract
 

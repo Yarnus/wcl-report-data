@@ -27,12 +27,15 @@ class CoachContextTests(unittest.TestCase):
         context = resolve_current_raid(
             zones,
             (EncounterDesignator.parse("H7"), EncounterDesignator.parse("H8")),
+            {"1007": {"name_en": "Boss 7", "name_zh": "中文首领"}},
         )
 
         self.assertEqual(context["zone"], {"id": 42, "name": "Current Raid"})
         self.assertEqual(context["partition"]["id"], 2)
         self.assertEqual(context["game_version"], "12.1")
         self.assertEqual(context["encounters"][0]["encounter_id"], 1007)
+        self.assertEqual(context["encounters"][0]["encounter_name"], "中文首领")
+        self.assertEqual(context["encounters"][0]["encounter_name_en"], "Boss 7")
         self.assertEqual(context["encounters"][1]["encounter_name"], "Boss 8")
 
     def test_refuses_to_guess_between_current_zones(self) -> None:

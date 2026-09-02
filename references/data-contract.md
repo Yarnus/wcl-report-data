@@ -32,6 +32,8 @@ Fight Bundle 还包含一个数字 `fight_id`。不同 Report Revision 的文件
 
 `manifest.json` 最后写入。它存在且 `complete: true` 表示：
 
+manifest 必须包含 `product: "wcl-raid-coach"`；其他产品生成的 Bundle 不属于本产品的输入。
+
 1. 所有 WCL 事件页最终到达 `nextPageTimestamp: null`。
 2. 分页游标没有重复。
 3. 事件时间戳保持有序。
@@ -64,7 +66,11 @@ actor 和 ability 名称保存在 `report.json`；ID 才是事件身份。已本
 
 数据目录中的 `ability-names.zhCN.json` 是独立于 Report Index 的当前客户端展示 enrichment。`inspect`、`prepare` 或 `query` 首次需要它但文件不存在时，CLI 从 Wago Tools 下载完整 zhCN `SpellName` 表；metadata 记录客户端 build、来源和哈希。只有 Canonical Event 的 `ability_id` 同时匹配 Report Index `abilities[].gameID` 时才可应用；命中时仍须保留 WCL 名称、ability ID 和 mapping build 来源，未命中时使用 WCL 名称。mapping 更新不得改变 Report Revision 事实或 Complete Bundle 身份。
 
+`content-names.zhCN.json` 是单独的当前内容展示 enrichment，只覆盖当前团本的 Normal、Heroic、Mythic 和配置的 8 个 Mythic+ 地图。Map 和 Encounter 以 Wago ID 记录；NPC 记录包含 `JournalEncounterCreature` ID、所属 Encounter 及中英文名。由于 Wago 数据没有提供到 WCL NPC `gameID` 的可靠直连，英文名索引仅可在 Encounter 上下文中用于展示，不得代替 actor ID。metadata 必须记录所有 Wago 表的相同客户端 build、来源和 mapping 哈希；更新 mapping 不得改写 Report Index 或 Complete Bundle。
+
 已知 `fields` 覆盖数值、减伤、治疗、资源、生命值、光环层数、施法、首领战元数据、战斗人员装备与天赋，以及观测到的战斗属性。WCL 事件 JSON 并非固定不变。新键会计入 `unknown_fields`，其值只保留在 Raw Page 缓存中，直到 schema 明确接纳这些字段。
+
+Guide Snapshot 的 Markdown 展示必须使用已校验 Wago zhCN mapping 的中文 SpellName 和 Encounter 名称；JSON 索引可以同时保留 ID、WCL 原始名称和 mapping build 供审计。
 
 ## 查询契约
 

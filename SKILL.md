@@ -169,6 +169,16 @@ python -m wcl_raid_coach coach guide \
 - **资料结论**：当前 Profile 来源支持的规则或机制。
 - **推断**：事实与资料结合后的建议，必须说明置信度。
 
+### Spell 名称输出门禁
+
+生成攻略前必须确保 `ability-names.zhCN.json` 已从 Wago Tools 初始化并通过 metadata 哈希检查。所有由 `ability_id` 确认的 Spell 在面向用户的 Markdown 和对话正文中必须使用该 mapping 的中文名称；不得根据英文名自行翻译，也不得把裸数字 ID 或英文 SpellName 写入正文。
+
+机制名称必须通过 Encounter Profile 的具体 `ability_id` 关联，不得按英文名称反查。若机制 Spell ID 缺少 zhCN mapping，停止生成最终攻略并返回结构化错误；不得静默回退为英文。JSON 索引可以保留 `ability_id`、WCL 原始名称和 mapping build 作为审计信息。
+
+输出前逐项检查机制锚点、技能统计、首次施放时间和实战建议中引用的 Spell，确保正文使用中文名称。无法确认是 Spell 的阶段描述或资料术语，必须标记为机制描述，不得伪装成 SpellName。
+
+Encounter 和 NPC 名称使用独立的 `content-names.zhCN.json`。该 mapping 只覆盖当前团本 Normal、Heroic、Mythic 和配置的 8 个 Mythic+ 地图，并保留 Wago Encounter/NPC ID、英文原名及客户端 build。Encounter 命中 mapping 时正文使用中文名；NPC 中文名只能作为所属 Encounter 内的展示 enrichment，不得按名称推断 WCL actor 身份。未命中时保留 WCL 原名，不得自行翻译。
+
 ## 6. 限流与恢复
 
 API 点数低于 15% 或 50 点的较高者时停止。遇到 `wcl_rate_limit`，保留 Complete Bundle 检查点和已完成 Boss 章节，不降低证据要求。使用以下命令查看任务：
