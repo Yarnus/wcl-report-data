@@ -25,11 +25,13 @@ class AnalysisTests(unittest.TestCase):
             {"sequence": 4, "fight_time_ms": 500, "type": "death", "source": None, "target": {"actor_id": 10}, "ability_id": None, "fields": {}},
         ]
         events_path = bundle_root / "events.jsonl.gz"
-        canonical_lines = [json.dumps(event, separators=(",", ":")) + "\n" for event in events]
-        with gzip.open(events_path, "wt", encoding="utf-8") as handle:
-            handle.writelines(canonical_lines)
+        canonical_bytes = "".join(
+            json.dumps(event, separators=(",", ":")) + "\n" for event in events
+        ).encode()
+        with gzip.open(events_path, "wb") as handle:
+            handle.write(canonical_bytes)
         file_digest = hashlib.sha256(events_path.read_bytes()).hexdigest()
-        canonical_digest = hashlib.sha256("".join(canonical_lines).encode()).hexdigest()
+        canonical_digest = hashlib.sha256(canonical_bytes).hexdigest()
         raw_path = root / "page-000001.json.gz"
         with gzip.open(raw_path, "wt", encoding="utf-8") as handle:
             json.dump({"data": events, "nextPageTimestamp": None}, handle)
