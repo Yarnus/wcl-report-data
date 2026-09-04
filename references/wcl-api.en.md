@@ -21,7 +21,7 @@ Report indexing fetches the report revision, archive status, Retail game version
 
 General-guide resolution uses `worldData.zones` for the current unfrozen Retail raid zone, original encounter order, difficulties, and default partition. Exactly one current zone, one Heroic difficulty, and one default partition must exist; otherwise resolution stops rather than guessing.
 
-Ranking candidates use the official `Encounter.characterRankings` query with exact encounter, difficulty, partition, class, and specialization, plus `externalBuffs: Exclude`. Ranking JSON remains untrusted input. WCL rankings normally omit source ID; the CLI must uniquely resolve it from the candidate report's actor/fight metadata before the candidate can enter the signed recent cohort.
+Ranking candidates use the official `Encounter.characterRankings` query with exact encounter, difficulty, partition, class, and specialization, plus `externalBuffs: Exclude`. Ranking JSON remains untrusted input. WCL rankings normally omit source ID; the CLI must uniquely resolve it from the candidate report's actor/fight metadata before the candidate can enter the content-addressed recent Ranking Cohort.
 
 Fight difficulty IDs are interpreted only through the `zone.difficulties { id name }` values returned for that report. They are not mapped through a hardcoded global enum because IDs can differ between WCL contexts.
 
@@ -50,7 +50,7 @@ Before WCL data queries, the client preserves at least 15 percent or 50 API poin
 
 Event and revision requests reserve the full retry budget and refresh the rate snapshot in the same GraphQL response. Persistent collection retains Raw Pages and checkpoints after a safe-reserve stop. Mechanic Review writes nothing and must restart.
 
-The Ranking Cohort uses the process-local client secret for an HMAC integrity signature. The secret itself is never written to the cohort, logs, or standard output. Benchmarking rejects a signed cohort after modification.
+The WCL client secret is used only for OAuth and does not establish local Artifact identity. Ranking Cohorts and Encounter Benchmarks use SHA-256 content IDs over canonical JSON; Complete Bundles hash the Report Index, Raw Pages, compressed event file, and Canonical Event content. These Artifacts are supported only for local generation and consumption; hashes do not authenticate origin.
 
 ## Revisions And Archives
 

@@ -44,7 +44,7 @@ manifest 必须包含 `product: "wcl-raid-coach"`；其他产品生成的 Bundle
 
 所有分页都使用相同且包含边界的战斗开始与结束时间。旧采集协议生成的 Bundle 会被拒绝，必须重新准备。
 
-manifest 记录按类型统计的事件数量、Raw Page 哈希、规范事件流哈希、采集选项和未知字段计数。
+manifest 记录按类型统计的事件数量、Raw Page 哈希、压缩事件文件哈希、解压后的 Canonical Event JSONL 内容哈希、采集选项和未知字段计数。哈希用于本地内容身份和损坏检测，不认证 Artifact 来源。
 
 ## Canonical Event
 
@@ -95,9 +95,11 @@ Mechanic Evidence Set 仅存在于当前进程内，不创建 Report Index、Raw
 个人复盘、Benchmark 和 Guide 只消费通过上述完整性检查的 Complete Bundle，不能重写 Report Index、Fight Bundle 或 Canonical Event。Mechanic Review 是非持久化例外，只消费当前进程中的 Mechanic Evidence Set。
 
 - `profiles/` 保存声明式 Specialization Profile 和 Encounter Profile。Profile 身份包括 game version 与 ranking partition；Encounter Profile 还包括 encounter 和 difficulty。Profile ID 是校验后规范 JSON 的 SHA-256。
-- `cohorts/` 保存单一 encounter、difficulty、class、spec 与 partition 的 Ranking Cohort。Ranking Candidate 只有在 Complete Bundle、硬条件和 Encounter Profile eligibility 全部通过后才成为 Reference Sample。
-- Encounter Benchmark 只能聚合同一 Ranking Cohort 中至少三个不重复的 Reference Sample。不同 Encounter Designator 必须使用不同 benchmark。
+- `cohorts/` 保存单一 encounter、difficulty、class、spec 与 partition 的 Ranking Cohort。`cohort_id` 是排除自身 ID 后规范 JSON 的 SHA-256。Ranking Candidate 只有在 Complete Bundle、硬条件和 Encounter Profile eligibility 全部通过后才成为 Reference Sample。
+- Encounter Benchmark 只能聚合同一 Ranking Cohort 中至少三个不重复的 Reference Sample，且必须记录准确的 `cohort_id`。`benchmark_id` 是排除自身 ID 后规范 JSON 的 SHA-256。不同 Encounter Designator 必须使用不同 benchmark。
 - `tasks/` 保存 Coach Request Manifest。部分完成状态必须保留每个 encounter 的 blocker 与 artifact 引用。
-- `guides/` 保存不可变 Guide Snapshot。一个 snapshot 可以引用多个 Encounter Benchmark，但不能覆盖旧 snapshot。
+- `guides/` 保存不可变 Guide Snapshot。每个章节记录准确的 `benchmark_id`；一个 snapshot 可以引用多个 Encounter Benchmark，但不能覆盖旧 snapshot。
 
 个人复盘分析必须记录 Report Revision、fight ID、actor ID 和比较硬条件。分析与 benchmark 的 encounter、difficulty、class、spec 和 partition 不完全相同时，比较必须失败。
+
+教练 Artifact 只支持本 CLI 在用户本地数据目录或工作目录中生成和消费。普通 SHA-256 不认证生成者；不得把外部提供的 Artifact 当作可信输入。旧 HMAC schema 的 Complete Bundle、Ranking Cohort、Personal Review、Encounter Benchmark 和 Guide Snapshot 不兼容，必须重新生成。

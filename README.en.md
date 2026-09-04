@@ -91,6 +91,8 @@ python -m wcl_raid_coach query \
 
 The CLI always writes JSON to standard output, including structured domain errors. See `python -m wcl_raid_coach --help` for all arguments and [the Skill instructions](SKILL.md) for the complete workflow.
 
+`coach review`, `coach benchmark`, `coach guide`, and `coach compare` consume only local Artifacts. When required local name mappings already exist, they do not read WCL credentials merely to verify an Artifact. Commands that access the WCL API still require OAuth client credentials.
+
 ## Encounter Designators And Name Mappings
 
 The Skill understands Encounter Designators such as `PT6`, `H6`, and `M6`. The prefixes mean Normal, Heroic, and Mythic; the number is the one-based position in WCL's original `zone.encounters` list. A designator identifies only a difficulty and encounter. When a report has multiple matching Boss Attempts, the Skill lists explicit fight IDs and waits for a choice instead of selecting a kill, the latest attempt, or every attempt.
@@ -145,6 +147,7 @@ Fight Bundles are immutable within a Report Revision. Re-exporting a report crea
 
 - Only a Fight Bundle with `complete: true` in its manifest is eligible for Personal Review, Benchmark, or Guide analysis; Mechanic Review uses the ephemeral exception below.
 - A Complete Bundle must reach an explicit `nextPageTimestamp: null`, preserve event ordering, stay within one Report Revision, and pass file hash checks.
+- A Complete Bundle validates both the compressed event file SHA-256 and the uncompressed Canonical Event JSONL content SHA-256. Ranking Cohorts and Encounter Benchmarks use canonical-JSON content IDs rather than HMACs derived from the WCL client secret.
 - Every pagination request repeats the fight's fixed `startTime` and `endTime`; Bundles made with the old collection protocol are rejected and must be prepared again.
 - Canonical Events retain known fields only. Unknown field names and counts are recorded in the manifest; unknown values remain in the Raw Page cache.
 - Character names and servers are retained locally to identify team members. Data shown in a conversation may be processed by the configured model provider.
@@ -152,6 +155,7 @@ Fight Bundles are immutable within a Report Revision. Re-exporting a report crea
 - A Mechanic Evidence Set exists only in the current process. It creates no Report Index, Raw Page, Fight Bundle, manifest, or checkpoint. It must follow filtered-event pagination to `nextPageTimestamp: null`, keep the fixed Boss Attempt range, and verify the same Report Revision before and after collection.
 - Mechanic Review uses the newest rules shipped with the installed package rather than replaying historical hotfix rules by report date. Updating rules requires updating the package; output records the ruleset version, sources, and `selection_policy: latest`.
 - Per-mechanic trigger, success, and failure counts describe rule-defined event signals and are `null` when the log cannot establish an outcome. An anomaly means only that a verified event pattern matched; it does not assign player responsibility, performance, or wipe causality.
+- Coaching Artifacts are supported only when this CLI generates and consumes them in the user's local data or work directory. Hashes provide content identity and corruption detection, not origin authentication; externally supplied Artifacts are unsupported. Complete Bundles, Ranking Cohorts, Personal Reviews, Encounter Benchmarks, and Guide Snapshots using the former HMAC schemas must be rebuilt.
 
 ## Dataset Management
 

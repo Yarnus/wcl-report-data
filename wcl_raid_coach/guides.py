@@ -13,7 +13,7 @@ from .storage import artifact_lock, atomic_write_json, read_json, sha256_file
 
 
 def create_guide_snapshot(
-    benchmarks: list[dict[str, Any]], *, specialization_name: str, output_dir: Path, signing_key: str,
+    benchmarks: list[dict[str, Any]], *, specialization_name: str, output_dir: Path,
     ability_names: dict[str, str], encounter_names: dict[str, dict[str, Any]],
     content_names_build: str, content_names_sha256: str, ability_names_build: str = "unknown",
 ) -> dict[str, Any]:
@@ -25,7 +25,7 @@ def create_guide_snapshot(
     for benchmark in benchmarks:
         if not isinstance(benchmark, dict):
             raise InputError("Encounter Benchmark must be a JSON object.")
-        verify_benchmark(benchmark, signing_key)
+        verify_benchmark(benchmark)
         identity = benchmark.get("identity")
         if not isinstance(identity, dict):
             raise InputError("Encounter Benchmark identity is missing.")
@@ -60,6 +60,7 @@ def create_guide_snapshot(
         chapters.append(
             {
                 "identity": dict(identity),
+                "benchmark_id": benchmark["benchmark_id"],
                 "encounter_name_en": encounter_name["name_en"],
                 "encounter_name_zh": encounter_name["name_zh"],
                 "sample_count": benchmark["sample_count"],
@@ -73,6 +74,7 @@ def create_guide_snapshot(
             }
         )
     snapshot_body = {
+        "schema_version": 2,
         "specialization": specialization_name,
         "ability_names_build": ability_names_build,
         "ability_names_sha256": hashlib.sha256(
@@ -92,6 +94,7 @@ def create_guide_snapshot(
         if index_path.exists():
             snapshot = read_json(index_path)
             stored_body = {
+                "schema_version": snapshot.get("schema_version"),
                 "specialization": snapshot.get("specialization"),
                 "ability_names_build": snapshot.get("ability_names_build"),
                 "ability_names_sha256": snapshot.get("ability_names_sha256"),
@@ -115,7 +118,6 @@ def create_guide_snapshot(
         output_dir.mkdir(parents=True, exist_ok=True)
         markdown_path.write_text(_render_markdown(specialization_name, chapters, ability_names), encoding="utf-8")
         snapshot = {
-            "schema_version": 1,
             "snapshot_id": snapshot_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             **snapshot_body,

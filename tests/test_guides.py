@@ -6,7 +6,7 @@ from pathlib import Path
 
 from wcl_raid_coach.errors import InputError
 from wcl_raid_coach.guides import create_guide_snapshot
-from wcl_raid_coach.cohort import sign_benchmark
+from wcl_raid_coach.cohort import identify_benchmark
 
 
 ABILITY_NAMES = {"1": "中文技能"}
@@ -22,7 +22,9 @@ CONTENT_ARGS = {
 
 
 def benchmark(encounter_id: int) -> dict:
-    return sign_benchmark({
+    return identify_benchmark({
+        "schema_version": 2,
+        "cohort_id": "c" * 64,
         "identity": {"game_version": "retail", "encounter_id": encounter_id, "difficulty_id": 4, "partition_id": 2, "class_name": "DeathKnight", "spec_name": "Unholy"},
         "encounter_profile_id": f"profile-{encounter_id}",
         "specialization_profile_id": "spec-profile",
@@ -32,7 +34,7 @@ def benchmark(encounter_id: int) -> dict:
         "stable_pattern_claims_allowed": True,
         "mechanic_anchors": [{"ability_id": 1, "name": "Mechanic", "observed_anchor_ms": 10000}],
         "metrics": {"damage_total_median": 200, "casts_median": {"1": 2}},
-    }, "secret")
+    })
 
 
 class GuideTests(unittest.TestCase):
@@ -42,7 +44,6 @@ class GuideTests(unittest.TestCase):
                 [benchmark(1007), benchmark(1008)],
                 specialization_name="邪恶死亡骑士",
                 output_dir=Path(directory),
-                signing_key="secret",
                 ability_names=ABILITY_NAMES,
                 ability_names_build="test",
                 **CONTENT_ARGS,
@@ -58,6 +59,7 @@ class GuideTests(unittest.TestCase):
         self.assertNotIn("Mechanic", markdown)
         self.assertEqual(snapshot["chapters"][0]["mechanic_anchors"][0]["name_zh"], "中文技能")
         self.assertEqual(snapshot["chapters"][0]["encounter_name_en"], "Boss 7")
+        self.assertEqual(snapshot["chapters"][0]["benchmark_id"], benchmark(1007)["benchmark_id"])
         self.assertEqual(snapshot["content_names_build"], "12.1.0.69587")
         self.assertEqual(snapshot["content_names_sha256"], "a" * 64)
         self.assertEqual(snapshot["render_schema_version"], 2)
@@ -65,14 +67,14 @@ class GuideTests(unittest.TestCase):
     def test_refuses_case_study_as_stable_guide(self) -> None:
         value = benchmark(1007) | {"sample_count": 2, "stable_pattern_claims_allowed": False}
         with tempfile.TemporaryDirectory() as directory, self.assertRaises(InputError):
-            create_guide_snapshot([value], specialization_name="邪恶死亡骑士", output_dir=Path(directory), signing_key="secret", ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
+            create_guide_snapshot([value], specialization_name="邪恶死亡骑士", output_dir=Path(directory), ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
 
     def test_rejects_an_unmapped_mechanic_spell(self) -> None:
-        value = sign_benchmark(
-            benchmark(1007) | {"mechanic_anchors": [{"ability_id": 999, "name": "Unknown"}]}, "secret"
+        value = identify_benchmark(
+            benchmark(1007) | {"mechanic_anchors": [{"ability_id": 999, "name": "Unknown"}]}
         )
         with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(InputError, "zhCN"):
-            create_guide_snapshot([value], specialization_name="邪恶死亡骑士", output_dir=Path(directory), signing_key="secret", ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
+            create_guide_snapshot([value], specialization_name="邪恶死亡骑士", output_dir=Path(directory), ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
 
     def test_rejects_an_encounter_outside_the_content_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(InputError, "content-name"):
@@ -80,7 +82,6 @@ class GuideTests(unittest.TestCase):
                 [benchmark(1007)],
                 specialization_name="邪恶死亡骑士",
                 output_dir=Path(directory),
-                signing_key="secret",
                 ability_names=ABILITY_NAMES,
                 encounter_names={},
                 content_names_build="test",
@@ -94,7 +95,6 @@ class GuideTests(unittest.TestCase):
                 [benchmark(1007)],
                 specialization_name="邪恶死亡骑士",
                 output_dir=Path(directory),
-                signing_key="secret",
                 ability_names=ABILITY_NAMES,
                 encounter_names=names,
                 content_names_build="test",
@@ -104,13 +104,12 @@ class GuideTests(unittest.TestCase):
     def test_rejects_a_raid_difficulty_outside_the_content_scope(self) -> None:
         value = benchmark(1007)
         value["identity"] = value["identity"] | {"difficulty_id": 1}
-        value = sign_benchmark(value, "secret")
+        value = identify_benchmark(value)
         with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(InputError, "scope"):
             create_guide_snapshot(
                 [value],
                 specialization_name="邪恶死亡骑士",
                 output_dir=Path(directory),
-                signing_key="secret",
                 ability_names=ABILITY_NAMES,
                 ability_names_build="test",
                 **CONTENT_ARGS,
@@ -118,22 +117,22 @@ class GuideTests(unittest.TestCase):
 
     def test_reuses_immutable_snapshot_without_overwriting_created_at(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            first = create_guide_snapshot([benchmark(1007)], specialization_name="邪恶死亡骑士", output_dir=Path(directory), signing_key="secret", ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
-            second = create_guide_snapshot([benchmark(1007)], specialization_name="邪恶死亡骑士", output_dir=Path(directory), signing_key="secret", ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
+            first = create_guide_snapshot([benchmark(1007)], specialization_name="邪恶死亡骑士", output_dir=Path(directory), ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
+            second = create_guide_snapshot([benchmark(1007)], specialization_name="邪恶死亡骑士", output_dir=Path(directory), ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
         self.assertEqual(first["created_at"], second["created_at"])
 
     def test_refuses_benchmarks_from_different_partitions(self) -> None:
         other = benchmark(1008)
         other["identity"] = other["identity"] | {"partition_id": 3}
         with tempfile.TemporaryDirectory() as directory, self.assertRaises(InputError):
-            create_guide_snapshot([benchmark(1007), other], specialization_name="邪恶死亡骑士", output_dir=Path(directory), signing_key="secret", ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
+            create_guide_snapshot([benchmark(1007), other], specialization_name="邪恶死亡骑士", output_dir=Path(directory), ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
 
     def test_rejects_modified_snapshot_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            snapshot = create_guide_snapshot([benchmark(1007)], specialization_name="邪恶死亡骑士", output_dir=Path(directory), signing_key="secret", ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
+            snapshot = create_guide_snapshot([benchmark(1007)], specialization_name="邪恶死亡骑士", output_dir=Path(directory), ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
             Path(snapshot["markdown_path"]).write_text("modified", encoding="utf-8")
             with self.assertRaises(InputError):
-                create_guide_snapshot([benchmark(1007)], specialization_name="邪恶死亡骑士", output_dir=Path(directory), signing_key="secret", ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
+                create_guide_snapshot([benchmark(1007)], specialization_name="邪恶死亡骑士", output_dir=Path(directory), ability_names=ABILITY_NAMES, ability_names_build="test", **CONTENT_ARGS)
 
 
 if __name__ == "__main__":

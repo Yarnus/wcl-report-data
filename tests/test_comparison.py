@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from wcl_raid_coach.comparison import compare_player
-from wcl_raid_coach.cohort import sign_benchmark
+from wcl_raid_coach.cohort import identify_benchmark
 from wcl_raid_coach.errors import InputError
 
 
@@ -12,15 +13,16 @@ IDENTITY = {"game_version": "retail", "partition_id": 2, "encounter_id": 1007, "
 
 class ComparisonTests(unittest.TestCase):
     def test_compares_casts_but_prohibits_treating_damage_gap_as_improvement(self) -> None:
-        target = {"comparison_identity": IDENTITY, "player": {"name": "Player"}, "metrics": {"damage_total": 100, "deaths": 0, "casts": {"1": 2}}}
-        benchmark = {"identity": IDENTITY, "sample_count": 3, "confidence": "low", "stable_pattern_claims_allowed": True, "metrics": {"damage_total_median": 200, "casts_median": {"1": 3}}}
-        result = compare_player(target, benchmark)
+        target = {"comparison_identity": IDENTITY, "player": {"actor_id": 10, "name": "Player"}, "evidence": {"manifest_path": "/local/manifest.json", "index_path": "/local/report.json"}, "metrics": {"damage_total": 100, "deaths": 0, "casts": {"1": 2}}}
+        benchmark = identify_benchmark({"schema_version": 2, "cohort_id": "c" * 64, "identity": IDENTITY, "sample_count": 3, "confidence": "low", "stable_pattern_claims_allowed": True, "metrics": {"damage_total_median": 200, "casts_median": {"1": 3}}})
+        with patch("wcl_raid_coach.comparison.analyze_player", return_value=target):
+            result = compare_player(target, benchmark)
         self.assertEqual(result["metrics"]["cast_count_deltas"]["1"], -1)
         self.assertFalse(result["claim_limits"]["damage_delta_is_achievable_improvement"])
 
     def test_rejects_different_encounter_benchmark(self) -> None:
         target = {"comparison_identity": IDENTITY, "metrics": {}}
-        benchmark = {"identity": IDENTITY | {"encounter_id": 1008}, "metrics": {}}
+        benchmark = identify_benchmark({"schema_version": 2, "cohort_id": "c" * 64, "identity": IDENTITY | {"encounter_id": 1008}, "metrics": {}})
         with self.assertRaises(InputError):
             compare_player(target, benchmark)
 
@@ -28,11 +30,11 @@ class ComparisonTests(unittest.TestCase):
         with self.assertRaises(InputError):
             compare_player([], {})
 
-    def test_signed_comparison_requires_verified_analysis_evidence(self) -> None:
-        benchmark = sign_benchmark({"identity": IDENTITY}, "secret")
+    def test_comparison_requires_verified_analysis_evidence(self) -> None:
+        benchmark = identify_benchmark({"schema_version": 2, "cohort_id": "c" * 64, "identity": IDENTITY})
         target = {"comparison_identity": IDENTITY, "metrics": {}}
         with self.assertRaises(InputError):
-            compare_player(target, benchmark, signing_key="secret")
+            compare_player(target, benchmark)
 
 
 if __name__ == "__main__":

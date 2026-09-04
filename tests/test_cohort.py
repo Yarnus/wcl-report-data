@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 from datetime import datetime, timezone
 
-from wcl_raid_coach.cohort import build_benchmark, extract_ranking_candidates, sign_cohort, validate_analysis_membership, verify_cohort
+from wcl_raid_coach.cohort import build_benchmark, extract_ranking_candidates, identify_benchmark, identify_cohort, validate_analysis_membership, verify_benchmark, verify_cohort
 from wcl_raid_coach.errors import InputError
 from wcl_raid_coach.storage import sha256_file
 
@@ -52,14 +52,38 @@ class CohortTests(unittest.TestCase):
         self.assertEqual(len(result["rejected_candidates"]), 1)
         self.assertIsNone(result["unverified_recency_candidates"][0]["source_id"])
 
-    def test_signed_cohort_rejects_edits(self) -> None:
-        cohort = sign_cohort({"filters": EXPECTED, "candidates": []}, "secret")
-        verify_cohort(cohort, "secret")
+    def test_content_addressed_cohort_rejects_edits(self) -> None:
+        cohort = identify_cohort({"schema_version": 2, "filters": dict(EXPECTED), "candidates": []})
+        verify_cohort(cohort)
+        self.assertRegex(cohort["cohort_id"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("signature", cohort)
         cohort["filters"]["encounter_id"] = 1008
         with self.assertRaises(InputError):
-            verify_cohort(cohort, "secret")
+            verify_cohort(cohort)
 
-    def test_analysis_must_belong_to_signed_recent_candidates(self) -> None:
+    def test_rejects_legacy_hmac_artifacts(self) -> None:
+        with self.assertRaisesRegex(InputError, "schema version"):
+            verify_cohort({"schema_version": 1, "signature": "a" * 64})
+        with self.assertRaisesRegex(InputError, "schema version"):
+            verify_benchmark({"schema_version": 1, "signature": "a" * 64})
+
+    def test_rejects_malformed_content_addressed_artifact_identity(self) -> None:
+        with self.assertRaisesRegex(InputError, "schema version"):
+            verify_cohort({"schema_version": 2.0, "cohort_id": "a" * 64})
+        benchmark = identify_benchmark({"schema_version": 2, "identity": EXPECTED})
+        with self.assertRaisesRegex(InputError, "Ranking Cohort content ID"):
+            verify_benchmark(benchmark)
+
+    def test_content_addressed_benchmark_rejects_edits(self) -> None:
+        benchmark = identify_benchmark({"schema_version": 2, "cohort_id": "c" * 64, "identity": dict(EXPECTED), "sample_count": 3})
+        verify_benchmark(benchmark)
+        self.assertRegex(benchmark["benchmark_id"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("signature", benchmark)
+        benchmark["sample_count"] = 4
+        with self.assertRaises(InputError):
+            verify_benchmark(benchmark)
+
+    def test_analysis_must_belong_to_content_addressed_recent_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "manifest.json"
             index = Path(directory) / "index.json"
@@ -68,33 +92,34 @@ class CohortTests(unittest.TestCase):
             analysis = self.analysis({"deaths": 0}, suffix="7")
             analysis["identity"]["report_code"] = "ABC"
             analysis["evidence"] = {"manifest_path": str(manifest), "manifest_sha256": sha256_file(manifest), "index_path": str(index), "index_sha256": sha256_file(index)}
-            cohort = sign_cohort({"eligible_recent_candidates": [{"report_code": "ABC", "fight_id": 7, "source_id": 10}]}, "secret")
+            cohort = identify_cohort({"schema_version": 2, "eligible_recent_candidates": [{"report_code": "ABC", "fight_id": 7, "source_id": 10}]})
             with patch("wcl_raid_coach.cohort.analyze_player", return_value=analysis):
-                validate_analysis_membership([analysis], cohort, "secret")
+                validate_analysis_membership([analysis], cohort)
             other = analysis | {"identity": analysis["identity"] | {"report_code": "OTHER"}}
             with self.assertRaises(InputError):
-                validate_analysis_membership([other], cohort, "secret")
+                validate_analysis_membership([other], cohort)
 
     def test_builds_one_encounter_benchmark_from_three_safe_samples(self) -> None:
         analyses = []
         for index, damage in enumerate((100, 200, 300), 1):
             analyses.append(self.analysis({"deaths": 0, "damage_total": damage, "damage_by_target": {"20": damage}, "casts": {"1": 2}, "first_cast_ms": {"1": 100}}, suffix=str(index)))
-        benchmark = build_benchmark(analyses, PROFILE, SPEC_PROFILE, EXPECTED)
+        benchmark = build_benchmark(analyses, PROFILE, SPEC_PROFILE, EXPECTED, cohort_id="c" * 64)
         self.assertEqual(benchmark["sample_count"], 3)
         self.assertEqual(benchmark["metrics"]["damage_total_median"], 200)
         self.assertEqual(benchmark["confidence"], "low")
         self.assertEqual(benchmark["mechanic_anchors"], PROFILE["mechanic_anchors"])
+        self.assertEqual(benchmark["cohort_id"], "c" * 64)
 
     def test_rejects_mixed_encounter_samples(self) -> None:
         analyses = [self.analysis({"deaths": 0, "damage_total": 100, "damage_by_target": {"20": 100}, "casts": {}}, EXPECTED | {"encounter_id": 1008}, str(index)) for index in range(1, 4)]
         with self.assertRaises(InputError):
-            build_benchmark(analyses, PROFILE, SPEC_PROFILE, EXPECTED)
+            build_benchmark(analyses, PROFILE, SPEC_PROFILE, EXPECTED, cohort_id="c" * 64)
 
     def test_healer_samples_require_healing_but_not_priority_target_damage(self) -> None:
         expected = EXPECTED | {"class_name": "Priest", "spec_name": "Discipline"}
         analyses = [self.analysis({"deaths": 0, "damage_total": 0, "healing_total": healing, "damage_by_target": {}, "casts": {}}, expected, str(index)) for index, healing in enumerate((100, 200, 300), 1)]
         healer_profile = SPEC_PROFILE | {"identity": SPEC_PROFILE["identity"] | {"class_name": "Priest", "spec_name": "Discipline"}}
-        benchmark = build_benchmark(analyses, PROFILE, healer_profile, expected)
+        benchmark = build_benchmark(analyses, PROFILE, healer_profile, expected, cohort_id="c" * 64)
         self.assertEqual(benchmark["role"], "healer")
 
 
