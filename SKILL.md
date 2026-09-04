@@ -16,7 +16,7 @@ metadata:
 
 只使用 Warcraft Logs 官方 GraphQL API 建立日志事实。使用当前、有来源的资料解释事实。使用用户当前使用的语言回答。
 
-先定位本文件所在的 Skill 根目录，再以该目录为工作目录运行 bundled CLI：`python -m wcl_raid_coach`。不得假设 Skill 已全局安装。CLI 始终向标准输出写入 JSON，持久数据和缓存不得写入 Skill 根目录。需要暂存 Profile 或聚合输入时，由宿主选择 Skill 根目录之外可写的 `<WORK_DIR>`；命令中的尖括号表示应替换的路径或参数，不是字面值。
+先定位本文件所在的目录并记为 `<SKILL_ROOT>`；该目录必须同时包含 `SKILL.md` 和 `wcl_raid_coach/`。每次都在同一条 shell 命令中先进入该目录，再运行 bundled CLI；不得先从当前工作目录尝试，也不得假设 Skill 已全局安装。CLI 始终向标准输出写入 JSON，持久数据和缓存不得写入 Skill 根目录。需要暂存 Profile 或聚合输入时，由宿主选择 Skill 根目录之外可写的 `<WORK_DIR>`；命令中的尖括号表示应替换的路径或参数，不是字面值。
 
 ## 1. 路由请求
 
@@ -35,7 +35,7 @@ metadata:
 首次访问 WCL 前运行：
 
 ```bash
-python -m wcl_raid_coach doctor
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach doctor
 ```
 
 普通用户只需通过 Agent 宿主的私密环境配置提供 `WCL_CLIENT_ID` 和 `WCL_CLIENT_SECRET`。不得询问、输出、记录或持久化 client secret/access token。凭据不可用或需要确认存储位置时阅读[凭据与存储配置](references/setup.md)。
@@ -45,7 +45,7 @@ python -m wcl_raid_coach doctor
 建立整个团队的 Report Index：
 
 ```bash
-python -m wcl_raid_coach inspect "<WCL_URL>"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach inspect "<WCL_URL>"
 ```
 
 没有数字 fight 时，展示 Boss Attempt 与参与者选择并等待用户确认。不得自动选择最后一场、击杀场或 URL source hint。Encounter Designator 只用于解释用户选择，不能代替数字 fight ID。
@@ -53,7 +53,7 @@ python -m wcl_raid_coach inspect "<WCL_URL>"
 准备用户明确选择的 Boss Attempt：
 
 ```bash
-python -m wcl_raid_coach prepare "<WCL_URL_WITH_NUMERIC_FIGHT>"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach prepare "<WCL_URL_WITH_NUMERIC_FIGHT>"
 ```
 
 只有 `complete: true`、到达显式 `nextPageTimestamp: null`、通过哈希检查且没有跨 Report Revision 的 Complete Bundle 才能进入持久化的个人复盘、Benchmark 或 Guide 分析。机制复盘使用第 4 节的临时证据路径。
@@ -61,7 +61,7 @@ python -m wcl_raid_coach prepare "<WCL_URL_WITH_NUMERIC_FIGHT>"
 按需查询 Canonical Event：
 
 ```bash
-python -m wcl_raid_coach query "<MANIFEST_PATH>" --type damage --source-id 10
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach query "<MANIFEST_PATH>" --type damage --source-id 10
 ```
 
 ## 4. 机制复盘
@@ -71,13 +71,13 @@ Mechanic Review 当前只覆盖 The Venomous Abyss（WCL zone `53`）的官方 8
 裸报告 URL 或只给 Encounter Designator 时列出候选 Boss Attempt，等待用户选择数字 fight。不得自动选择击杀、最后一次或全部尝试：
 
 ```bash
-python -m wcl_raid_coach coach mechanics "<WCL_REPORT_URL>" --encounter H2
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_REPORT_URL>" --encounter H2
 ```
 
 用户确认数字 fight 后直接分析 URL 中明确的 Boss Attempt：
 
 ```bash
-python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>"
 ```
 
 击杀和灭团均可分析，但 Boss Attempt 必须已完成；`fight=last` 不够明确，必须拒绝。`--encounter` 与 URL 数字 fight 同时存在时，两者必须匹配。
@@ -95,7 +95,7 @@ python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>"
 准备 Complete Bundle 后计算个人日志事实：
 
 ```text
-python -m wcl_raid_coach coach review "<MANIFEST_PATH>" --index "<REPORT_INDEX_PATH>" --source-id <ACTOR_ID> --partition-id <PARTITION_ID>
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach review "<MANIFEST_PATH>" --index "<REPORT_INDEX_PATH>" --source-id <ACTOR_ID> --partition-id <PARTITION_ID>
 ```
 
 `coach review` 只产生结构化日志事实。要评价表现，必须再建立同 encounter、difficulty、class、spec 和 partition 的 Encounter Benchmark。不得把总排名差距写成可实现提升。
@@ -105,7 +105,7 @@ python -m wcl_raid_coach coach review "<MANIFEST_PATH>" --index "<REPORT_INDEX_P
 例如用户说“给我一个邪 DK 打 H7 H8 的攻略”，先解析请求：
 
 ```text
-python -m wcl_raid_coach coach resolve --spec "邪 DK" --encounter H7 --encounter H8
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach resolve --spec "邪 DK" --encounter H7 --encounter H8
 ```
 
 该命令使用 WCL 官方元数据解析唯一当前 Retail 团本、Heroic 难度、原始 encounter 顺序和默认 ranking partition。向用户展示 Boss 名称、encounter ID、难度、partition 和规范专精；用户确认前不得发现排名或下载候选事件。
@@ -113,7 +113,7 @@ python -m wcl_raid_coach coach resolve --spec "邪 DK" --encounter H7 --encounte
 确认任务：
 
 ```bash
-python -m wcl_raid_coach coach confirm "<TASK_ID>"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach confirm "<TASK_ID>"
 ```
 
 H7 与 H8 是两个 Encounter Benchmark。不得混合它们的 cohort、分析或样本数量。
@@ -128,7 +128,7 @@ H7 与 H8 是两个 Encounter Benchmark。不得混合它们的 cohort、分析�
 资料优先级：Blizzard/WCL 官方资料；维护中的职业社区、专精指南和模拟文档；Wowhead/Icy Veins 交叉验证。Profile 保存 URL、标题、访问时间、引用摘要和内容哈希，不保存整篇第三方文章。
 
 ```text
-python -m wcl_raid_coach coach profile "<WORK_DIR>/profile.json"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach profile "<WORK_DIR>/profile.json"
 ```
 
 Encounter Profile 必须声明优先目标与排除目标。Profile 缺失或校验失败时，可以展示排名候选，但禁止生成稳定高分打法 benchmark。
@@ -138,7 +138,7 @@ Encounter Profile 必须声明优先目标与排除目标。Profile 缺失或校
 每个 Boss 分别运行：
 
 ```text
-python -m wcl_raid_coach coach candidates --game-version <GAME_VERSION> --encounter-id <ENCOUNTER_ID> --difficulty-id <DIFFICULTY_ID> --partition-id <PARTITION_ID> --class-name DeathKnight --spec-name Unholy
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach candidates --game-version <GAME_VERSION> --encounter-id <ENCOUNTER_ID> --difficulty-id <DIFFICULTY_ID> --partition-id <PARTITION_ID> --class-name DeathKnight --spec-name Unholy
 ```
 
 默认只使用最近 14 天且身份完整的候选。Ranking Candidate 不是 Reference Sample。目标为每个 Boss 10 个有效样本；3 到 9 个只能给低置信度聚合；少于 3 个只能做个案观察，不能生成稳定打法。
@@ -159,13 +159,13 @@ python -m wcl_raid_coach coach candidates --game-version <GAME_VERSION> --encoun
 每个 Boss 分别聚合：
 
 ```text
-python -m wcl_raid_coach coach benchmark "<WORK_DIR>/analysis-1.json" "<WORK_DIR>/analysis-2.json" "<WORK_DIR>/analysis-3.json" --cohort "<WORK_DIR>/cohort.json" --encounter-profile "<WORK_DIR>/encounter-profile.json" --specialization-profile "<WORK_DIR>/specialization-profile.json" --output "<WORK_DIR>/benchmark.json"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach benchmark "<WORK_DIR>/analysis-1.json" "<WORK_DIR>/analysis-2.json" "<WORK_DIR>/analysis-3.json" --cohort "<WORK_DIR>/cohort.json" --encounter-profile "<WORK_DIR>/encounter-profile.json" --specialization-profile "<WORK_DIR>/specialization-profile.json" --output "<WORK_DIR>/benchmark.json"
 ```
 
 最后将多个独立 benchmark 合并成不可变 Guide Snapshot：
 
 ```text
-python -m wcl_raid_coach coach guide "<WORK_DIR>/h7-benchmark.json" "<WORK_DIR>/h8-benchmark.json" --spec-display-name "邪恶死亡骑士"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach guide "<WORK_DIR>/h7-benchmark.json" "<WORK_DIR>/h8-benchmark.json" --spec-display-name "邪恶死亡骑士"
 ```
 
 输出包括与用户语言一致的 Markdown 和 JSON 索引。当前 bundled Guide Snapshot renderer 只生成中文 Markdown；英文请求生成最终 Guide Snapshot 前必须明确告知这一限制，不得把中文 artifact 伪装成英文结果。报告必须区分：
@@ -189,7 +189,7 @@ Encounter 和 NPC 名称使用独立的 `content-names.zhCN.json`。该 mapping 
 API 点数低于 15% 或 50 点的较高者时停止。持久化采集遇到 `wcl_rate_limit` 时保留 Complete Bundle 检查点和已完成 Boss 章节，不降低证据要求。Mechanic Review 没有检查点，限流或中断后必须重新运行。使用以下命令查看任务：
 
 ```bash
-python -m wcl_raid_coach coach status
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach status
 ```
 
 多 Boss 请求允许 `partial`：已完成章节可以交付，未完成章节必须显示阻塞原因，不能用低证据内容填充。

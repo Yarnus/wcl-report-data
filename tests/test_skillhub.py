@@ -20,6 +20,14 @@ class SkillHubPackageTests(unittest.TestCase):
         self.assertIn("<WORK_DIR>", skill)
         self.assertIn("references/setup.md", skill)
 
+    def test_every_bundled_cli_example_enters_the_skill_root(self) -> None:
+        root = Path(__file__).parents[1]
+        skill = (root / "SKILL.md").read_text(encoding="utf-8")
+        bare_commands = re.findall(r"(?m)^python -m wcl_raid_coach(?:\s|$)", skill)
+
+        self.assertEqual(bare_commands, [])
+        self.assertIn('cd "<SKILL_ROOT>" && python -m wcl_raid_coach doctor', skill)
+
     def test_runtime_document_links_resolve(self) -> None:
         root = Path(__file__).parents[1]
         runtime_documents = [root / "SKILL.md", root / "README.md", root / "README.en.md"]
