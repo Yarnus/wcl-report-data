@@ -38,6 +38,6 @@ These rules apply to code, documentation, SkillHub packaging, and release work i
 - Keep the version synchronized in `SKILL.md`, `pyproject.toml`, and `wcl_raid_coach/__init__.py`.
 - Releases are automated from `main` using Conventional Commits: `fix` increments patch, `feat` increments minor, and `!` or `BREAKING CHANGE` increments major. Other commit types do not trigger a release.
 - The release workflow synchronizes the three version files, commits and tags the release, then builds the artifact from that immutable tag with `make package REF=vX.Y.Z`.
-- Run `make publish-dry-run REF=vX.Y.Z` before every SkillHub publish. Preserve `slug: wcl-raid-coach` so existing SkillHub installations update in place.
+- Run `make publish-dry-run REF=vX.Y.Z` before every SkillHub publish. Preserve `name: wcl-report-data` and `slug: wcl-report-data` so the original SkillHub listing updates in place; the Python module remains `wcl_raid_coach`.
 - `PACKAGE_PATHS` in `Makefile` is the release allowlist. Keep it synchronized with user-facing runtime documentation and assets.
 - Package only allowlisted paths; keep repository instructions, tests, build metadata, and repository tooling outside the SkillHub zip.

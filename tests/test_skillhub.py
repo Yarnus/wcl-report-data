@@ -10,8 +10,10 @@ class SkillHubPackageTests(unittest.TestCase):
         root = Path(__file__).parents[1]
         skill = (root / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("name: wcl-raid-coach", skill)
-        self.assertIn("slug: wcl-raid-coach", skill)
+        self.assertIn("name: wcl-report-data", skill)
+        self.assertIn("slug: wcl-report-data", skill)
+        self.assertNotIn("name: wcl-raid-coach", skill)
+        self.assertNotIn("slug: wcl-raid-coach", skill)
         self.assertNotIn("WorkBuddy", skill)
         self.assertNotIn("/tmp", skill)
         self.assertNotRegex(skill, r"(?m)\\$")

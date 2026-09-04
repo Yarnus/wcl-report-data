@@ -177,7 +177,7 @@ git diff --check
 
 ## Releases
 
-`main` uses Conventional Commits for automated releases: `fix` triggers a patch, `feat` a minor, and `!` or `BREAKING CHANGE` a major release; other commit types do not release by themselves. The workflow synchronizes `SKILL.md`, `pyproject.toml`, and `wcl_raid_coach/__init__.py`, creates the release commit and `vX.Y.Z` tag, builds the sole Agent Skill zip from that immutable tag, creates a GitHub Release, and publishes the same zip to the existing `wcl-raid-coach` SkillHub listing.
+`main` uses Conventional Commits for automated releases: `fix` triggers a patch, `feat` a minor, and `!` or `BREAKING CHANGE` a major release; other commit types do not release by themselves. The workflow synchronizes `SKILL.md`, `pyproject.toml`, and `wcl_raid_coach/__init__.py`, creates the release commit and `vX.Y.Z` tag, builds the sole Agent Skill zip from that immutable tag, creates a GitHub Release, and publishes the same zip to the existing `wcl-report-data` SkillHub listing. The SkillHub publishing identity is fixed at `name/slug: wcl-report-data`; it is independent of the bundled Python module name `wcl_raid_coach`.
 
 A repository maintainer must configure a SkillHub personal API token as the GitHub Actions secret `SKILLHUB_TOKEN`. Typical Skill users do not need this token and still configure only `WCL_CLIENT_ID` and `WCL_CLIENT_SECRET`. The release workflow pins and verifies the SkillHub CLI artifact and performs a local dry-run before publishing.
 

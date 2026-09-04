@@ -173,7 +173,7 @@ git diff --check
 
 ## 发布
 
-`main` 使用 Conventional Commits 自动发布：`fix` 触发 patch、`feat` 触发 minor，`!` 或 `BREAKING CHANGE` 触发 major；其他提交类型不单独发布。workflow 自动同步 `SKILL.md`、`pyproject.toml` 和 `wcl_raid_coach/__init__.py`，创建 release commit 与 `vX.Y.Z` tag，从该不可变 tag 构建唯一 Agent Skill zip，创建 GitHub Release，再把同一个 zip 发布到原有 `wcl-raid-coach` SkillHub 条目。
+`main` 使用 Conventional Commits 自动发布：`fix` 触发 patch、`feat` 触发 minor，`!` 或 `BREAKING CHANGE` 触发 major；其他提交类型不单独发布。workflow 自动同步 `SKILL.md`、`pyproject.toml` 和 `wcl_raid_coach/__init__.py`，创建 release commit 与 `vX.Y.Z` tag，从该不可变 tag 构建唯一 Agent Skill zip，创建 GitHub Release，再把同一个 zip 发布到原有 `wcl-report-data` SkillHub 条目。SkillHub 发布身份固定为 `name/slug: wcl-report-data`；这与 bundled Python 模块名 `wcl_raid_coach` 相互独立。
 
 仓库维护者需将 SkillHub personal API token 配置为 GitHub Actions secret `SKILLHUB_TOKEN`。普通 Skill 用户不需要该 token，仍只需配置 `WCL_CLIENT_ID` 和 `WCL_CLIENT_SECRET`。发布 workflow 固定并校验 SkillHub CLI artifact；发布前先执行本地 dry-run。
 

@@ -1,12 +1,12 @@
 ---
-name: wcl-raid-coach
+name: wcl-report-data
 description: 分析正式服 Warcraft Logs 团队副本。用户提供 WCL 报告链接、要求机制或个人复盘、需要团队事件数据，或询问当前团本指定 Boss 和专精的高分日志攻略时使用。
-slug: wcl-raid-coach
+slug: wcl-report-data
 displayName: WCL 团队副本教练
 version: 2.1.0
 summary: 准备可复现的全团证据，复核首领机制与个人表现，并从当前高分日志生成 Boss 攻略。
 license: MIT
-homepage: https://github.com/Yarnus/wcl-raid-coach
+homepage: https://github.com/Yarnus/wcl-report-data
 compatibility: 需要 Python 3.11+、互联网连接，以及用户自己的 Warcraft Logs API 客户端凭据。
 metadata:
   tags: [warcraft-logs, world-of-warcraft, raid, coaching]
