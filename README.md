@@ -4,9 +4,9 @@
   <img src="assets/timewarp-inn-dog.svg" width="220" alt="大黄狗守护时空旅馆的原创奇幻图标">
 </p>
 
-`wcl-raid-coach` 是一个面向 WorkBuddy 的 Agent Skill 和 Python 3.11+ 软件包，用于准备正式服 Warcraft Logs 团队副本证据、复盘个人表现，以及基于当前 Boss 高分日志生成攻略。
+`wcl-raid-coach` 是一个面向 WorkBuddy 的 Agent Skill 和 Python 3.11+ 软件包，用于准备正式服 Warcraft Logs 团队副本证据、实时复核首领机制、复盘个人表现，以及基于当前 Boss 高分日志生成攻略。
 
-它只使用 WCL 官方 OAuth 和 GraphQL API，不抓取报告网页。所有复盘和攻略都以 Report Revision 隔离的 Complete Bundle 为事实基础；高分攻略还要求签名 Ranking Cohort 和带来源的 Profile。
+它只使用 WCL 官方 OAuth 和 GraphQL API，不抓取报告网页。个人复盘和攻略以 Report Revision 隔离的 Complete Bundle 为事实基础；Mechanic Review 使用同样隔离、但不落盘的 Mechanic Evidence Set。
 
 [English documentation](README.en.md)
 
@@ -17,6 +17,7 @@
 - 支持 `warcraftlogs.com`、`www.warcraftlogs.com` 和 `cn.warcraftlogs.com` 报告链接。
 - CN 链接会规范化为全球站链接，API 请求仍使用 WCL 官方全球端点。
 - 运行时只依赖 Python 标准库，不需要第三方 Python 包。
+- Mechanic Review 当前只覆盖 The Venomous Abyss 的官方 8 个团本首领及 Normal、Heroic、Mythic；不包含世界首领 Nymrissa Wavecaller。
 
 ## 快速开始
 
@@ -41,6 +42,22 @@ python -m wcl_raid_coach coach resolve --spec "邪 DK" --encounter H7 --encounte
 ```
 
 该命令只解析当前团本上下文并返回待确认任务。完整工作流见 [Skill 使用说明](SKILL.md)。
+
+实时复核一个明确的 Boss Attempt：
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12"
+```
+
+裸报告 URL 不会自动选择 Boss Attempt。可用 Encounter Designator 筛选候选，再把用户选定的数字 fight 写入 URL：
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>" --encounter H2
+```
+
+Mechanic Review 接受击杀和灭团，但只接受已完成的 Boss Attempt；`fight=last` 会被拒绝。
 
 准备 URL 中选中的战斗：
 
@@ -69,7 +86,7 @@ CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。
 
 Skill 能理解 `PT6`、`H6`、`M6` 形式的 Encounter Designator。前缀分别表示 Normal、Heroic、Mythic，数字表示 WCL `zone.encounters` 原始列表中的一基位置。Designator 只确定难度和 encounter；同一报告有多次匹配 Boss Attempt 时，Skill 必须列出明确的 fight ID 等待选择，不能自动选择击杀、最后一次或全部尝试。
 
-首次运行 `inspect`、`prepare`、`query` 或生成 Guide 时，CLI 会从 Wago Tools 下载当前 Retail zhCN `SpellName` CSV，并在数据目录生成完整的 `ability-names.zhCN.json` 及 metadata；已有有效 JSON 时不会再次联网。只有 ID 同时存在于 Report Index 的 `abilities[].gameID` 时才可使用 mapping。Guide 和 Skill 面向用户的正文必须使用 mapping 中的中文 SpellName，不得自行直译；机制 Spell ID 缺少中文 mapping 时停止生成最终攻略。中文名是当前客户端展示 enrichment，不改写 Report Index。
+首次运行 `inspect`、`prepare`、`query` 或生成 Guide 时，CLI 会从 Wago Tools 下载当前 Retail zhCN `SpellName` CSV，并在数据目录生成完整的 `ability-names.zhCN.json` 及 metadata；已有有效 JSON 时不会再次联网。只有 ID 同时存在于 Report Index 的 `abilities[].gameID` 时才可使用 mapping。Guide 和 Skill 面向用户的正文必须使用 mapping 中的中文 SpellName，不得自行直译；机制 Spell ID 缺少中文 mapping 时停止生成最终攻略。中文名是当前客户端展示 enrichment，不改写 Report Index。Mechanic Review 不初始化该本地 mapping；它使用版本化 Mechanic Ruleset 随附的中英文机制名称。
 
 CLI 另行维护 `content-names.zhCN.json`，从同一 Wago 客户端 build 的 `Map`、`DungeonEncounter`、`JournalEncounter` 和 `JournalEncounterCreature` 中生成 Encounter/NPC 中英文映射。它只包含当前团队副本的 Normal、Heroic、Mythic 三个难度，以及当前配置的 8 个 Mythic+ 地图。WCL 原始英文名和 ID 继续作为审计数据；Wago 未提供 WCL NPC `gameID` 的可靠直连，因此 NPC 中文名只作为所属 Encounter 内的展示 enrichment，不能作为事件身份。
 
@@ -115,12 +132,15 @@ content-names.zhCN.meta.json
 
 ## 数据与安全边界
 
-- 只有 `manifest.json` 中 `complete: true` 的 Fight Bundle 才能被后续分析使用。
+- 只有 `manifest.json` 中 `complete: true` 的 Fight Bundle 才能用于个人复盘、Benchmark 或 Guide；Mechanic Review 使用下述临时证据例外。
 - Complete Bundle 必须到达显式的 `nextPageTimestamp: null`，事件时间戳有序，未跨 Report Revision，并通过文件哈希校验。
 - 所有分页请求都重复传入该战斗的固定 `startTime` 和 `endTime`；旧采集协议生成的 Bundle 会被拒绝并要求重新准备。
 - Canonical Event 只保留已知字段；未知字段名和次数写入 manifest，未知值留在 Raw Page 缓存中。
 - 角色名和服务器会保留在本地数据集，以便识别团队成员；对话中展示的数据可能由当前配置的模型服务商处理。
 - 查询结果是证据，不是结论。没有独立的首领机制知识来源时，不得把伤害标记为可规避或推断责任。
+- Mechanic Evidence Set 只在当前进程中存在，不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点。它必须完整跟随过滤事件分页到 `nextPageTimestamp: null`，保持固定 Boss Attempt 时间范围，并在前后校验同一 Report Revision。
+- Mechanic Review 使用安装包内最新版本的规则，不按报告日期回放历史热修规则。更新规则需要更新软件包；输出记录规则版本、来源和 `selection_policy: latest`。
+- 每条机制的触发、成功和失败计数都是规则定义的事件信号统计；不可由日志判定时为 `null`。异常仅表示已验证事件模式命中，不表示玩家责任、表现评价或灭团因果。
 
 ## 数据管理
 

@@ -23,6 +23,7 @@ from .coach_tasks import CoachTaskStore
 from .cohort import build_benchmark, extract_ranking_candidates, sign_benchmark, sign_cohort, validate_analysis_membership
 from .comparison import compare_player
 from .models import ReportRef
+from .mechanics import MechanicReviewService
 from .guides import create_guide_snapshot
 from .profiles import ProfileStore
 from .storage import atomic_write_json, read_json
@@ -103,6 +104,11 @@ def create_parser() -> argparse.ArgumentParser:
     review.add_argument("--source-id", type=int, required=True)
     review.add_argument("--partition-id", type=int)
     review.add_argument("--output", type=Path)
+    mechanics = coach_commands.add_parser(
+        "mechanics", help="Review observable raid mechanics from an in-memory Mechanic Evidence Set."
+    )
+    mechanics.add_argument("url")
+    mechanics.add_argument("--encounter", help="Optional Encounter Designator used to list matching Boss Attempts.")
     candidates = coach_commands.add_parser("candidates", help="Discover and sign recent ranking candidates.")
     candidates.add_argument("--encounter-id", type=int, required=True)
     candidates.add_argument("--difficulty-id", type=int, required=True)
@@ -148,6 +154,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     store = DatasetStore(args.data_root, args.cache_root)
     if args.command == "coach":
+        if args.coach_command == "mechanics":
+            credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
+            return MechanicReviewService(WclClient(credentials)).review(
+                ReportRef.parse(args.url),
+                encounter_designator=(
+                    EncounterDesignator.parse(args.encounter) if args.encounter else None
+                ),
+            )
         task_store = CoachTaskStore(args.data_root)
         if args.coach_command == "status":
             return {"action": "coach_status", "tasks": task_store.list_tasks()}

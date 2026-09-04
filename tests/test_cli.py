@@ -159,6 +159,43 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result["evidence_class"], "log_fact")
         self.assertEqual(result["analysis"]["metrics"]["deaths"], 0)
 
+    def test_coach_mechanics_uses_the_in_memory_review_service(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_root = Path(temporary) / "data"
+            cache_root = Path(temporary) / "cache"
+            args = create_parser().parse_args(
+                [
+                    "--data-root",
+                    str(data_root),
+                    "--cache-root",
+                    str(cache_root),
+                    "coach",
+                    "mechanics",
+                    "https://www.warcraftlogs.com/reports/AbC123",
+                    "--encounter",
+                    "H2",
+                ]
+            )
+            with (
+                patch("wcl_raid_coach.__main__.resolve_credentials"),
+                patch("wcl_raid_coach.__main__.WclClient"),
+                patch("wcl_raid_coach.__main__.MechanicReviewService") as service,
+            ):
+                service.return_value.review.return_value = {
+                    "action": "coach_mechanics",
+                    "selection_required": True,
+                    "fight_choices": [],
+                }
+                result = run(args)
+
+            self.assertFalse(data_root.exists())
+            self.assertFalse(cache_root.exists())
+
+        request = service.return_value.review.call_args
+        self.assertEqual(request.args[0].code, "AbC123")
+        self.assertEqual(request.kwargs["encounter_designator"].as_dict()["value"], "H2")
+        self.assertTrue(result["selection_required"])
+
     def test_invalid_coach_profile_encoding_returns_a_structured_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             profile = Path(temporary) / "profile.json"

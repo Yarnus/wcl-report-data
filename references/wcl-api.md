@@ -38,16 +38,18 @@ WCL 的 `translate: true` 会把 Report master ability 名称统一为英文，�
 
 当多个事件位于同一分页边界时，WCL 返回的事件可能超过请求上限。每次分页请求都必须重复传入战斗 `endTime`；省略它可能导致后续页返回空数据。采集器跟随 `nextPageTimestamp`，保留事件顺序，允许时间戳重复，并拒绝重复游标。
 
+Mechanic Review 使用独立的 `Report.events` 查询：单一数字 `fightID`、首页面以 Boss Attempt 起点作为 `startTime`、后续页以当前游标作为 `startTime`、固定 Boss Attempt `endTime`、`dataType: All`、actor/ability ID、每页上限 10,000，以及由当前规则集 ability ID 加 `death`、`interrupt`、`dispel` 组成的服务端 `filterExpression`。它不请求 `includeResources`。返回事件必须处于当前页游标和固定结束时间之间，并最终到达 `nextPageTimestamp: null`。
+
 ## 限流
 
 客户端会使用指数退避重试临时连接失败，以及 HTTP 500、502、503 和 504 响应。HTTP 429 会立即打开进程内断路器。
 
-执行 WCL 数据查询前，客户端至少保留 15% 或 50 个 API 点数，取两者中较大值。Report Index 查询的成本会随报告元数据增长，因此预留 500 点。事件和 revision 请求为完整重试预算预留点数，并在同一 GraphQL 响应中刷新限流快照。因安全预留而停止后，Raw Page 和检查点会保留，下一次调用可以继续。
+执行 WCL 数据查询前，客户端至少保留 15% 或 50 个 API 点数，取两者中较大值。Report Index 查询的成本会随报告元数据增长，因此预留 500 点。事件和 revision 请求为完整重试预算预留点数，并在同一 GraphQL 响应中刷新限流快照。持久化采集因安全预留而停止后会保留 Raw Page 和检查点；Mechanic Review 不落盘，必须从头重试。
 
 Ranking Cohort 使用进程的本地 client secret 做 HMAC 完整性签名；secret 本身不写入 cohort、日志或标准输出。修改已签名 cohort 后，benchmark 必须拒绝。
 
 ## Revision 与归档
 
-最后一个事件页完成后会再次检查 Report Revision。revision 已变化时不能发布 Fight Bundle。下一次调用会创建或使用新的 revision 目录。
+最后一个事件页完成后会再次检查 Report Revision。revision 已变化时不能发布 Fight Bundle，也不能返回 Mechanic Review 结果。持久化采集的下一次调用会创建或使用新的 revision 目录；Mechanic Review 重新采集临时证据。
 
-归档报告的元数据可能仍然可见，但事件不可访问。只有 WCL 明确表示当前 API 客户端可以访问归档事件时，才能创建 Fight Bundle。
+归档报告的元数据可能仍然可见，但事件不可访问。只有 WCL 明确表示当前 API 客户端可以访问归档事件时，才能创建 Fight Bundle 或执行 Mechanic Review。

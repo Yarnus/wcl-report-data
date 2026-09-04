@@ -1,10 +1,10 @@
 ---
 name: wcl-raid-coach
-description: 分析正式服 Warcraft Logs 团队副本。用户提供 WCL 报告链接、要求个人复盘、需要团队事件数据，或询问当前团本指定 Boss 和专精的高分日志攻略时使用。
+description: 分析正式服 Warcraft Logs 团队副本。用户提供 WCL 报告链接、要求机制或个人复盘、需要团队事件数据，或询问当前团本指定 Boss 和专精的高分日志攻略时使用。
 slug: wcl-raid-coach
 displayName: WCL 团队副本教练
 version: 2.0.0
-summary: 准备可复现的全团证据，复盘个人表现，并从当前高分日志生成 Boss 攻略。
+summary: 准备可复现的全团证据，复核首领机制与个人表现，并从当前高分日志生成 Boss 攻略。
 license: MIT
 homepage: https://github.com/Yarnus/wcl-raid-coach
 compatibility: 需要 WorkBuddy 或 Python 3.11+、互联网连接，以及用户自己的 Warcraft Logs API 客户端凭据。
@@ -23,6 +23,7 @@ metadata:
 将用户请求归入一个主要工作流：
 
 - **报告数据**：用户要求下载、准备或查询一份 WCL Report 的团队事实。
+- **机制复盘**：用户要求检查一份 WCL Report 中单个 Boss Attempt 的首领机制处理结果，但不要求个人表现评价。
 - **个人复盘**：用户提供 WCL URL，并要求评价一个玩家在一个 Boss Attempt 中的表现。
 - **通用攻略**：用户没有提供个人日志，要求当前 Retail 团本中某专精打一个或多个 Boss 的攻略。
 - **混合请求**：先完成个人复盘；用户明确要求通用打法时，再附同一 Boss 的通用原则。个人结论和群体结论必须分开。
@@ -55,7 +56,7 @@ python -m wcl_raid_coach inspect "<WCL_URL>"
 python -m wcl_raid_coach prepare "<WCL_URL_WITH_NUMERIC_FIGHT>"
 ```
 
-只有 `complete: true`、到达显式 `nextPageTimestamp: null`、通过哈希检查且没有跨 Report Revision 的 Complete Bundle 才能进入分析。
+只有 `complete: true`、到达显式 `nextPageTimestamp: null`、通过哈希检查且没有跨 Report Revision 的 Complete Bundle 才能进入持久化的个人复盘、Benchmark 或 Guide 分析。机制复盘使用第 4 节的临时证据路径。
 
 按需查询 Canonical Event：
 
@@ -63,7 +64,31 @@ python -m wcl_raid_coach prepare "<WCL_URL_WITH_NUMERIC_FIGHT>"
 python -m wcl_raid_coach query "<MANIFEST_PATH>" --type damage --source-id 10
 ```
 
-## 4. 个人复盘
+## 4. 机制复盘
+
+Mechanic Review 当前只覆盖 The Venomous Abyss（WCL zone `53`）的官方 8 个团本首领：Nek'zali、Entombed Sentinels、Vashnik、The Lost Explorers、Sszorak、The Twin Fangs、The Coiled Altar 和 Ula'tek，难度为 Normal、Heroic 或 Mythic。Nymrissa Wavecaller（encounter `3379`）是世界首领，必须排除。
+
+裸报告 URL 或只给 Encounter Designator 时列出候选 Boss Attempt，等待用户选择数字 fight。不得自动选择击杀、最后一次或全部尝试：
+
+```bash
+python -m wcl_raid_coach coach mechanics "<WCL_REPORT_URL>" --encounter H2
+```
+
+用户确认数字 fight 后直接分析 URL 中明确的 Boss Attempt：
+
+```bash
+python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>"
+```
+
+击杀和灭团均可分析，但 Boss Attempt 必须已完成；`fight=last` 不够明确，必须拒绝。`--encounter` 与 URL 数字 fight 同时存在时，两者必须匹配。
+
+该命令用当前 Mechanic Ruleset 的 ability ID 和 `death`、`interrupt`、`dispel` 建立服务端过滤表达式，固定 Boss Attempt 起止时间，完整分页到 `nextPageTimestamp: null`，并在结束后再次校验 Report Revision。Mechanic Evidence Set 只驻留进程内，不得创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点，也不得称为 Complete Bundle 或 Canonical Event 集。
+
+输出必须保留规则集版本、来源和 `selection_policy: latest`。`latest` 指当前安装包随附规则，不按报告发生时间回放历史热修规则，也不会运行时在线更新。机制名称使用规则集内版本化的中英文名称，不触发本地 Wago mapping 初始化。
+
+每条机制展示规则定义的触发、成功和失败事件计数；无法客观判断时值为 `null`。只有当前难度标记为 `verified` 的事件模式才能产生异常；`event_pattern_unverified` 和 observation 规则只列观察事实。没有匹配事件不等于机制处理正确。异常展开时间、玩家和原始 WCL 事件证据，但只表示事件模式命中，不表示玩家责任、表现评价或灭团因果；最终裁决交给人。
+
+## 5. 个人复盘
 
 裸报告 URL 先执行 `inspect`，让用户明确选择一个 Boss Attempt 和一个参与者。完整 URL 仍须确认 URL 中的 fight/source 指向预期对象。
 
@@ -79,7 +104,7 @@ python -m wcl_raid_coach coach review \
 
 `coach review` 只产生结构化日志事实。要评价表现，必须再建立同 encounter、difficulty、class、spec 和 partition 的 Encounter Benchmark。不得把总排名差距写成可实现提升。
 
-## 5. 通用攻略
+## 6. 通用攻略
 
 例如用户说“给我一个邪 DK 打 H7 H8 的攻略”，先解析请求：
 
@@ -171,7 +196,7 @@ python -m wcl_raid_coach coach guide \
 
 ### Spell 名称输出门禁
 
-生成攻略前必须确保 `ability-names.zhCN.json` 已从 Wago Tools 初始化并通过 metadata 哈希检查。所有由 `ability_id` 确认的 Spell 在面向用户的 Markdown 和对话正文中必须使用该 mapping 的中文名称；不得根据英文名自行翻译，也不得把裸数字 ID 或英文 SpellName 写入正文。
+生成攻略前必须确保 `ability-names.zhCN.json` 已从 Wago Tools 初始化并通过 metadata 哈希检查。所有由 `ability_id` 确认的 Spell 在面向用户的 Markdown 和对话正文中必须使用该 mapping 的中文名称；不得根据英文名自行翻译，也不得把裸数字 ID 或英文 SpellName 写入正文。该门禁不适用于只使用随包规则名称的 Mechanic Review。
 
 机制名称必须通过 Encounter Profile 的具体 `ability_id` 关联，不得按英文名称反查。若机制 Spell ID 缺少 zhCN mapping，停止生成最终攻略并返回结构化错误；不得静默回退为英文。JSON 索引可以保留 `ability_id`、WCL 原始名称和 mapping build 作为审计信息。
 
@@ -179,9 +204,9 @@ python -m wcl_raid_coach coach guide \
 
 Encounter 和 NPC 名称使用独立的 `content-names.zhCN.json`。该 mapping 只覆盖当前团本 Normal、Heroic、Mythic 和配置的 8 个 Mythic+ 地图，并保留 Wago Encounter/NPC ID、英文原名及客户端 build。Encounter 命中 mapping 时正文使用中文名；NPC 中文名只能作为所属 Encounter 内的展示 enrichment，不得按名称推断 WCL actor 身份。未命中时保留 WCL 原名，不得自行翻译。
 
-## 6. 限流与恢复
+## 7. 限流与恢复
 
-API 点数低于 15% 或 50 点的较高者时停止。遇到 `wcl_rate_limit`，保留 Complete Bundle 检查点和已完成 Boss 章节，不降低证据要求。使用以下命令查看任务：
+API 点数低于 15% 或 50 点的较高者时停止。持久化采集遇到 `wcl_rate_limit` 时保留 Complete Bundle 检查点和已完成 Boss 章节，不降低证据要求。Mechanic Review 没有检查点，限流或中断后必须重新运行。使用以下命令查看任务：
 
 ```bash
 python -m wcl_raid_coach coach status
@@ -189,12 +214,13 @@ python -m wcl_raid_coach coach status
 
 多 Boss 请求允许 `partial`：已完成章节可以交付，未完成章节必须显示阻塞原因，不能用低证据内容填充。
 
-## 7. 使用边界
+## 8. 使用边界
 
 - 仅支持 Retail 团队副本；Mythic+ 留待后续版本。
 - 仅支持公开和未列出 WCL Report。
 - 官方 WCL API only；不抓取 WCL 网页或私有端点。
-- 统一使用 Complete Bundle，不维护另一套按玩家下载的事件缓存。
-- 没有独立 Encounter Profile 时，不判断 padding、机制责任或可规避伤害。
+- 个人复盘、Benchmark 和 Guide 统一使用 Complete Bundle，不维护另一套按玩家下载的持久事件缓存；Mechanic Review 只使用临时 Mechanic Evidence Set。
+- 没有独立 Encounter Profile 或版本化 Mechanic Ruleset 时，不判断 padding、机制责任或可规避伤害。
+- Mechanic Review 的顶层 `judgment` 和 `causal_attribution` 必须始终为 `null`。
 - 坦克和治疗建议必须先满足相应的生存/治疗 guardrail；证据不足时停止建议。
 - 不建立持久玩家历史；只分析当前请求明确提供的报告。

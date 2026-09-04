@@ -82,9 +82,19 @@ Guide Snapshot Markdown must display Chinese SpellName and encounter names from 
 
 Time filters use `fight_time_ms`, and their bounds are inclusive.
 
+## Mechanic Evidence Set
+
+A Mechanic Evidence Set is the ephemeral input to Mechanic Review for one numeric fight ID. It binds one WCL Report, Report Revision, fixed Boss Attempt time range, and Mechanic Ruleset. It contains raw WCL event objects returned by a server-side filter for ruleset ability IDs plus `death`, `interrupt`, and `dispel`; it is not a Canonical Event collection.
+
+Collection preserves event order, rejects invalid or repeated pagination cursors, starts the first page at the Boss Attempt start, starts later pages at the current cursor, keeps the Boss Attempt end fixed, reaches an explicit `nextPageTimestamp: null`, and finally verifies that the Report Revision did not change. A fight's raw difficulty ID is still resolved through that report's `zone.difficulties` before selecting Normal, Heroic, or Mythic rules.
+
+The Mechanic Evidence Set exists only in the current process and creates no Report Index, Raw Page, Fight Bundle, manifest, hash, or checkpoint. An interruption, rate limit, or failure requires collection to restart. Results record the ruleset version, sources, and `selection_policy: latest`. Here `latest` means the newest rules shipped in the installed package; rules are neither selected by report date nor refreshed online at runtime.
+
+Per-mechanic counts describe only rule-defined event signals. A success or failure value is `null` when the log cannot establish it objectively. Only a pattern marked `verified` for the current difficulty may emit anomalies; `event_pattern_unverified` and observation rules emit none. An anomaly does not assign responsibility, performance, or wipe causality.
+
 ## Coaching Artifacts
 
-The coaching layer consumes only Complete Bundles that pass the integrity rules above. It cannot rewrite a Report Index, Fight Bundle, or Canonical Event.
+Personal Reviews, Benchmarks, and Guides consume only Complete Bundles that pass the integrity rules above. They cannot rewrite a Report Index, Fight Bundle, or Canonical Event. Mechanic Review is the non-persistent exception and consumes only its process-local Mechanic Evidence Set.
 
 - `profiles/` stores declarative Specialization Profiles and Encounter Profiles. Profile identity includes game version and ranking partition; an Encounter Profile also includes encounter and difficulty. The Profile ID is the SHA-256 of validated canonical JSON.
 - `cohorts/` stores a Ranking Cohort for exactly one encounter, difficulty, class, specialization, and partition. A Ranking Candidate becomes a Reference Sample only after Complete Bundle, hard-condition, and Encounter Profile eligibility checks pass.

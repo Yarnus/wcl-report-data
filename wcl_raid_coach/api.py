@@ -69,6 +69,23 @@ query FightEvents($code: String!, $fightIDs: [Int], $startTime: Float, $endTime:
 """
 
 
+MECHANIC_EVENT_QUERY = """
+query MechanicEvents(
+  $code: String!, $fightIDs: [Int], $startTime: Float, $endTime: Float, $filterExpression: String!, $limit: Int!
+) {
+  reportData {
+    report(code: $code, allowUnlisted: true) {
+      events(
+        fightIDs: $fightIDs, dataType: All, startTime: $startTime, endTime: $endTime, limit: $limit,
+        filterExpression: $filterExpression, translate: true, useAbilityIDs: true, useActorIDs: true
+      ) { data nextPageTimestamp }
+    }
+  }
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
+
 REVISION_QUERY = """
 query ReportRevision($code: String!) {
   reportData { report(code: $code, allowUnlisted: true) { revision } }
@@ -243,6 +260,37 @@ class WclClient:
             raise ApiError("WCL returned no event paginator.")
         return page
 
+    def fetch_mechanic_events_page(
+        self,
+        code: str,
+        fight_id: int,
+        start_time: float,
+        end_time: float,
+        filter_expression: str,
+        limit: int = 10_000,
+    ) -> dict[str, Any]:
+        self._ensure_circuit()
+        with self.reserve_api_points():
+            data = self.graphql(
+                MECHANIC_EVENT_QUERY,
+                {
+                    "code": code,
+                    "fightIDs": [fight_id],
+                    "startTime": start_time,
+                    "endTime": end_time,
+                    "filterExpression": filter_expression,
+                    "limit": limit,
+                },
+            )
+        report_data = data.get("reportData")
+        report = report_data.get("report") if isinstance(report_data, dict) else None
+        if not isinstance(report, dict):
+            raise ApiError("The WCL report became inaccessible while fetching mechanic events.")
+        page = report.get("events")
+        if not isinstance(page, dict):
+            raise ApiError("WCL returned no mechanic event paginator.")
+        return page
+
     def fetch_report_revision(self, code: str) -> int:
         self._ensure_circuit()
         with self.reserve_api_points():
@@ -250,7 +298,7 @@ class WclClient:
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
         revision = report.get("revision") if isinstance(report, dict) else None
-        if not isinstance(revision, int):
+        if type(revision) is not int:
             raise ApiError("WCL did not return a numeric report revision.")
         return revision
 

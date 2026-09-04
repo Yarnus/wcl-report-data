@@ -4,11 +4,11 @@
   <img src="assets/timewarp-inn-dog.svg" width="220" alt="Original fantasy icon of a golden dog guarding a timewarp inn">
 </p>
 
-`wcl-raid-coach` is a WorkBuddy Agent Skill and Python 3.11+ package for preparing Retail Warcraft Logs raid evidence, reviewing personal performance, and generating Boss guides from ranked references.
+`wcl-raid-coach` is a WorkBuddy Agent Skill and Python 3.11+ package for preparing Retail Warcraft Logs raid evidence, reviewing encounter mechanics and personal performance, and generating Boss guides from ranked references.
 
 It uses only the official Warcraft Logs OAuth and GraphQL APIs; it does not scrape report pages.
 
-Version 2.0 keeps Report Revision-safe evidence as the foundation and adds Personal Reviews plus current-raid guides built from validated ranked references and sourced Profiles.
+Personal Reviews and guides use Report Revision-safe Complete Bundles. Mechanic Review uses an equally revision-isolated, non-persistent Mechanic Evidence Set.
 
 [Chinese documentation](README.md)
 
@@ -19,6 +19,7 @@ Version 2.0 keeps Report Revision-safe evidence as the foundation and adds Perso
 - Accepts report URLs from `warcraftlogs.com`, `www.warcraftlogs.com`, and `cn.warcraftlogs.com`.
 - CN report URLs are normalized to the global site; API requests still use the official global WCL endpoints.
 - Runtime code uses only the Python standard library.
+- Mechanic Review currently covers all eight official raid encounters in The Venomous Abyss on Normal, Heroic, and Mythic; it excludes the Nymrissa Wavecaller world boss.
 
 ## Quick Start
 
@@ -43,6 +44,22 @@ python -m wcl_raid_coach coach resolve --spec "Unholy DK" --encounter H7 --encou
 ```
 
 This only resolves current-raid context and creates a task awaiting confirmation. See [the Skill instructions](SKILL.md) for the complete workflow.
+
+Review one explicit Boss Attempt in real time:
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12"
+```
+
+A bare report URL never selects a Boss Attempt automatically. Use an Encounter Designator to filter choices, then put the chosen numeric fight in the URL:
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>" --encounter H2
+```
+
+Mechanic Review accepts kills and wipes, but only completed Boss Attempts; it rejects `fight=last`.
 
 Prepare the fight selected in the URL:
 
@@ -71,7 +88,7 @@ The CLI always writes JSON to standard output, including structured domain error
 
 The Skill understands Encounter Designators such as `PT6`, `H6`, and `M6`. The prefixes mean Normal, Heroic, and Mythic; the number is the one-based position in WCL's original `zone.encounters` list. A designator identifies only a difficulty and encounter. When a report has multiple matching Boss Attempts, the Skill lists explicit fight IDs and waits for a choice instead of selecting a kill, the latest attempt, or every attempt.
 
-On the first `inspect`, `prepare`, `query`, or Guide generation, the CLI downloads the current Retail zhCN `SpellName` CSV from Wago Tools and creates a complete `ability-names.zhCN.json` plus metadata in the data directory. A valid existing JSON is reused without network access. A mapping may be used only when the ID also occurs in the Report Index `abilities[].gameID`. Guide and Skill user-facing text must use the mapped Chinese SpellName and must not translate names ad hoc; final guide generation stops when a mechanic Spell ID has no Chinese mapping. Chinese names are current-client display enrichment and do not modify the Report Index.
+On the first `inspect`, `prepare`, `query`, or Guide generation, the CLI downloads the current Retail zhCN `SpellName` CSV from Wago Tools and creates a complete `ability-names.zhCN.json` plus metadata in the data directory. A valid existing JSON is reused without network access. A mapping may be used only when the ID also occurs in the Report Index `abilities[].gameID`. Guide and Skill user-facing text must use the mapped Chinese SpellName and must not translate names ad hoc; final guide generation stops when a mechanic Spell ID has no Chinese mapping. Chinese names are current-client display enrichment and do not modify the Report Index. Mechanic Review does not initialize this local mapping; it uses the Chinese and English mechanic names shipped in the versioned Mechanic Ruleset.
 
 The CLI separately maintains `content-names.zhCN.json`, generated from `Map`, `DungeonEncounter`, `JournalEncounter`, and `JournalEncounterCreature` tables from one Wago client build. Its scope is limited to the current raid on Normal, Heroic, and Mythic plus the configured eight Mythic+ maps. Original WCL English names and IDs remain audit data. Wago does not provide a reliable direct link to WCL NPC `gameID`, so localized NPC names are encounter-scoped display enrichment and cannot be used as event identity.
 
@@ -121,12 +138,15 @@ Fight Bundles are immutable within a Report Revision. Re-exporting a report crea
 
 ## Data And Safety Boundaries
 
-- Only a Fight Bundle with `complete: true` in its manifest is eligible for downstream analysis.
+- Only a Fight Bundle with `complete: true` in its manifest is eligible for Personal Review, Benchmark, or Guide analysis; Mechanic Review uses the ephemeral exception below.
 - A Complete Bundle must reach an explicit `nextPageTimestamp: null`, preserve event ordering, stay within one Report Revision, and pass file hash checks.
 - Every pagination request repeats the fight's fixed `startTime` and `endTime`; Bundles made with the old collection protocol are rejected and must be prepared again.
 - Canonical Events retain known fields only. Unknown field names and counts are recorded in the manifest; unknown values remain in the Raw Page cache.
 - Character names and servers are retained locally to identify team members. Data shown in a conversation may be processed by the configured model provider.
 - Query output is evidence, not a conclusion. Without an independent source of encounter mechanics, do not label damage avoidable or infer responsibility.
+- A Mechanic Evidence Set exists only in the current process. It creates no Report Index, Raw Page, Fight Bundle, manifest, or checkpoint. It must follow filtered-event pagination to `nextPageTimestamp: null`, keep the fixed Boss Attempt range, and verify the same Report Revision before and after collection.
+- Mechanic Review uses the newest rules shipped with the installed package rather than replaying historical hotfix rules by report date. Updating rules requires updating the package; output records the ruleset version, sources, and `selection_policy: latest`.
+- Per-mechanic trigger, success, and failure counts describe rule-defined event signals and are `null` when the log cannot establish an outcome. An anomaly means only that a verified event pattern matched; it does not assign player responsibility, performance, or wipe causality.
 
 ## Dataset Management
 

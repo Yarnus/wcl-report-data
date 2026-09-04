@@ -40,18 +40,20 @@ WCL may return more than the requested limit when multiple events share a pagina
 
 The collector follows `nextPageTimestamp`, preserves event order, allows duplicate timestamps, and rejects repeated cursors.
 
+Mechanic Review uses a separate `Report.events` query with one numeric `fightID`, the Boss Attempt start as the first-page `startTime`, the current cursor as each later `startTime`, a fixed Boss Attempt `endTime`, `dataType: All`, actor and ability IDs, a 10,000 event page limit, and a server-side `filterExpression` built from ruleset ability IDs plus `death`, `interrupt`, and `dispel`. It does not request `includeResources`. Returned events must lie between the current page cursor and the fixed end time, and pagination must reach `nextPageTimestamp: null`.
+
 ## Rate Limits
 
 The client retries transient connection failures and HTTP 500, 502, 503, and 504 responses with exponential backoff. HTTP 429 opens a process-local circuit breaker immediately.
 
 Before WCL data queries, the client preserves at least 15 percent or 50 API points, whichever is larger. Report indexing reserves 500 points because its cost scales with report metadata.
 
-Event and revision requests reserve the full retry budget and refresh the rate snapshot in the same GraphQL response. Raw Pages and checkpoints remain available after a safe-reserve stop so the next invocation can resume.
+Event and revision requests reserve the full retry budget and refresh the rate snapshot in the same GraphQL response. Persistent collection retains Raw Pages and checkpoints after a safe-reserve stop. Mechanic Review writes nothing and must restart.
 
 The Ranking Cohort uses the process-local client secret for an HMAC integrity signature. The secret itself is never written to the cohort, logs, or standard output. Benchmarking rejects a signed cohort after modification.
 
 ## Revisions And Archives
 
-The Report Revision is checked after the final event page. A changed revision prevents Fight Bundle publication. The next invocation creates or uses the new revision directory.
+The Report Revision is checked after the final event page. A changed revision prevents both Fight Bundle publication and a Mechanic Review result. A later persistent collection creates or uses the new revision directory; Mechanic Review recollects its ephemeral evidence.
 
-Archived metadata may remain visible while events are inaccessible. A Fight Bundle is allowed only when WCL reports archived events as accessible to the current API client.
+Archived metadata may remain visible while events are inaccessible. A Fight Bundle or Mechanic Review is allowed only when WCL reports archived events as accessible to the current API client.

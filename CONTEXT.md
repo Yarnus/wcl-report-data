@@ -1,6 +1,6 @@
 # WCL Raid Coach
 
-This context describes reproducible Retail raid evidence, personal reviews, and ranked Boss guides.
+This context describes reproducible Retail raid evidence, live mechanic reviews, personal reviews, and ranked Boss guides.
 
 ## Evidence
 
@@ -40,7 +40,19 @@ _Avoid_: Canonical Event
 A Fight Bundle whose complete WCL event range was collected without crossing a Report Revision boundary.
 _Avoid_: Partial Bundle, cached fight
 
+**Mechanic Evidence Set**:
+The in-memory WCL metadata and complete filtered event range used to evaluate one Boss Attempt at one Report Revision against one Mechanic Ruleset. It is neither a Fight Bundle nor a Canonical Event collection.
+_Avoid_: Complete Bundle, Raw Page, saved dataset
+
 ## Coaching
+
+**Mechanic Review**:
+A reconstruction of observable encounter outcomes for one Boss Attempt. An anomaly means that a verified event pattern matched; it does not assign responsibility or wipe causality.
+_Avoid_: Personal Review, blame report
+
+**Mechanic Ruleset**:
+A versioned catalog of encounter- and difficulty-specific event signals, display names, validation status, expectations, and sources. Mechanic Review uses the newest rules shipped with the installed package, not rules selected by report date.
+_Avoid_: Encounter Profile, generic rule DSL
 
 **Coach Request**:
 A normalized user goal for report data, a Personal Review, or a Raid Guide.

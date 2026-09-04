@@ -78,9 +78,19 @@ Guide Snapshot 的 Markdown 展示必须使用已校验 Wago zhCN mapping 的中
 
 时间过滤使用 `fight_time_ms`，上下界均包含在结果中。
 
+## Mechanic Evidence Set
+
+Mechanic Evidence Set 是 Mechanic Review 对一个数字 fight ID 的临时输入，绑定一个 WCL Report、Report Revision、Boss Attempt 固定起止时间和 Mechanic Ruleset。它包含 WCL 按规则 ability ID 与 `death`、`interrupt`、`dispel` 服务端过滤后返回的原始事件对象，不是 Canonical Event 集。
+
+采集必须保持事件时间有序、拒绝无效或重复分页游标、首页面从 Boss Attempt 起点开始、后续页面从当前游标开始、始终固定 Boss Attempt 结束时间、到达显式 `nextPageTimestamp: null`，并在最后再次确认 Report Revision 未变化。战斗难度 ID 仍须通过该报告的 `zone.difficulties` 解释，再匹配规则的 Normal、Heroic 或 Mythic 范围。
+
+Mechanic Evidence Set 仅存在于当前进程内，不创建 Report Index、Raw Page、Fight Bundle、manifest、哈希或检查点；中断、限流或失败后必须重新采集。结果记录规则集版本、来源和 `selection_policy: latest`。`latest` 指安装包随附的最新规则，不按报告日期选择历史热修规则，也不表示运行时在线更新。
+
+每条机制的计数只描述规则定义的事件信号；日志无法客观判定成功或失败时，相应值为 `null`。只有当前难度标记为 `verified` 的事件模式才可产生异常；`event_pattern_unverified` 和 observation 规则不得产生异常。异常不是责任、表现评价或灭团因果。
+
 ## 教练 Artifact
 
-教练层只消费通过上述完整性检查的 Complete Bundle，不能重写 Report Index、Fight Bundle 或 Canonical Event。
+个人复盘、Benchmark 和 Guide 只消费通过上述完整性检查的 Complete Bundle，不能重写 Report Index、Fight Bundle 或 Canonical Event。Mechanic Review 是非持久化例外，只消费当前进程中的 Mechanic Evidence Set。
 
 - `profiles/` 保存声明式 Specialization Profile 和 Encounter Profile。Profile 身份包括 game version 与 ranking partition；Encounter Profile 还包括 encounter 和 difficulty。Profile ID 是校验后规范 JSON 的 SHA-256。
 - `cohorts/` 保存单一 encounter、difficulty、class、spec 与 partition 的 Ranking Cohort。Ranking Candidate 只有在 Complete Bundle、硬条件和 Encounter Profile eligibility 全部通过后才成为 Reference Sample。
