@@ -6,11 +6,11 @@ VERSION ?= $(shell if git cat-file -e "$(REF):wcl_raid_coach/__init__.py" 2>/dev
 ARCHIVE := $(DIST_DIR)/wcl-raid-coach-$(VERSION).zip
 PACKAGE_PATHS := CONTEXT.md LICENSE.md README.md README.en.md SKILL.md assets references wcl_raid_coach
 
-.PHONY: check package publish-dry-run publish clean-package
+.PHONY: check package package-smoke publish-dry-run publish clean-package
 
 check:
 	$(PYTHON) -m unittest -v
-	$(PYTHON) -m compileall -q wcl_raid_coach tests
+	$(PYTHON) -m compileall -q wcl_raid_coach tests tools
 	git diff --check
 
 package:
@@ -18,10 +18,13 @@ package:
 	@mkdir -p "$(DIST_DIR)"
 	git archive --format=zip --output="$(ARCHIVE)" "$(REF)" $(PACKAGE_PATHS)
 	$(PYTHON) -m zipfile -t "$(ARCHIVE)"
-	$(PYTHON) -c 'import sys, zipfile; names = set(zipfile.ZipFile(sys.argv[1]).namelist()); forbidden = {".gitignore", "AGENTS.md", "Makefile"}; found = sorted(names & forbidden); assert not found, f"release archive contains repository-only files: {found}"' "$(ARCHIVE)"
+	$(PYTHON) -c 'import sys, zipfile; names = set(zipfile.ZipFile(sys.argv[1]).namelist()); required = {"SKILL.md", "wcl_raid_coach/__main__.py"}; missing = sorted(required - names); forbidden = {".gitignore", "AGENTS.md", "Makefile", "pyproject.toml"}; found = sorted(names & forbidden); assert not missing, f"release archive is missing runtime files: {missing}"; assert not found, f"release archive contains repository-only files: {found}"' "$(ARCHIVE)"
 	@printf '%s\n' "Created $(ARCHIVE)"
 
-publish-dry-run: package
+package-smoke: package
+	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; $(PYTHON) -m zipfile -e "$(ARCHIVE)" "$$tmp"; cd "$$tmp" && $(PYTHON) -m wcl_raid_coach --help >/dev/null
+
+publish-dry-run: package-smoke
 	$(SKILLHUB) publish "$(ARCHIVE)" --dry-run --json
 
 publish: publish-dry-run

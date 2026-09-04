@@ -4,7 +4,7 @@
   <img src="assets/timewarp-inn-dog.svg" width="220" alt="大黄狗守护时空旅馆的原创奇幻图标">
 </p>
 
-`wcl-raid-coach` 是一个面向 WorkBuddy 的 Agent Skill 和 Python 3.11+ 软件包，用于准备正式服 Warcraft Logs 团队副本证据、实时复核首领机制、复盘个人表现，以及基于当前 Boss 高分日志生成攻略。
+`wcl-raid-coach` 是一个平台中立、自包含的 Agent Skill 和 Python 3.11+ 软件包，用于准备正式服 Warcraft Logs 团队副本证据、实时复核首领机制、复盘个人表现，以及基于当前 Boss 高分日志生成攻略。
 
 它只使用 WCL 官方 OAuth 和 GraphQL API，不抓取报告网页。个人复盘和攻略以 Report Revision 隔离的 Complete Bundle 为事实基础；Mechanic Review 使用同样隔离、但不落盘的 Mechanic Evidence Set。
 
@@ -23,7 +23,7 @@
 
 环境要求：Python 3.11+、可访问 `warcraftlogs.com`，以及 Warcraft Logs API v2 client ID 和 client secret。
 
-从仓库根目录或已安装的 Skill 目录运行 CLI：
+从仓库根目录运行 CLI。Agent 使用已安装的 Skill 时，应先定位 `SKILL.md` 所在的 Skill 根目录，再以该目录为工作目录运行 bundled CLI；无需全局安装 Python 包：
 
 ```bash
 python -m wcl_raid_coach doctor
@@ -76,7 +76,7 @@ python -m wcl_raid_coach prepare "https://www.warcraftlogs.com/reports/<code>" -
 
 ```bash
 python -m wcl_raid_coach query \
-  "/workspace/wcl-raid-coach/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
+  "<DATA_ROOT>/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
   --type damage --target-id 17 --limit 200
 ```
 
@@ -92,27 +92,27 @@ CLI 另行维护 `content-names.zhCN.json`，从同一 Wago 客户端 build 的 
 
 ## 凭据配置
 
-进程环境变量优先于 `.env` 文件。推荐使用规范名称：
+普通用户只需通过 Agent 宿主的私密环境配置提供以下规范变量：
 
 ```dotenv
 WCL_CLIENT_ID=
 WCL_CLIENT_SECRET=
 ```
 
-CLI 也兼容成对出现的 `WCL_ID` 和 `WCL_SECRET`。需要使用明确路径时，把全局参数放在子命令之前：
+CLI 也暂时兼容成对出现的 `WCL_ID` 和 `WCL_SECRET`。CLI 不自动读取当前目录或 `/workspace` 中的 `.env`；需要使用凭据文件时，把全局参数放在子命令之前并显式传入：
 
 ```bash
 python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" doctor
 python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
 ```
 
-AI 不应要求用户在对话中提供或粘贴 secret，不应覆盖已有 `.env`，也不应输出 client secret 或 access token。详细规则参见 [WorkBuddy 配置](references/workbuddy-setup.md) 和 [English setup guide](references/workbuddy-setup.en.md)。
+AI 不应要求用户在对话中提供或粘贴 secret，不应覆盖已有凭据文件，也不应输出 client secret 或 access token。详细规则参见[凭据与存储配置](references/setup.md)和 [English setup guide](references/setup.en.md)。
 
 ## 数据布局
 
-默认数据目录取决于运行环境：存在 `/workspace` 时使用 `/workspace/wcl-raid-coach/`；本地 Unix/macOS 使用 `~/.local/share/wcl-raid-coach/`；Windows 使用 `%LOCALAPPDATA%/wcl-raid-coach/`。可用 `WCL_RAID_COACH_HOME` 覆盖。
+普通用户无需配置存储路径。全局参数 `--data-root` 和 `--cache-root` 优先，其次是可选的 `WCL_RAID_COACH_HOME` 和 `WCL_RAID_COACH_CACHE`。未覆盖时，存在的持久 `/workspace` 作为云端 Agent 沙盒兼容 fallback；否则本地 Unix/macOS 使用 `~/.local/share/wcl-raid-coach/` 和 `~/.cache/wcl-raid-coach/`，Windows 使用 `%LOCALAPPDATA%/wcl-raid-coach/` 及其 `Cache/` 子目录。
 
-原始页和可续传检查点默认放在 `/workspace/.cache/wcl-raid-coach/` 或 `~/.cache/wcl-raid-coach/`，Windows 使用 `%LOCALAPPDATA%` 下的 `wcl-raid-coach/Cache`。可用 `WCL_RAID_COACH_CACHE` 覆盖。
+Skill 安装目录只保存程序与文档。Report Index、Complete Bundle、Profiles、任务和 Guide Snapshot 写入数据目录；Raw Page 和可续传检查点写入缓存目录。运行 `doctor` 可从 JSON 中查看实际的 `data_root` 和 `cache_root`。
 
 ```text
 reports/<report-code>/
@@ -167,9 +167,15 @@ make check
 
 ```bash
 python -m unittest -v
-python -m compileall -q wcl_raid_coach tests
+python -m compileall -q wcl_raid_coach tests tools
 git diff --check
 ```
+
+## 发布
+
+`main` 使用 Conventional Commits 自动发布：`fix` 触发 patch、`feat` 触发 minor，`!` 或 `BREAKING CHANGE` 触发 major；其他提交类型不单独发布。workflow 自动同步 `SKILL.md`、`pyproject.toml` 和 `wcl_raid_coach/__init__.py`，创建 release commit 与 `vX.Y.Z` tag，从该不可变 tag 构建唯一 Agent Skill zip，创建 GitHub Release，再把同一个 zip 发布到原有 `wcl-raid-coach` SkillHub 条目。
+
+仓库维护者需将 SkillHub personal API token 配置为 GitHub Actions secret `SKILLHUB_TOKEN`。普通 Skill 用户不需要该 token，仍只需配置 `WCL_CLIENT_ID` 和 `WCL_CLIENT_SECRET`。发布 workflow 固定并校验 SkillHub CLI artifact；发布前先执行本地 dry-run。
 
 文档入口：
 
@@ -179,8 +185,8 @@ git diff --check
 - [English data contract](references/data-contract.en.md)
 - [WCL API 说明](references/wcl-api.md)
 - [English API notes](references/wcl-api.en.md)
-- [WorkBuddy 凭据与存储配置](references/workbuddy-setup.md)
-- [English setup guide](references/workbuddy-setup.en.md)
+- [凭据与存储配置](references/setup.md)
+- [English setup guide](references/setup.en.md)
 - [Skill 使用说明](SKILL.md)
 - [原创图标](assets/timewarp-inn-dog.svg)
 

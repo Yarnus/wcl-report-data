@@ -25,15 +25,14 @@ def resolve_credentials(
     if credentials is not None:
         return credentials
 
-    candidates = list(env_files) if env_files is not None else _default_env_files()
+    candidates = list(env_files) if env_files is not None else []
     for path in _unique_paths(candidates):
         file_values = _read_env_file(path)
         credentials = _credentials_from(file_values, str(path))
         if credentials is not None:
             return credentials
     raise CredentialError(
-        "Set a complete WCL credential pair in the process environment, /workspace/.env, "
-        "or .env in the current working directory; use --env-file for another path."
+        "Set a complete WCL credential pair in the process environment or use --env-file."
     )
 
 
@@ -65,10 +64,6 @@ def default_cache_root(
         return Path(values["LOCALAPPDATA"]) / "wcl-raid-coach" / "Cache"
     base = Path(values["XDG_CACHE_HOME"]).expanduser() if values.get("XDG_CACHE_HOME") else Path.home() / ".cache"
     return base / "wcl-raid-coach"
-
-
-def _default_env_files() -> list[Path]:
-    return [Path("/workspace/.env"), Path.cwd() / ".env"]
 
 
 def _unique_paths(paths: Sequence[Path]) -> list[Path]:

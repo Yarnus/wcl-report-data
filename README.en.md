@@ -4,7 +4,7 @@
   <img src="assets/timewarp-inn-dog.svg" width="220" alt="Original fantasy icon of a golden dog guarding a timewarp inn">
 </p>
 
-`wcl-raid-coach` is a WorkBuddy Agent Skill and Python 3.11+ package for preparing Retail Warcraft Logs raid evidence, reviewing encounter mechanics and personal performance, and generating Boss guides from ranked references.
+`wcl-raid-coach` is a platform-neutral, self-contained Agent Skill and Python 3.11+ package for preparing Retail Warcraft Logs raid evidence, reviewing encounter mechanics and personal performance, and generating Boss guides from ranked references.
 
 It uses only the official Warcraft Logs OAuth and GraphQL APIs; it does not scrape report pages.
 
@@ -25,7 +25,7 @@ Personal Reviews and guides use Report Revision-safe Complete Bundles. Mechanic 
 
 Requirements: Python 3.11 or newer, network access to `warcraftlogs.com`, and a Warcraft Logs API v2 client ID and client secret.
 
-Run the CLI from the repository root or an installed Skill directory:
+Run the CLI from the repository root. When using an installed Skill, an Agent locates the Skill root containing `SKILL.md` and uses it as the working directory for the bundled CLI; no global Python package installation is required:
 
 ```bash
 python -m wcl_raid_coach doctor
@@ -78,7 +78,7 @@ Use the returned manifest to query events without loading the entire event strea
 
 ```bash
 python -m wcl_raid_coach query \
-  "/workspace/wcl-raid-coach/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
+  "<DATA_ROOT>/reports/<code>/revisions/<revision>/fights/12/manifest.json" \
   --type damage --target-id 17 --limit 200
 ```
 
@@ -94,29 +94,27 @@ The CLI separately maintains `content-names.zhCN.json`, generated from `Map`, `D
 
 ## Credentials
 
-Process environment variables take precedence over `.env` files. The canonical names are:
+A typical user only needs to provide these canonical variables through the Agent host's private environment configuration:
 
 ```dotenv
 WCL_CLIENT_ID=
 WCL_CLIENT_SECRET=
 ```
 
-The CLI also accepts the paired aliases `WCL_ID` and `WCL_SECRET`. When using an explicit file, put the global option before the subcommand:
+The CLI temporarily accepts the paired aliases `WCL_ID` and `WCL_SECRET`. It does not automatically read `.env` from the current directory or `/workspace`. To use a credential file, pass it explicitly and put the global option before the subcommand:
 
 ```bash
 python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" doctor
 python -m wcl_raid_coach --env-file "<WORKSPACE>/.env" inspect "<WCL_URL>"
 ```
 
-Never ask a user to paste a secret into chat, never overwrite an existing `.env`, and never print a client secret or access token. See [the setup guide](references/workbuddy-setup.en.md) for lookup order and storage paths.
+Never ask a user to paste a secret into chat, never overwrite an existing credential file, and never print a client secret or access token. See [the setup guide](references/setup.en.md) for lookup order and storage paths.
 
 ## Storage Layout
 
-The default data directory is `/workspace/wcl-raid-coach/` when `/workspace` exists, `~/.local/share/wcl-raid-coach/` on local Unix/macOS, and `%LOCALAPPDATA%/wcl-raid-coach/` on Windows.
+Typical users do not configure storage paths. Global `--data-root` and `--cache-root` options take precedence, followed by the optional `WCL_RAID_COACH_HOME` and `WCL_RAID_COACH_CACHE` variables. Without an override, an existing persistent `/workspace` is a compatibility fallback for cloud Agent sandboxes. Otherwise local Unix/macOS uses `~/.local/share/wcl-raid-coach/` and `~/.cache/wcl-raid-coach/`; Windows uses `%LOCALAPPDATA%/wcl-raid-coach/` and its `Cache/` directory.
 
-Override the data directory with `WCL_RAID_COACH_HOME`.
-
-Raw pages and resumable checkpoints default to `/workspace/.cache/wcl-raid-coach/` or `~/.cache/wcl-raid-coach/`; Windows uses `wcl-raid-coach/Cache` below `%LOCALAPPDATA%`. Override it with `WCL_RAID_COACH_CACHE`.
+The installed Skill directory contains only program files and documentation. Report Indexes, Complete Bundles, Profiles, tasks, and Guide Snapshots go to the data directory; Raw Pages and resumable checkpoints go to the cache directory. Run `doctor` to read the effective `data_root` and `cache_root` from its JSON output.
 
 ```text
 reports/<report-code>/
@@ -173,9 +171,15 @@ Equivalent manual checks:
 
 ```bash
 python -m unittest -v
-python -m compileall -q wcl_raid_coach tests
+python -m compileall -q wcl_raid_coach tests tools
 git diff --check
 ```
+
+## Releases
+
+`main` uses Conventional Commits for automated releases: `fix` triggers a patch, `feat` a minor, and `!` or `BREAKING CHANGE` a major release; other commit types do not release by themselves. The workflow synchronizes `SKILL.md`, `pyproject.toml`, and `wcl_raid_coach/__init__.py`, creates the release commit and `vX.Y.Z` tag, builds the sole Agent Skill zip from that immutable tag, creates a GitHub Release, and publishes the same zip to the existing `wcl-raid-coach` SkillHub listing.
+
+A repository maintainer must configure a SkillHub personal API token as the GitHub Actions secret `SKILLHUB_TOKEN`. Typical Skill users do not need this token and still configure only `WCL_CLIENT_ID` and `WCL_CLIENT_SECRET`. The release workflow pins and verifies the SkillHub CLI artifact and performs a local dry-run before publishing.
 
 Documentation map:
 
@@ -183,7 +187,7 @@ Documentation map:
 - [Domain vocabulary](CONTEXT.md)
 - [Data contract](references/data-contract.en.md)
 - [API notes](references/wcl-api.en.md)
-- [WorkBuddy setup guide](references/workbuddy-setup.en.md)
+- [Credentials and storage setup](references/setup.en.md)
 - [Skill instructions](SKILL.md)
 - [Original icon](assets/timewarp-inn-dog.svg)
 

@@ -7,16 +7,16 @@ version: 2.0.0
 summary: 准备可复现的全团证据，复核首领机制与个人表现，并从当前高分日志生成 Boss 攻略。
 license: MIT
 homepage: https://github.com/Yarnus/wcl-raid-coach
-compatibility: 需要 WorkBuddy 或 Python 3.11+、互联网连接，以及用户自己的 Warcraft Logs API 客户端凭据。
+compatibility: 需要 Python 3.11+、互联网连接，以及用户自己的 Warcraft Logs API 客户端凭据。
 metadata:
   tags: [warcraft-logs, world-of-warcraft, raid, coaching]
 ---
 
 # WCL 团队副本教练
 
-只使用 Warcraft Logs 官方 GraphQL API 建立日志事实。使用当前、有来源的资料解释事实。始终使用中文回答。
+只使用 Warcraft Logs 官方 GraphQL API 建立日志事实。使用当前、有来源的资料解释事实。使用用户当前使用的语言回答。
 
-在 Skill 目录中运行 `python -m wcl_raid_coach`。CLI 始终向标准输出写入 JSON。
+先定位本文件所在的 Skill 根目录，再以该目录为工作目录运行 bundled CLI：`python -m wcl_raid_coach`。不得假设 Skill 已全局安装。CLI 始终向标准输出写入 JSON，持久数据和缓存不得写入 Skill 根目录。需要暂存 Profile 或聚合输入时，由宿主选择 Skill 根目录之外可写的 `<WORK_DIR>`；命令中的尖括号表示应替换的路径或参数，不是字面值。
 
 ## 1. 路由请求
 
@@ -38,7 +38,7 @@ metadata:
 python -m wcl_raid_coach doctor
 ```
 
-不得询问、输出、记录或持久化 client secret/access token。凭据不可用时阅读 [WorkBuddy 配置](references/workbuddy-setup.md)。
+普通用户只需通过 Agent 宿主的私密环境配置提供 `WCL_CLIENT_ID` 和 `WCL_CLIENT_SECRET`。不得询问、输出、记录或持久化 client secret/access token。凭据不可用或需要确认存储位置时阅读[凭据与存储配置](references/setup.md)。
 
 ## 3. 报告数据
 
@@ -94,12 +94,8 @@ python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>"
 
 准备 Complete Bundle 后计算个人日志事实：
 
-```bash
-python -m wcl_raid_coach coach review \
-  "<MANIFEST_PATH>" \
-  --index "<REPORT_INDEX_PATH>" \
-  --source-id <ACTOR_ID> \
-  --partition-id <PARTITION_ID>
+```text
+python -m wcl_raid_coach coach review "<MANIFEST_PATH>" --index "<REPORT_INDEX_PATH>" --source-id <ACTOR_ID> --partition-id <PARTITION_ID>
 ```
 
 `coach review` 只产生结构化日志事实。要评价表现，必须再建立同 encounter、difficulty、class、spec 和 partition 的 Encounter Benchmark。不得把总排名差距写成可实现提升。
@@ -108,11 +104,8 @@ python -m wcl_raid_coach coach review \
 
 例如用户说“给我一个邪 DK 打 H7 H8 的攻略”，先解析请求：
 
-```bash
-python -m wcl_raid_coach coach resolve \
-  --spec "邪 DK" \
-  --encounter H7 \
-  --encounter H8
+```text
+python -m wcl_raid_coach coach resolve --spec "邪 DK" --encounter H7 --encounter H8
 ```
 
 该命令使用 WCL 官方元数据解析唯一当前 Retail 团本、Heroic 难度、原始 encounter 顺序和默认 ranking partition。向用户展示 Boss 名称、encounter ID、难度、partition 和规范专精；用户确认前不得发现排名或下载候选事件。
@@ -134,8 +127,8 @@ H7 与 H8 是两个 Encounter Benchmark。不得混合它们的 cohort、分析�
 
 资料优先级：Blizzard/WCL 官方资料；维护中的职业社区、专精指南和模拟文档；Wowhead/Icy Veins 交叉验证。Profile 保存 URL、标题、访问时间、引用摘要和内容哈希，不保存整篇第三方文章。
 
-```bash
-python -m wcl_raid_coach coach profile "/tmp/profile.json"
+```text
+python -m wcl_raid_coach coach profile "<WORK_DIR>/profile.json"
 ```
 
 Encounter Profile 必须声明优先目标与排除目标。Profile 缺失或校验失败时，可以展示排名候选，但禁止生成稳定高分打法 benchmark。
@@ -144,14 +137,8 @@ Encounter Profile 必须声明优先目标与排除目标。Profile 缺失或校
 
 每个 Boss 分别运行：
 
-```bash
-python -m wcl_raid_coach coach candidates \
-  --game-version <GAME_VERSION> \
-  --encounter-id <ENCOUNTER_ID> \
-  --difficulty-id <DIFFICULTY_ID> \
-  --partition-id <PARTITION_ID> \
-  --class-name DeathKnight \
-  --spec-name Unholy
+```text
+python -m wcl_raid_coach coach candidates --game-version <GAME_VERSION> --encounter-id <ENCOUNTER_ID> --difficulty-id <DIFFICULTY_ID> --partition-id <PARTITION_ID> --class-name DeathKnight --spec-name Unholy
 ```
 
 默认只使用最近 14 天且身份完整的候选。Ranking Candidate 不是 Reference Sample。目标为每个 Boss 10 个有效样本；3 到 9 个只能给低置信度聚合；少于 3 个只能做个案观察，不能生成稳定打法。
@@ -171,24 +158,17 @@ python -m wcl_raid_coach coach candidates \
 
 每个 Boss 分别聚合：
 
-```bash
-python -m wcl_raid_coach coach benchmark \
-  /tmp/analysis-1.json /tmp/analysis-2.json /tmp/analysis-3.json \
-  --cohort /tmp/cohort.json \
-  --encounter-profile /tmp/encounter-profile.json \
-  --specialization-profile /tmp/specialization-profile.json \
-  --output /tmp/benchmark.json
+```text
+python -m wcl_raid_coach coach benchmark "<WORK_DIR>/analysis-1.json" "<WORK_DIR>/analysis-2.json" "<WORK_DIR>/analysis-3.json" --cohort "<WORK_DIR>/cohort.json" --encounter-profile "<WORK_DIR>/encounter-profile.json" --specialization-profile "<WORK_DIR>/specialization-profile.json" --output "<WORK_DIR>/benchmark.json"
 ```
 
 最后将多个独立 benchmark 合并成不可变 Guide Snapshot：
 
-```bash
-python -m wcl_raid_coach coach guide \
-  /tmp/h7-benchmark.json /tmp/h8-benchmark.json \
-  --spec-display-name "邪恶死亡骑士"
+```text
+python -m wcl_raid_coach coach guide "<WORK_DIR>/h7-benchmark.json" "<WORK_DIR>/h8-benchmark.json" --spec-display-name "邪恶死亡骑士"
 ```
 
-输出包括中文 Markdown 和 JSON 索引。报告必须区分：
+输出包括与用户语言一致的 Markdown 和 JSON 索引。当前 bundled Guide Snapshot renderer 只生成中文 Markdown；英文请求生成最终 Guide Snapshot 前必须明确告知这一限制，不得把中文 artifact 伪装成英文结果。报告必须区分：
 
 - **日志事实**：Complete Bundle 直接计算的事实。
 - **资料结论**：当前 Profile 来源支持的规则或机制。
@@ -196,7 +176,7 @@ python -m wcl_raid_coach coach guide \
 
 ### Spell 名称输出门禁
 
-生成攻略前必须确保 `ability-names.zhCN.json` 已从 Wago Tools 初始化并通过 metadata 哈希检查。所有由 `ability_id` 确认的 Spell 在面向用户的 Markdown 和对话正文中必须使用该 mapping 的中文名称；不得根据英文名自行翻译，也不得把裸数字 ID 或英文 SpellName 写入正文。该门禁不适用于只使用随包规则名称的 Mechanic Review。
+生成中文攻略前必须确保 `ability-names.zhCN.json` 已从 Wago Tools 初始化并通过 metadata 哈希检查。所有由 `ability_id` 确认的 Spell 在中文 Markdown 和中文对话正文中必须使用该 mapping 的中文名称；不得根据英文名自行翻译，也不得把裸数字 ID 或英文 SpellName 写入中文正文。该门禁不适用于只使用随包规则名称的 Mechanic Review。
 
 机制名称必须通过 Encounter Profile 的具体 `ability_id` 关联，不得按英文名称反查。若机制 Spell ID 缺少 zhCN mapping，停止生成最终攻略并返回结构化错误；不得静默回退为英文。JSON 索引可以保留 `ability_id`、WCL 原始名称和 mapping build 作为审计信息。
 

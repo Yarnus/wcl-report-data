@@ -1,0 +1,172 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to rebuild and republish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+env:
+  SKILLHUB_CLI_VERSION: "2026.8.5"
+  SKILLHUB_CLI_SHA256: "3bbe2ba15ada2eb7a94a2b760fead83be5f4164ab28a6c8b0944dbc539f7e236"
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'chore(release):')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Verify repository
+        run: make check
+
+      - name: Plan release from Conventional Commits
+        id: plan
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_ref="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+          if [[ -z "$base_ref" ]]; then
+            echo "No version tag exists." >&2
+            exit 1
+          fi
+          python tools/release.py plan --base-ref "$base_ref" > "$RUNNER_TEMP/release-plan.json"
+          python - "$RUNNER_TEMP/release-plan.json" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          plan = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          output = Path(sys.argv[2])
+          with output.open("a", encoding="utf-8") as stream:
+              stream.write(f"release={str(plan['release']).lower()}\n")
+              if plan["release"]:
+                  stream.write(f"version={plan['next_version']}\n")
+                  stream.write(f"tag={plan['tag']}\n")
+                  stream.write("changelog<<__CHANGELOG__\n")
+                  stream.write(plan["changelog"] + "\n")
+                  stream.write("__CHANGELOG__\n")
+          PY
+
+      - name: Create immutable release commit and tag
+        if: github.event_name == 'push' && steps.plan.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python tools/release.py apply "$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SKILL.md pyproject.toml wcl_raid_coach/__init__.py
+          git commit -m "chore(release): $TAG"
+          git tag "$TAG"
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git push --atomic origin HEAD:main "refs/tags/$TAG"
+
+      - name: Select release tag
+        id: selected
+        if: github.event_name == 'workflow_dispatch' || steps.plan.outputs.release == 'true'
+        env:
+          PLANNED_TAG: ${{ steps.plan.outputs.tag }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          PLANNED_CHANGELOG: ${{ steps.plan.outputs.changelog }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${REQUESTED_TAG:-$PLANNED_TAG}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch origin "refs/tags/$tag:refs/tags/$tag" --force
+          version="${tag#v}"
+          source_version="$(git show "$tag:wcl_raid_coach/__init__.py" | python -c 'import re,sys; print(re.search(r"__version__ = \"([^\"]+)\"", sys.stdin.read()).group(1))')"
+          test "$source_version" = "$version"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "archive=dist/wcl-raid-coach-$version.zip"
+            echo "changelog<<__CHANGELOG__"
+            if [[ -n "$PLANNED_CHANGELOG" ]]; then
+              printf '%s\n' "$PLANNED_CHANGELOG"
+            else
+              git show -s --format='Rebuild and republish %D' "$tag"
+            fi
+            echo "__CHANGELOG__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build immutable Agent Skill artifact
+        if: steps.selected.outputs.tag != ''
+        env:
+          TAG: ${{ steps.selected.outputs.tag }}
+        run: make package REF="$TAG"
+
+      - name: Remove persisted repository credential
+        if: steps.selected.outputs.tag != ''
+        shell: bash
+        run: git config --local --unset-all http.https://github.com/.extraheader || true
+
+      - name: Install pinned SkillHub CLI
+        if: steps.selected.outputs.tag != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/skillhub-cli.tar.gz"
+          curl --fail --silent --show-error --location \
+            "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/releases/skillhub-cli-${SKILLHUB_CLI_VERSION}.tar.gz" \
+            --output "$archive"
+          echo "$SKILLHUB_CLI_SHA256  $archive" | sha256sum --check --status
+          mkdir "$RUNNER_TEMP/skillhub-cli"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/skillhub-cli" --strip-components=1
+
+      - name: Validate SkillHub package
+        if: steps.selected.outputs.tag != ''
+        env:
+          ARCHIVE: ${{ steps.selected.outputs.archive }}
+        run: python "$RUNNER_TEMP/skillhub-cli/skills_store_cli.py" publish "$ARCHIVE" --dry-run --json
+
+      - name: Reconcile GitHub Release
+        if: steps.selected.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.selected.outputs.tag }}
+          ARCHIVE: ${{ steps.selected.outputs.archive }}
+          CHANGELOG: ${{ steps.selected.outputs.changelog }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ARCHIVE" --clobber
+          else
+            gh release create "$TAG" "$ARCHIVE" --verify-tag --title "$TAG" --notes "$CHANGELOG"
+          fi
+
+      - name: Publish existing SkillHub listing
+        if: steps.selected.outputs.tag != ''
+        env:
+          ARCHIVE: ${{ steps.selected.outputs.archive }}
+          CHANGELOG: ${{ steps.selected.outputs.changelog }}
+          SKILLHUB_TOKEN: ${{ secrets.SKILLHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SKILLHUB_TOKEN"
+          python "$RUNNER_TEMP/skillhub-cli/skills_store_cli.py" publish "$ARCHIVE" \
+            --token "$SKILLHUB_TOKEN" --changelog "$CHANGELOG" --json

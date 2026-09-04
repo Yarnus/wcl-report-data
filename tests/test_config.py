@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,11 +26,11 @@ class CredentialTests(unittest.TestCase):
         self.assertEqual(credentials.client_secret, "env-secret")
         self.assertEqual(credentials.source, "environment:WCL_CLIENT_ID")
 
-    def test_reads_workbuddy_env_without_external_dependency(self) -> None:
+    def test_reads_an_explicit_env_file_without_external_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            env_file = Path(temporary) / ".env"
+            env_file = Path(temporary) / "credentials.env"
             env_file.write_text(
-                "# WorkBuddy credentials\nexport WCL_CLIENT_ID='file-id'\nWCL_CLIENT_SECRET=\"file-secret\"\n",
+                "export WCL_CLIENT_ID='file-id'\nWCL_CLIENT_SECRET=\"file-secret\"\n",
                 encoding="utf-8",
             )
 
@@ -60,11 +61,22 @@ class CredentialTests(unittest.TestCase):
             with self.assertRaisesRegex(CredentialError, "valid UTF-8"):
                 resolve_credentials(environ={}, env_files=[env_file])
 
-    def test_missing_credentials_mentions_local_env_file(self) -> None:
-        with self.assertRaisesRegex(CredentialError, "current working directory"):
-            resolve_credentials(environ={}, env_files=[])
+    def test_default_lookup_does_not_read_current_directory_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            env_file = Path(temporary) / ".env"
+            env_file.write_text(
+                "WCL_CLIENT_ID=file-id\nWCL_CLIENT_SECRET=file-secret\n",
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            try:
+                os.chdir(temporary)
+                with self.assertRaisesRegex(CredentialError, "--env-file"):
+                    resolve_credentials(environ={})
+            finally:
+                os.chdir(previous)
 
-    def test_workbuddy_workspace_is_the_default_root(self) -> None:
+    def test_persistent_workspace_is_the_compatible_default_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             data = default_data_root(environ={}, workspace=workspace)
@@ -72,6 +84,29 @@ class CredentialTests(unittest.TestCase):
 
         self.assertEqual(data, workspace / "wcl-raid-coach")
         self.assertEqual(cache, workspace / ".cache" / "wcl-raid-coach")
+
+    def test_user_directories_are_used_without_persistent_workspace(self) -> None:
+        missing_workspace = Path("/path/that/does/not/exist")
+        home = Path.home()
+
+        data = default_data_root(environ={}, workspace=missing_workspace)
+        cache = default_cache_root(environ={}, workspace=missing_workspace)
+
+        self.assertEqual(data, home / ".local" / "share" / "wcl-raid-coach")
+        self.assertEqual(cache, home / ".cache" / "wcl-raid-coach")
+
+    def test_storage_environment_overrides_workspace_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            data = default_data_root(
+                environ={"WCL_RAID_COACH_HOME": "~/custom-data"}, workspace=workspace
+            )
+            cache = default_cache_root(
+                environ={"WCL_RAID_COACH_CACHE": "~/custom-cache"}, workspace=workspace
+            )
+
+        self.assertEqual(data, Path("~/custom-data").expanduser())
+        self.assertEqual(cache, Path("~/custom-cache").expanduser())
 
 
 if __name__ == "__main__":

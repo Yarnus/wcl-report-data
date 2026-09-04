@@ -8,8 +8,8 @@ jobs:
   unittest:
     strategy:
       matrix:
-        os: [macos-latest, windows-latest]
-        python: ["3.11"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -17,4 +17,4 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest -v
-      - run: python -m compileall -q wcl_raid_coach tests
+      - run: python -m compileall -q wcl_raid_coach tests tools
