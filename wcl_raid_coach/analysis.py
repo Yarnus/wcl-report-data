@@ -128,7 +128,7 @@ def analyze_player(
     }
     if partition_id is not None:
         result["comparison_identity"] = {
-            "game_version": index_identity.get("game_version"),
+            "game_version": _ranking_game_version(index_identity, partition_id),
             "partition_id": partition_id,
             "encounter_id": fight.get("encounter_id"),
             "difficulty_id": fight.get("difficulty"),
@@ -149,3 +149,26 @@ def _object(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise DatasetError(f"{label} must be a JSON object.")
     return value
+
+
+def _ranking_game_version(report: dict[str, Any], partition_id: int) -> str:
+    zone = report.get("zone")
+    partitions = zone.get("partitions") if isinstance(zone, dict) else None
+    if not isinstance(partitions, list):
+        raise DatasetError("Report Index ranking partitions are malformed.")
+    partition = next(
+        (
+            item
+            for item in partitions
+            if isinstance(item, dict) and item.get("id") == partition_id
+        ),
+        None,
+    )
+    game_version = (
+        partition.get("compactName") or partition.get("name")
+        if isinstance(partition, dict)
+        else None
+    )
+    if not isinstance(game_version, str) or not game_version.strip():
+        raise DatasetError(f"Report Index has no ranking partition {partition_id} game version.")
+    return game_version.strip()

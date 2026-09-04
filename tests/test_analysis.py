@@ -31,7 +31,12 @@ class AnalysisTests(unittest.TestCase):
             json.dump({"data": events, "nextPageTimestamp": None}, handle)
         raw_digest = hashlib.sha256(raw_path.read_bytes()).hexdigest()
         index_value = {
-            "report": {"code": "ABC", "revision": 1, "game_version": "retail"},
+            "report": {
+                "code": "ABC",
+                "revision": 1,
+                "game_version": 1,
+                "zone": {"partitions": [{"id": 2, "compactName": "12.1", "default": True}]},
+            },
             "actors": [{"id": 10, "name": "Player"}, {"id": 11, "name": "Pet", "petOwner": 10}],
             "fights": [{"fight_id": 7, "encounter_id": 1007, "difficulty": 4, "duration_ms": 1000, "participants": [{"actor_id": 10, "name": "Player", "class": "DeathKnight", "spec": "Unholy"}]}],
         }
@@ -65,13 +70,19 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["interrupts"], 1)
         self.assertEqual(result["metrics"]["deaths"], 1)
         self.assertEqual(result["comparison_identity"]["encounter_id"], 1007)
-        self.assertEqual(result["comparison_identity"]["game_version"], "retail")
+        self.assertEqual(result["comparison_identity"]["game_version"], "12.1")
 
     def test_rejects_unknown_participant(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest, index = self.make_bundle(Path(directory))
             with self.assertRaises(InputError):
                 analyze_player(manifest, index, 99, signing_key="secret")
+
+    def test_rejects_unknown_comparison_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, index = self.make_bundle(Path(directory))
+            with self.assertRaisesRegex(DatasetError, "ranking partition"):
+                analyze_player(manifest, index, 10, partition_id=99, signing_key="secret")
 
     def test_rejects_incomplete_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

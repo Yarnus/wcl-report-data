@@ -26,6 +26,7 @@ from .models import ReportRef
 from .mechanics import MechanicReviewService
 from .guides import create_guide_snapshot
 from .profiles import ProfileStore
+from .report_documents import render_report_document
 from .storage import atomic_write_json, read_json
 
 
@@ -109,6 +110,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
     mechanics.add_argument("url")
     mechanics.add_argument("--encounter", help="Optional Encounter Designator used to list matching Boss Attempts.")
+    render = coach_commands.add_parser("render", help="Render a validated Report Document as self-contained HTML.")
+    render.add_argument("document", type=Path)
     candidates = coach_commands.add_parser("candidates", help="Discover and sign recent ranking candidates.")
     candidates.add_argument("--encounter-id", type=int, required=True)
     candidates.add_argument("--difficulty-id", type=int, required=True)
@@ -162,6 +165,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     EncounterDesignator.parse(args.encounter) if args.encounter else None
                 ),
             )
+        if args.coach_command == "render":
+            return {
+                "action": "coach_render",
+                "report": render_report_document(
+                    read_json(args.document), store.data_root / "outputs" / "reports"
+                ),
+            }
         task_store = CoachTaskStore(args.data_root)
         if args.coach_command == "status":
             return {"action": "coach_status", "tasks": task_store.list_tasks()}

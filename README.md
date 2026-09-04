@@ -66,6 +66,14 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review 接受击杀和灭团，但只接受已完成的 Boss Attempt；`fight=last` 会被拒绝。
 
+正式 Mechanic Review、Personal Review 和 Raid Guide 可以先按[数据集契约](references/data-contract.md)生成对应类型的结构化 Report Document，再渲染为自包含 HTML。该命令不访问 WCL，也不需要凭据：
+
+```bash
+python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
+```
+
+CLI 返回 `html_path`、`html_sha256`、`index_path`、`document_id` 和两项 schema version。HTML 不加载远程字体、样式、脚本或图片；页面支持系统主题以及 Auto/亮色/暗色手动选择。调用方只能提交对应文档类型允许的结构化字段，不能提交原始 HTML。Mechanic Review 只能携带扁平最小证据摘录；Personal Review 不接受机制归因或建议；Raid Guide 不接受 Snapshot 中不存在的 rotation、天赋、装备或具体建议。
+
 准备 URL 中选中的战斗：
 
 ```bash
@@ -119,7 +127,7 @@ AI 不应要求用户在对话中提供或粘贴 secret，不应覆盖已有凭�
 
 普通用户无需配置存储路径。全局参数 `--data-root` 和 `--cache-root` 优先，其次是可选的 `WCL_RAID_COACH_HOME` 和 `WCL_RAID_COACH_CACHE`。未覆盖时，存在的持久 `/workspace` 作为云端 Agent 沙盒兼容 fallback；否则本地 Unix/macOS 使用 `~/.local/share/wcl-raid-coach/` 和 `~/.cache/wcl-raid-coach/`，Windows 使用 `%LOCALAPPDATA%/wcl-raid-coach/` 及其 `Cache/` 子目录。
 
-Skill 安装目录只保存程序与文档。Report Index、Complete Bundle、Profiles、任务和 Guide Snapshot 写入数据目录；Raw Page 和可续传检查点写入缓存目录。运行 `doctor` 可从 JSON 中查看实际的 `data_root` 和 `cache_root`。
+Skill 安装目录只保存程序与文档。Report Index、Complete Bundle、Profiles、任务、Guide Snapshot 和渲染后的 Report Document 写入数据目录；Raw Page 和可续传检查点写入缓存目录。运行 `doctor` 可从 JSON 中查看实际的 `data_root` 和 `cache_root`。
 
 ```text
 reports/<report-code>/
@@ -133,6 +141,9 @@ ability-names.zhCN.json
 ability-names.zhCN.meta.json
 content-names.zhCN.json
 content-names.zhCN.meta.json
+outputs/reports/
+├── <html-sha256>.html
+└── <html-sha256>.json
 ```
 
 同一 Report Revision 内的 Fight Bundle 不可变。重新导出报告会创建新的 revision 目录；`latest.json` 只是指针，可复现的消费者应使用 manifest 中记录的 revision。原始页单独压缩保存，以便中断下载继续并审计字段规范化过程。

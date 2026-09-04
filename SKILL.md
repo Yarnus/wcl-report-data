@@ -98,6 +98,18 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUM
 
 每条机制展示规则定义的触发、成功和失败事件计数；无法客观判断时值为 `null`。只有当前难度标记为 `verified` 的事件模式才能产生异常；`event_pattern_unverified` 和 observation 规则只列观察事实。没有匹配事件不等于机制处理正确。异常展开时间、玩家和原始 WCL 事件证据，但只表示事件模式命中，不表示玩家责任、表现评价或灭团因果；最终裁决交给人。
 
+### 正式 HTML 交付
+
+完成正式 Mechanic Review、Personal Review 或 Raid Guide 时，默认根据 `references/data-contract.md` 的 schema `1` 生成对应 `document_type` 的 Report Document，并调用：
+
+```bash
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
+```
+
+候选选择、澄清、进度、错误、数据查询和局部追问仍直接使用文本。用户说“直接回答”或“不要报告”时不生成 HTML；用户明确说“生成报告”或“导出 HTML”时必须生成。对话中交付短摘要和 `html_path` 的可点击链接。
+
+Report Document 只能包含对应类型允许的结构化字段，不得包含调用方 HTML、CSS 或 JavaScript；`source_artifacts` 必须记录来源 artifact 路径和 SHA-256。Mechanic Review 只保留结论、计数和扁平最小证据摘录，不得复制完整 Mechanic Evidence Set；Personal Review 不得补写机制归因或建议；Raid Guide 不得补写 Snapshot 中不存在的 rotation、天赋、装备、阶段策略或具体建议。只有玩家、Boss Attempt、Benchmark 或正式结论范围变化时才生成新报告；不改变正式结论的局部追问直接文本回答。
+
 ## 5. 个人复盘
 
 裸报告 URL 先执行 `inspect`，让用户明确选择一个 Boss Attempt 和一个参与者。完整 URL 仍须确认 URL 中的 fight/source 指向预期对象。

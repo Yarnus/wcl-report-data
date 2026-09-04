@@ -54,6 +54,10 @@ _Avoid_: Personal Review, blame report
 A versioned catalog of encounter- and difficulty-specific event signals, display names, validation status, expectations, and sources. Mechanic Review uses the newest rules shipped with the installed package, not rules selected by report date.
 _Avoid_: Encounter Profile, generic rule DSL
 
+**Report Document**:
+A validated, presentation-only document that selects conclusions and minimal evidence excerpts from one or more source artifacts for deterministic rendering. It is not a WCL Report, Report Index, Fight Bundle, or Mechanic Evidence Set.
+_Avoid_: Raw HTML, saved evidence set, report version
+
 **Coach Request**:
 A normalized user goal for report data, a Personal Review, or a Raid Guide.
 _Avoid_: Prompt, command

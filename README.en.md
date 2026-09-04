@@ -68,6 +68,14 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review accepts kills and wipes, but only completed Boss Attempts; it rejects `fight=last`.
 
+A formal Mechanic Review, Personal Review, or Raid Guide can be expressed as its corresponding structured Report Document defined by the [dataset contract](references/data-contract.en.md), then rendered as self-contained HTML. This command does not access WCL or require credentials:
+
+```bash
+python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
+```
+
+The CLI returns `html_path`, `html_sha256`, `index_path`, `document_id`, and both schema versions. HTML loads no remote fonts, styles, scripts, or images and supports the system theme plus manual Auto/light/dark selection. A caller submits only the structured fields allowed for that document type, never raw HTML. Mechanic Review accepts only flat minimal evidence excerpts; Personal Review accepts no mechanic attribution or recommendations; Raid Guide accepts no rotation, talent, gear, or prescriptive advice absent from its Snapshot.
+
 Prepare the fight selected in the URL:
 
 ```bash
@@ -121,7 +129,7 @@ Never ask a user to paste a secret into chat, never overwrite an existing creden
 
 Typical users do not configure storage paths. Global `--data-root` and `--cache-root` options take precedence, followed by the optional `WCL_RAID_COACH_HOME` and `WCL_RAID_COACH_CACHE` variables. Without an override, an existing persistent `/workspace` is a compatibility fallback for cloud Agent sandboxes. Otherwise local Unix/macOS uses `~/.local/share/wcl-raid-coach/` and `~/.cache/wcl-raid-coach/`; Windows uses `%LOCALAPPDATA%/wcl-raid-coach/` and its `Cache/` directory.
 
-The installed Skill directory contains only program files and documentation. Report Indexes, Complete Bundles, Profiles, tasks, and Guide Snapshots go to the data directory; Raw Pages and resumable checkpoints go to the cache directory. Run `doctor` to read the effective `data_root` and `cache_root` from its JSON output.
+The installed Skill directory contains only program files and documentation. Report Indexes, Complete Bundles, Profiles, tasks, Guide Snapshots, and rendered Report Documents go to the data directory; Raw Pages and resumable checkpoints go to the cache directory. Run `doctor` to read the effective `data_root` and `cache_root` from its JSON output.
 
 ```text
 reports/<report-code>/
@@ -135,6 +143,9 @@ ability-names.zhCN.json
 ability-names.zhCN.meta.json
 content-names.zhCN.json
 content-names.zhCN.meta.json
+outputs/reports/
+|-- <html-sha256>.html
+`-- <html-sha256>.json
 ```
 
 Fight Bundles are immutable within a Report Revision. Re-exporting a report creates a new revision directory.
