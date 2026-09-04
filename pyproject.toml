@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wcl-raid-coach"
-version = "3.0.0"
+version = "3.0.1"
 description = "为 Agent Skills 准备 Warcraft Logs 团队副本证据、复盘和攻略"
 readme = "README.md"
 requires-python = ">=3.11"
