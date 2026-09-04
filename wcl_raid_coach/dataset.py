@@ -457,7 +457,11 @@ class DatasetService:
             and isinstance(item.get("name"), str)
         }
         selected = next((fight for fight in fights if fight["fight_id"] == selected_fight_id), None)
-        choices = [self._choice(fight, difficulty_names) for fight in fights if fight["kind"] == "boss"]
+        choices = [
+            self._choice(fight, difficulty_names)
+            for fight in fights
+            if fight["kind"] == "boss" and fight["unpackable_reason"] != "mythic_plus"
+        ]
         return {
             "ok": True,
             "action": "inspect",
@@ -857,7 +861,15 @@ class DatasetService:
             raise InputError(f"Only Retail reports are supported; WCL returned gameVersion={game_version!r}.")
         if not isinstance(report.get("revision"), int):
             raise ApiError("WCL did not return a numeric report revision.")
-        if any(fight.get("keystoneLevel") is not None for fight in report.get("fights") or []):
+        fights = report.get("fights") or []
+        has_mythic_plus = any(fight.get("keystoneLevel") is not None for fight in fights)
+        has_raid_boss = any(
+            isinstance(fight.get("encounterID"), int)
+            and fight["encounterID"] > 0
+            and fight.get("keystoneLevel") is None
+            for fight in fights
+        )
+        if has_mythic_plus and not has_raid_boss:
             raise InputError("Mythic+ reports are unsupported; provide a Retail raid report.")
         if not _is_raid_zone(report.get("zone")):
             raise InputError("The WCL report is not identified as a Retail raid zone.")
@@ -877,6 +889,8 @@ class DatasetService:
             reason = None
             if kind != "boss":
                 reason = "trash"
+            elif fight.get("keystoneLevel") is not None:
+                reason = "mythic_plus"
             elif fight.get("inProgress") is not False:
                 reason = "in_progress" if fight.get("inProgress") is True else "completion_unknown"
             elif archive_blocked:

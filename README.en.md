@@ -14,7 +14,7 @@ Personal Reviews and guides use Report Revision-safe Complete Bundles. Mechanic 
 
 ## Scope
 
-- Supports Retail raid reports; Classic and Mythic+ are out of scope.
+- Supports Retail raid reports; Classic and Mythic+ are out of scope. If one WCL Report contains both raid and Mythic+ fights, only its raid Boss Attempts are listed and prepared.
 - Supports public and unlisted reports; private reports requiring user OAuth are not supported.
 - Accepts report URLs from `warcraftlogs.com`, `www.warcraftlogs.com`, and `cn.warcraftlogs.com`.
 - CN report URLs are normalized to the global site; API requests still use the official global WCL endpoints.

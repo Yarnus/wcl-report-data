@@ -694,11 +694,37 @@ class DatasetTests(unittest.TestCase):
     def test_rejects_mythic_plus_report(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             client = FakeClient()
+            client.report["fights"] = [client.report["fights"][0]]
             client.report["fights"][0]["keystoneLevel"] = 12
             service = self.make_service(temporary, client)
 
             with self.assertRaises(InputError):
                 service.inspect(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123"))
+
+    def test_accepts_raid_report_with_mythic_plus_fights(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = FakeClient()
+            mythic_plus = copy.deepcopy(client.report["fights"][0])
+            mythic_plus.update(
+                {
+                    "id": 4,
+                    "encounterID": 61877,
+                    "name": "Test Dungeon",
+                    "difficulty": 10,
+                    "size": 5,
+                    "keystoneLevel": 12,
+                }
+            )
+            client.report["fights"].append(mythic_plus)
+            service = self.make_service(temporary, client)
+
+            result = service.inspect(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123"))
+            index = json.loads(Path(result["index_path"]).read_text(encoding="utf-8"))
+
+        self.assertEqual([choice["fight_id"] for choice in result["fight_choices"]], [1, 3])
+        unsupported = next(fight for fight in index["fights"] if fight["fight_id"] == 4)
+        self.assertFalse(unsupported["packable"])
+        self.assertEqual(unsupported["unpackable_reason"], "mythic_plus")
 
     def test_rejects_non_keystone_dungeon_report(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -12,7 +12,7 @@
 
 ## 适用范围
 
-- 支持 Retail 团队副本；不支持怀旧服和 Mythic+。
+- 支持 Retail 团队副本；不支持怀旧服和 Mythic+。同一 WCL Report 同时包含团本与 Mythic+ 时，只列出和准备其中的团本 Boss Attempt。
 - 支持公开和未列出报告；私有报告需要用户 OAuth，当前不支持。
 - 支持 `warcraftlogs.com`、`www.warcraftlogs.com` 和 `cn.warcraftlogs.com` 报告链接。
 - CN 链接会规范化为全球站链接，API 请求仍使用 WCL 官方全球端点。

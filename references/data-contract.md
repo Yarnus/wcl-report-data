@@ -22,6 +22,8 @@ Fight Bundle 还包含一个数字 `fight_id`。不同 Report Revision 的文件
 - 团队参与者的 actor ID、名称、服务器、职业、专精和物品等级
 - `packable` 和 `unpackable_reason`
 
+包含团本 Boss Attempt 的 WCL Report 可以同时包含 Mythic+ fight。此时 Mythic+ fight 保留在 Report Index 中并标记为 `unpackable_reason: "mythic_plus"`，但不进入 `inspect` 的 `fight_choices`，也不能创建 Fight Bundle。纯 Mythic+ 报告仍被拒绝。
+
 某次输入特有的战斗选择和 source hint 由 `inspect` 返回，不写入不可变的 Report Index。source hint 绝不能过滤 actor 或事件。
 
 `inspect` 还按 WCL `zone.encounters` 的原始数组顺序返回一基的 `encounter_choices`。该列表用于解释 Encounter Designator，是当前查询的选择元数据，不写入已有 Report Index。数组项不得排序或按报告中出现过的首领过滤。
