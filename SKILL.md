@@ -3,7 +3,7 @@ name: wcl-report-data
 description: 分析正式服 Warcraft Logs 团队副本。用户提供 WCL 报告链接、要求机制或个人复盘、需要团队事件数据、询问当前团本指定 Boss 和专精的高分日志攻略，或询问“如何使用”“能做什么”、how to use、what can this skill do 时使用。
 slug: wcl-report-data
 displayName: WCL 团队副本教练
-version: 2.2.0
+version: 3.0.0
 summary: 准备可复现的全团证据，复核首领机制与个人表现，并从当前高分日志生成 Boss 攻略。
 license: MIT
 homepage: https://github.com/Yarnus/wcl-report-data
