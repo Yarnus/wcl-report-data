@@ -25,6 +25,13 @@ Personal Reviews and guides use Report Revision-safe Complete Bundles. Mechanic 
 
 Requirements: Python 3.11 or newer, network access to `warcraftlogs.com`, and a Warcraft Logs API v2 client ID and client secret.
 
+After installing the Agent Skill, ask "How do I use wcl-report-data?" to see its capability menu, or start a task directly in natural language:
+
+- "Show me the Boss Attempts and participants in this WCL Report: `<WCL_URL>`"
+- "Review the mechanic handling in this Boss Attempt: `<WCL_URL_WITH_NUMERIC_FIGHT>`"
+- "Review my performance in this Boss Attempt as `<character>`: `<WCL_URL_WITH_NUMERIC_FIGHT>`"
+- "Give me an Unholy Death Knight guide for the current raid's H7 and H8."
+
 Run the CLI from the repository root. When using an installed Skill, an Agent locates the Skill root containing `SKILL.md` and uses it as the working directory for the bundled CLI; no global Python package installation is required:
 
 ```bash

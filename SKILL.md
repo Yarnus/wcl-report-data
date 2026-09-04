@@ -1,6 +1,6 @@
 ---
 name: wcl-report-data
-description: 分析正式服 Warcraft Logs 团队副本。用户提供 WCL 报告链接、要求机制或个人复盘、需要团队事件数据，或询问当前团本指定 Boss 和专精的高分日志攻略时使用。
+description: 分析正式服 Warcraft Logs 团队副本。用户提供 WCL 报告链接、要求机制或个人复盘、需要团队事件数据、询问当前团本指定 Boss 和专精的高分日志攻略，或询问“如何使用”“能做什么”、how to use、what can this skill do 时使用。
 slug: wcl-report-data
 displayName: WCL 团队副本教练
 version: 2.1.3
@@ -27,8 +27,18 @@ metadata:
 - **个人复盘**：用户提供 WCL URL，并要求评价一个玩家在一个 Boss Attempt 中的表现。
 - **通用攻略**：用户没有提供个人日志，要求当前 Retail 团本中某专精打一个或多个 Boss 的攻略。
 - **混合请求**：先完成个人复盘；用户明确要求通用打法时，再附同一 Boss 的通用原则。个人结论和群体结论必须分开。
+- **使用帮助**：用户询问如何使用、能做什么或索要使用示例。
 
 不支持 Mythic+、Classic、私有报告和历史团本通用攻略。同一 WCL Report 同时包含团本与 Mythic+ 时，只列出和准备其中的团本 Boss Attempt；不得因存在 Mythic+ fight 而拒绝整份报告，也不得把 Mythic+ fight 静默当作团本。不得把不支持的请求静默改成其他工作流。
+
+### 使用帮助
+
+只根据随包文档回答，不访问 WCL 或运行 CLI。使用用户当前使用的语言，先用一句话说明需要用户自己的 WCL API 凭据、仅支持 Retail 团本的公开或未列出报告，并提醒用户不要在对话中粘贴 secret；再简短列出以下能力和自然语言示例，输出菜单即结束：
+
+- **报告数据**：“帮我看看这份 WCL 报告里有哪些 Boss Attempt 和参与者：<WCL_URL>”
+- **机制复盘**：“复核这场 Boss Attempt 的机制处理：<WCL_URL_WITH_NUMERIC_FIGHT>”
+- **个人复盘**：“复盘我在这场 Boss Attempt 的表现，角色是 <角色名>：<WCL_URL_WITH_NUMERIC_FIGHT>”
+- **通用攻略**：“给我一份邪恶死亡骑士打当前团本 H7 和 H8 的攻略。”
 
 ## 2. 检查环境
 

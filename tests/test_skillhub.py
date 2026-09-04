@@ -28,6 +28,18 @@ class SkillHubPackageTests(unittest.TestCase):
         self.assertEqual(bare_commands, [])
         self.assertIn('cd "<SKILL_ROOT>" && python -m wcl_raid_coach doctor', skill)
 
+    def test_skill_routes_usage_help_requests(self) -> None:
+        root = Path(__file__).parents[1]
+        skill = (root / "SKILL.md").read_text(encoding="utf-8")
+        frontmatter = skill.split("---", 2)[1].lower()
+
+        self.assertIn("如何使用", frontmatter)
+        self.assertIn("how to use", frontmatter)
+
+        usage_help = skill.split("### 使用帮助", 1)[1].split("## 2.", 1)[0]
+        for workflow in ("报告数据", "机制复盘", "个人复盘", "通用攻略"):
+            self.assertIn(workflow, usage_help)
+
     def test_runtime_document_links_resolve(self) -> None:
         root = Path(__file__).parents[1]
         runtime_documents = [root / "SKILL.md", root / "README.md", root / "README.en.md"]

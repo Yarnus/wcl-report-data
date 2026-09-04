@@ -23,6 +23,13 @@
 
 环境要求：Python 3.11+、可访问 `warcraftlogs.com`，以及 Warcraft Logs API v2 client ID 和 client secret。
 
+安装为 Agent Skill 后，可以先问“如何使用 wcl-report-data？”查看能力菜单，也可以直接使用自然语言发起任务：
+
+- “帮我看看这份 WCL 报告里有哪些 Boss Attempt 和参与者：`<WCL_URL>`”
+- “复核这场 Boss Attempt 的机制处理：`<WCL_URL_WITH_NUMERIC_FIGHT>`”
+- “复盘我在这场 Boss Attempt 的表现，角色是 `<角色名>`：`<WCL_URL_WITH_NUMERIC_FIGHT>`”
+- “给我一份邪恶死亡骑士打当前团本 H7 和 H8 的攻略。”
+
 从仓库根目录运行 CLI。Agent 使用已安装的 Skill 时，应先定位 `SKILL.md` 所在的 Skill 根目录，再以该目录为工作目录运行 bundled CLI；无需全局安装 Python 包：
 
 ```bash
