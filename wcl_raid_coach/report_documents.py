@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-from .errors import InputError
+from .analysis import ANALYSIS_SCHEMA_VERSION
+from .cohort import verify_benchmark
+from .comparison import compare_player
+from .errors import InputError, WclRaidCoachError
+from .guides import verify_guide_snapshot
 from .storage import artifact_lock, atomic_write_json, atomic_write_text, read_json, sha256_file
 
 
@@ -95,7 +99,7 @@ def _validate_personal_document(document: dict[str, Any], common: dict[str, Any]
         raise InputError("Report Document player and comparison specialization do not match.")
     return common | {
         "source_artifacts": _validate_sources(
-            document["source_artifacts"], {"personal_analysis", "encounter_benchmark"}
+            document["source_artifacts"], {"personal_analysis", "encounter_benchmark", "comparison"}
         ),
         "identity": _validate_identity(document["identity"]),
         "player": player,
@@ -130,15 +134,15 @@ def _validate_guide_document(document: dict[str, Any], common: dict[str, Any]) -
 
 def render_report_document(value: Any, output_dir: Path) -> dict[str, Any]:
     document = validate_report_document(value)
-    for source in document["source_artifacts"]:
-        source_path = Path(source["path"]).expanduser()
-        if not source_path.is_file() or sha256_file(source_path) != source["sha256"]:
-            raise InputError(f"Report Document source artifact is missing or has an invalid hash: {source_path}")
-    html = {
-        "mechanic_review": _render_mechanic_html,
-        "personal_review": _render_personal_html,
-        "raid_guide": _render_guide_html,
-    }[document["document_type"]](document)
+    verification = _validate_source_artifacts(document)
+    html = (
+        _render_personal_html(document, verification)
+        if document["document_type"] == "personal_review"
+        else {
+            "mechanic_review": _render_mechanic_html,
+            "raid_guide": _render_guide_html,
+        }[document["document_type"]](document)
+    )
     html_sha256 = hashlib.sha256(html.encode("utf-8")).hexdigest()
     output_dir = output_dir.expanduser().resolve()
     html_path = output_dir / f"{html_sha256}.html"
@@ -190,6 +194,292 @@ def _validate_sources(value: Any, expected_kinds: set[str]) -> list[dict[str, st
     if {source["kind"] for source in result} != expected_kinds:
         raise InputError("Report Document source artifacts are incomplete for document_type.")
     return result
+
+
+def _validate_source_artifacts(document: dict[str, Any]) -> dict[str, bool]:
+    artifacts: dict[str, dict[str, Any]] = {}
+    try:
+        for source in document["source_artifacts"]:
+            source_path = Path(source["path"]).expanduser()
+            if not source_path.is_file():
+                raise InputError(
+                    f"Report Document source artifact is missing or has an invalid hash: {source_path}"
+                )
+            try:
+                payload = source_path.read_bytes()
+                if hashlib.sha256(payload).hexdigest() != source["sha256"]:
+                    raise InputError(
+                        f"Report Document source artifact is missing or has an invalid hash: {source_path}"
+                    )
+                artifact = json.loads(payload.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeError) as exc:
+                raise InputError(
+                    f"Report Document {source['kind']} source must be valid UTF-8 JSON."
+                ) from exc
+            if not isinstance(artifact, dict):
+                raise InputError(f"Report Document {source['kind']} source must be a JSON object.")
+            if source["kind"] in artifacts:
+                raise InputError("Report Document source artifact kinds must be unique.")
+            artifacts[source["kind"]] = artifact
+
+        if document["document_type"] == "mechanic_review":
+            _verify_mechanic_source(document, artifacts["mechanic_review"])
+            return {"mechanic_source": True}
+        elif document["document_type"] == "personal_review":
+            _verify_personal_sources(document, artifacts)
+            return {"complete_bundle": True, "hard_conditions": True, "comparison": True}
+        else:
+            _verify_guide_source(document, verify_guide_snapshot(artifacts["guide_snapshot"]))
+            return {"guide_snapshot": True, "hard_conditions": True, "profiles": True}
+    except InputError:
+        raise
+    except (WclRaidCoachError, OSError, KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise InputError("Report Document source artifacts could not be verified.") from exc
+
+
+def _verify_mechanic_source(document: dict[str, Any], source: dict[str, Any]) -> None:
+    if source.get("action") != "coach_mechanics" or source.get("selection_required") is not False:
+        raise InputError("Report Document mechanic_review source kind is invalid.")
+    identity = source.get("identity")
+    attempt = source.get("boss_attempt")
+    ruleset = source.get("ruleset")
+    evidence = source.get("evidence")
+    mechanics = source.get("mechanics")
+    if not all(isinstance(item, dict) for item in (identity, attempt, ruleset, evidence)) or not isinstance(mechanics, list):
+        raise InputError("Report Document mechanic_review source is malformed.")
+    claimed = document["identity"]
+    if identity.get("report_code") != claimed["report_code"] or identity.get("report_revision") != claimed["report_revision"]:
+        raise InputError("Report Document source Report Revision does not match.")
+    if identity.get("fight_id") != claimed["fight_id"]:
+        raise InputError("Report Document source Boss Attempt does not match.")
+    source_name = attempt.get("name_zh") if document["locale"] == "zh-CN" else attempt.get("name_en")
+    expected_attempt = {
+        "encounter_name": source_name,
+        "difficulty_name": attempt.get("difficulty"),
+        "duration_ms": _source_duration(attempt),
+        "outcome": "kill" if attempt.get("kill") is True else "wipe" if attempt.get("kill") is False else None,
+        "boss_percentage": attempt.get("boss_percentage"),
+    }
+    if any(claimed[field] != value for field, value in expected_attempt.items()):
+        raise InputError("Report Document source Boss Attempt difficulty or outcome does not match.")
+    if ruleset != document["ruleset"]:
+        raise InputError("Report Document source ruleset does not match.")
+    if (
+        evidence.get("class") != "mechanic_evidence_set"
+        or evidence.get("storage") != "process_memory"
+        or evidence.get("pagination_terminated") is not True
+        or evidence.get("report_revision_checked_before_and_after") is not True
+        or evidence.get("event_count") != document["evidence"]["event_count"]
+    ):
+        raise InputError("Report Document Mechanic Evidence Set verification does not match.")
+    source_by_name = {
+        item.get("name_zh") if document["locale"] == "zh-CN" else item.get("name_en"): item
+        for item in mechanics if isinstance(item, dict)
+    }
+    for mechanic in document["mechanics"]:
+        source_mechanic = source_by_name.get(mechanic["name"])
+        summary = source_mechanic.get("summary") if isinstance(source_mechanic, dict) else None
+        if not isinstance(summary, dict) or any(
+            mechanic[field] != summary.get(field)
+            for field in ("trigger_count", "success_count", "failure_count")
+        ):
+            raise InputError("Report Document mechanic claims do not match the Mechanic Review source.")
+        if mechanic["status"] == "anomaly" and source_mechanic.get("anomaly_detection") != "enabled":
+            raise InputError("Report Document anomaly was not verified by the Mechanic Review source.")
+        anomalies = source_mechanic.get("anomalies")
+        anomalies = anomalies if isinstance(anomalies, list) else []
+        for event in mechanic["events"]:
+            excerpt = event["evidence_excerpt"]
+            if not any(_event_matches_anomaly(event, excerpt, item) for item in anomalies):
+                raise InputError("Report Document evidence excerpt does not match a source anomaly.")
+
+
+def _verify_personal_sources(document: dict[str, Any], sources: dict[str, dict[str, Any]]) -> None:
+    analysis = sources["personal_analysis"]
+    benchmark = sources["encounter_benchmark"]
+    comparison = sources["comparison"]
+    if type(analysis.get("schema_version")) is not int or analysis["schema_version"] != ANALYSIS_SCHEMA_VERSION:
+        raise InputError("Personal Analysis uses an unsupported schema version; run coach review again.")
+    verify_benchmark(benchmark)
+    recomputed_comparison = compare_player(analysis, benchmark)
+    if comparison != recomputed_comparison:
+        raise InputError("Report Document Comparison source does not match its Personal Analysis and Benchmark.")
+    if comparison.get("schema_version") != 2:
+        raise InputError("Report Document Comparison uses an unsupported schema version.")
+    analysis_identity = analysis.get("identity")
+    analysis_player = analysis.get("player")
+    analysis_metrics = analysis.get("metrics")
+    benchmark_identity = benchmark.get("identity")
+    benchmark_metrics = benchmark.get("metrics")
+    if not all(isinstance(item, dict) for item in (analysis_identity, analysis_player, analysis_metrics, benchmark_identity, benchmark_metrics)):
+        raise InputError("Report Document Personal Review source is malformed.")
+    claimed_identity = document["identity"]
+    if (
+        analysis_identity.get("report_code") != claimed_identity["report_code"]
+        or analysis_identity.get("report_revision") != claimed_identity["report_revision"]
+    ):
+        raise InputError("Report Document source Report Revision does not match.")
+    if analysis_identity.get("fight_id") != claimed_identity["fight_id"]:
+        raise InputError("Report Document source Boss Attempt does not match.")
+    index, fight = _analysis_report_index(analysis, analysis_identity)
+    difficulty_names = {
+        item.get("id"): item.get("name")
+        for item in ((index.get("report") or {}).get("zone") or {}).get("difficulties", [])
+        if isinstance(item, dict)
+    }
+    expected_attempt = {
+        "encounter_name": fight.get("name"), "difficulty_name": difficulty_names.get(fight.get("difficulty")),
+        "duration_ms": fight.get("duration_ms"),
+        "outcome": "kill" if fight.get("kill") is True else "wipe" if fight.get("kill") is False else None,
+        "boss_percentage": fight.get("boss_percentage"),
+    }
+    if any(claimed_identity[field] != value for field, value in expected_attempt.items()):
+        raise InputError("Report Document source Boss Attempt details do not match.")
+    player = document["player"]
+    expected_player = {
+        "name": analysis_player.get("name"), "class_name": analysis_player.get("class"),
+        "spec_name": analysis_player.get("spec"), "item_level": analysis_player.get("item_level"),
+        "anonymous": analysis_player.get("anonymous", False),
+    }
+    if any(player[field] != value for field, value in expected_player.items()):
+        raise InputError("Report Document player does not match the Personal Analysis actor.")
+    expected_comparison = dict(benchmark_identity) | {
+        "sample_count": benchmark.get("sample_count"), "confidence": benchmark.get("confidence")
+    }
+    if document["comparison"] != expected_comparison:
+        raise InputError("Report Document comparison hard conditions or Benchmark identity do not match.")
+    expected_metrics = {
+        field: analysis_metrics.get(field)
+        for field in ("damage_total", "healing_total", "interrupts", "deaths", "resource_events")
+    } | {"damage_total_delta": (comparison.get("metrics") or {}).get("damage_total_delta")}
+    if document["metrics"] != expected_metrics:
+        raise InputError("Report Document personal metrics do not match their source artifacts.")
+    if document["abilities"] != _personal_source_abilities(analysis_metrics, benchmark_metrics, index):
+        raise InputError("Report Document ability claims do not match their source artifacts.")
+
+
+def _verify_guide_source(document: dict[str, Any], snapshot: dict[str, Any]) -> None:
+    if document["snapshot_id"] != snapshot.get("snapshot_id"):
+        raise InputError("Report Document Snapshot identity does not match.")
+    if document["specialization"] != snapshot.get("specialization") or document["ability_names_build"] != snapshot.get("ability_names_build"):
+        raise InputError("Report Document Guide Snapshot metadata does not match.")
+    snapshot_chapters = snapshot["chapters"]
+    markdown = Path(snapshot["markdown_path"]).read_text(encoding="utf-8")
+    first_identity = snapshot_chapters[0]["identity"]
+    difficulty_name = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(first_identity.get("difficulty_id"))
+    expected_identity = {
+        "game_version": first_identity.get("game_version"), "partition_id": first_identity.get("partition_id"),
+        "difficulty_name": difficulty_name, "class_name": first_identity.get("class_name"),
+        "spec_name": first_identity.get("spec_name"),
+    }
+    if document["identity"] != expected_identity:
+        raise InputError("Report Document Guide Snapshot hard conditions do not match.")
+    if len(document["chapters"]) != len(snapshot_chapters):
+        raise InputError("Report Document Guide Snapshot chapters do not match.")
+    snapshot_by_encounter = {chapter["identity"].get("encounter_id"): chapter for chapter in snapshot_chapters}
+    for chapter in document["chapters"]:
+        source = snapshot_by_encounter.get(chapter["encounter_id"])
+        if not isinstance(source, dict):
+            raise InputError("Report Document guide chapter is absent from the Guide Snapshot.")
+        source_name = source.get("encounter_name_zh") if document["locale"] == "zh-CN" else source.get("encounter_name_en")
+        if chapter["encounter_name"] != source_name:
+            raise InputError("Report Document guide chapter encounter identity does not match.")
+        for field in ("sample_count", "confidence", "encounter_profile_id", "specialization_profile_id"):
+            if chapter[field] != source.get(field):
+                label = "Profile" if "profile" in field else "chapter"
+                raise InputError(f"Report Document guide chapter {label} identity does not match.")
+        metrics = source.get("metrics") if isinstance(source.get("metrics"), dict) else {}
+        if chapter["damage_total_median"] != metrics.get("damage_total_median"):
+            raise InputError("Report Document guide chapter metrics do not match.")
+        expected_targets = [
+            {"target_id": int(target), "median_amount": amount}
+            for target, amount in sorted((metrics.get("damage_by_target_median") or {}).items(), key=lambda item: int(item[0]))
+        ]
+        if chapter["target_damage"] != expected_targets:
+            raise InputError("Report Document guide target metrics do not match.")
+        expected_anchors = [
+            {"name": item.get("name_zh") if document["locale"] == "zh-CN" else item.get("name"),
+             "observed_anchor_ms": item.get("observed_anchor_ms")}
+            for item in source.get("mechanic_anchors", []) if isinstance(item, dict)
+        ]
+        if chapter["mechanic_anchors"] != expected_anchors:
+            raise InputError("Report Document guide Profile mechanic anchors do not match.")
+        expected_sources = [
+            {"kind": kind, **{field: item.get(field) for field in ("title", "url", "quote_summary")}}
+            for kind in ("encounter", "specialization")
+            for item in (source.get("sources") or {}).get(kind, [])
+            if isinstance(item, dict)
+        ]
+        if chapter["sources"] != expected_sources:
+            raise InputError("Report Document guide Profile sources do not match.")
+        casts = metrics.get("casts_median") if isinstance(metrics.get("casts_median"), dict) else {}
+        first_casts = metrics.get("first_cast_ms_median") if isinstance(metrics.get("first_cast_ms_median"), dict) else {}
+        if sorted(item["median_casts"] for item in chapter["abilities"]) != sorted(float(value) for value in casts.values()):
+            raise InputError("Report Document guide ability metrics do not match.")
+        if sorted(item["median_first_cast_ms"] for item in chapter["abilities"] if item["median_first_cast_ms"] is not None) != sorted(float(value) for value in first_casts.values()):
+            raise InputError("Report Document guide ability timing metrics do not match.")
+        if any(ability["name"] not in markdown for ability in chapter["abilities"]):
+            raise InputError("Report Document guide ability names do not match the Guide Snapshot.")
+
+
+def _analysis_report_index(analysis: dict[str, Any], identity: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    evidence = analysis.get("evidence")
+    if not isinstance(evidence, dict) or not isinstance(evidence.get("index_path"), str):
+        raise InputError("Personal Analysis Report Index provenance is missing.")
+    index = read_json(Path(evidence["index_path"]))
+    if not isinstance(index, dict) or not isinstance(index.get("fights"), list):
+        raise InputError("Personal Analysis Report Index is malformed.")
+    fight = next(
+        (item for item in index["fights"] if isinstance(item, dict) and item.get("fight_id") == identity.get("fight_id")),
+        None,
+    )
+    if fight is None:
+        raise InputError("Personal Analysis Boss Attempt is absent from its Report Index.")
+    return index, fight
+
+
+def _personal_source_abilities(
+    analysis_metrics: dict[str, Any], benchmark_metrics: dict[str, Any], index: dict[str, Any]
+) -> list[dict[str, Any]]:
+    casts = analysis_metrics.get("casts") if isinstance(analysis_metrics.get("casts"), dict) else {}
+    first_casts = analysis_metrics.get("first_cast_ms") if isinstance(analysis_metrics.get("first_cast_ms"), dict) else {}
+    median_casts = benchmark_metrics.get("casts_median") if isinstance(benchmark_metrics.get("casts_median"), dict) else {}
+    median_first = benchmark_metrics.get("first_cast_ms_median") if isinstance(benchmark_metrics.get("first_cast_ms_median"), dict) else {}
+    names = {
+        str(item.get("gameID")): item.get("name")
+        for item in index.get("abilities", []) if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    return [
+        {
+            "name": names.get(ability, ability), "player_casts": casts.get(ability, 0),
+            "median_casts": None if ability not in median_casts else float(median_casts[ability]),
+            "player_first_cast_ms": None if ability not in first_casts else float(first_casts[ability]),
+            "median_first_cast_ms": None if ability not in median_first else float(median_first[ability]),
+        }
+        for ability in sorted(
+            set(casts) | set(median_casts),
+            key=lambda value: (0, int(value)) if value.isdigit() else (1, value),
+        )
+    ]
+
+
+def _source_duration(attempt: dict[str, Any]) -> int | None:
+    start = attempt.get("start_time")
+    end = attempt.get("end_time")
+    if not _number(start) or not _number(end):
+        return None
+    duration = float(end) - float(start)
+    return int(duration) if duration.is_integer() else None
+
+
+def _event_matches_anomaly(event: dict[str, Any], excerpt: dict[str, Any] | None, anomaly: Any) -> bool:
+    if not isinstance(anomaly, dict) or anomaly.get("time_ms") != event["fight_time_ms"]:
+        return False
+    actors = anomaly.get("actors") if isinstance(anomaly.get("actors"), list) else [anomaly.get("actor")]
+    names = [actor.get("name") for actor in actors if isinstance(actor, dict) and isinstance(actor.get("name"), str)]
+    if any(participant not in names for participant in event["participants"]):
+        return False
+    return excerpt is None or all(anomaly.get(field) == value for field, value in excerpt.items())
 
 
 def _validate_identity(value: Any) -> dict[str, Any]:
@@ -598,7 +888,7 @@ def _render_mechanic_html(document: dict[str, Any]) -> str:
 """
 
 
-def _render_personal_html(document: dict[str, Any]) -> str:
+def _render_personal_html(document: dict[str, Any], verification: dict[str, bool]) -> str:
     identity = document["identity"]
     player = document["player"]
     comparison = document["comparison"]
@@ -608,6 +898,8 @@ def _render_personal_html(document: dict[str, Any]) -> str:
     item_level = labels["unavailable"] if player["item_level"] is None else f'{player["item_level"]:g}'
     damage_delta = metrics["damage_total_delta"]
     delta_text = labels["unavailable"] if damage_delta is None else _format_amount(damage_delta)
+    hard_match = labels["hard_match"] if verification.get("hard_conditions") else labels["not_verified"]
+    evidence_status = labels["bundle_verified"] if verification.get("complete_bundle") else labels["not_verified"]
     return f"""<!doctype html>
 <html lang="{escape(document['locale'], quote=True)}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(document['title'])}</title><style>{_COACHING_CSS}</style></head>
@@ -615,8 +907,8 @@ def _render_personal_html(document: dict[str, Any]) -> str:
 <input class="theme-radio" id="theme-auto" name="theme" type="radio" checked><input class="theme-radio" id="theme-light" name="theme" type="radio"><input class="theme-radio" id="theme-dark" name="theme" type="radio">
 <div class="report"><nav class="theme-controls" aria-label="{escape(labels['theme'])}"><label for="theme-auto">A</label><label for="theme-light">☀</label><label for="theme-dark">☾</label></nav><div class="p-shell">
 <header class="p-head"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><div><h1>{escape(document['title'])}</h1><p>{escape(document['subtitle'])}</p></div><div class="p-id"><span class="kicker">Boss Attempt</span><b>#{identity['fight_id']} / Revision {identity['report_revision']}</b></div></header>
-<section class="player-strip"><div class="player-card"><span class="avatar">{escape(_initials(player['name']))}</span><div><h2>{escape(player['name'])}</h2><p>{escape(player['class_name'])} · {escape(player['spec_name'])}<br>{escape(labels['item_level'])} {item_level}{' · ' + escape(labels['anonymous']) if player['anonymous'] else ''}</p></div></div><div class="fact-ribbon">{_metric(labels['damage'], _format_amount(metrics['damage_total']))}{_metric(labels['healing'], _format_amount(metrics['healing_total']))}{_metric(labels['interrupts'], str(metrics['interrupts']))}{_metric(labels['deaths'], str(metrics['deaths']), 'bad' if metrics['deaths'] else '')}</div><aside class="benchmark-seal"><span class="kicker">{escape(labels['comparison_scope'])}</span><strong>{comparison['sample_count']} {escape(labels['samples'])}</strong><p>{escape(identity['difficulty_name'])} · Partition {comparison['partition_id']}<br>{escape(labels[comparison['confidence']])} · {escape(labels['hard_match'])}</p></aside></section>
-<section class="p-grid"><aside class="panel"><h2 class="panel-title">{escape(labels['identity_evidence'])}<span>LOG FACT</span></h2><ul class="scope-list"><li><small>WCL Report</small><b>{escape(identity['report_code'])} / Revision {identity['report_revision']}</b></li><li><small>Boss Attempt</small><b>{escape(identity['encounter_name'])} · {escape(identity['difficulty_name'])}</b></li><li><small>{escape(labels['specialization'])}</small><b>{escape(player['class_name'])} / {escape(player['spec_name'])}</b></li><li><small>{escape(labels['ranking_partition'])}</small><b>{escape(comparison['game_version'])} / Partition {comparison['partition_id']}</b></li><li><small>{escape(labels['evidence_status'])}</small><b class="good">{escape(labels['bundle_verified'])}</b></li></ul></aside>
+<section class="player-strip"><div class="player-card"><span class="avatar">{escape(_initials(player['name']))}</span><div><h2>{escape(player['name'])}</h2><p>{escape(player['class_name'])} · {escape(player['spec_name'])}<br>{escape(labels['item_level'])} {item_level}{' · ' + escape(labels['anonymous']) if player['anonymous'] else ''}</p></div></div><div class="fact-ribbon">{_metric(labels['damage'], _format_amount(metrics['damage_total']))}{_metric(labels['healing'], _format_amount(metrics['healing_total']))}{_metric(labels['interrupts'], str(metrics['interrupts']))}{_metric(labels['deaths'], str(metrics['deaths']), 'bad' if metrics['deaths'] else '')}</div><aside class="benchmark-seal"><span class="kicker">{escape(labels['comparison_scope'])}</span><strong>{comparison['sample_count']} {escape(labels['samples'])}</strong><p>{escape(identity['difficulty_name'])} · Partition {comparison['partition_id']}<br>{escape(labels[comparison['confidence']])} · {escape(hard_match)}</p></aside></section>
+<section class="p-grid"><aside class="panel"><h2 class="panel-title">{escape(labels['identity_evidence'])}<span>LOG FACT</span></h2><ul class="scope-list"><li><small>WCL Report</small><b>{escape(identity['report_code'])} / Revision {identity['report_revision']}</b></li><li><small>Boss Attempt</small><b>{escape(identity['encounter_name'])} · {escape(identity['difficulty_name'])}</b></li><li><small>{escape(labels['specialization'])}</small><b>{escape(player['class_name'])} / {escape(player['spec_name'])}</b></li><li><small>{escape(labels['ranking_partition'])}</small><b>{escape(comparison['game_version'])} / Partition {comparison['partition_id']}</b></li><li><small>{escape(labels['evidence_status'])}</small><b class="{'good' if verification.get('complete_bundle') else ''}">{escape(evidence_status)}</b></li></ul></aside>
 <section class="panel ability-board"><h2 class="panel-title">{escape(labels['ability_track'])}<span>{escape(labels['player_vs_median'])}</span></h2><div class="ability-head"><span>{escape(labels['ability'])}</span><span>{escape(labels['player'])}</span><span>{escape(labels['median'])}</span><span>{escape(labels['delta'])}</span><span>{escape(labels['relative_count'])}</span></div>{abilities or f'<p class="empty">{escape(labels["no_abilities"])}</p>'}</section>
 <aside class="panel guard"><h2 class="panel-title">{escape(labels['claim_limits'])}<span>GUARDRAILS</span></h2><article><b class="{'bad' if metrics['deaths'] else ''}">{metrics['deaths']} {escape(labels['death_events'])}</b><p>{escape(labels['death_limit'])}</p></article><article><b>{escape(labels['damage_delta'])} {escape(delta_text)}</b><p>{escape(labels['damage_limit'])}</p></article><article><b>{escape(labels['resource_events'])} {metrics['resource_events']}</b><p>{escape(labels['resource_limit'])}</p></article></aside>
 <section class="panel evidence-lane"><h2>{escape(labels['evidence_layers'])}</h2><div><article><h3>{escape(labels['log_facts'])}</h3><p>{escape(labels['log_fact_copy'])}</p></article><article><h3>{escape(labels['benchmark_comparison'])}</h3><p>{escape(labels['benchmark_copy'].format(samples=comparison['sample_count']))}</p></article><article><h3>{escape(labels['no_advice'])}</h3><p>{escape(labels['no_advice_copy'])}</p></article></div></section></section>
@@ -739,7 +1031,7 @@ def _personal_labels(locale: str) -> dict[str, str]:
             "theme": "Color theme", "item_level": "Item level", "anonymous": "anonymized data",
             "damage": "Damage total", "healing": "Healing total", "interrupts": "Interrupt events", "deaths": "Deaths",
             "comparison_scope": "Comparison scope", "samples": "samples", "low": "Low confidence", "normal": "Normal confidence", "hard_match": "Hard conditions match",
-            "identity_evidence": "Identity and evidence", "specialization": "Specialization", "ranking_partition": "Ranking partition", "evidence_status": "Evidence status", "bundle_verified": "Complete Bundle verified",
+            "identity_evidence": "Identity and evidence", "specialization": "Specialization", "ranking_partition": "Ranking partition", "evidence_status": "Evidence status", "bundle_verified": "Complete Bundle verified", "not_verified": "Not verified",
             "ability_track": "Key ability cast track", "player_vs_median": "Player vs sample median", "ability": "Ability", "player": "Player", "median": "Median", "delta": "Delta", "relative_count": "Relative count",
             "claim_limits": "Claim limits", "death_events": "death events", "death_limit": "The analysis has no death timestamp, killing ability, or responsibility attribution.",
             "damage_delta": "Damage delta", "damage_limit": "This unnormalized arithmetic delta is not an achievable improvement estimate.", "resource_events": "Resource events", "resource_limit": "This is an event count, not resource gain, overcap, or waste.",
@@ -751,7 +1043,7 @@ def _personal_labels(locale: str) -> dict[str, str]:
         "theme": "颜色主题", "item_level": "装等", "anonymous": "匿名化数据",
         "damage": "伤害总量", "healing": "治疗量", "interrupts": "打断事件", "deaths": "死亡",
         "comparison_scope": "比较范围", "samples": "个样本", "low": "低置信度", "normal": "标准置信度", "hard_match": "硬条件匹配",
-        "identity_evidence": "身份与证据", "specialization": "专精条件", "ranking_partition": "排名分区", "evidence_status": "证据状态", "bundle_verified": "Complete Bundle 已校验",
+        "identity_evidence": "身份与证据", "specialization": "专精条件", "ranking_partition": "排名分区", "evidence_status": "证据状态", "bundle_verified": "Complete Bundle 已校验", "not_verified": "未校验",
         "ability_track": "关键技能施放轨", "player_vs_median": "玩家 vs 样本中位数", "ability": "技能", "player": "玩家", "median": "中位数", "delta": "差值", "relative_count": "相对次数",
         "claim_limits": "结论边界", "death_events": "次死亡", "death_limit": "当前 analysis 不包含死亡时间、致死技能或责任，不能推断死亡原因。",
         "damage_delta": "伤害差值", "damage_limit": "这是未归一化的算术差值，不是可实现提升值。", "resource_events": "资源事件", "resource_limit": "这里只表示资源事件条数，不表示获取量、溢出或浪费。",

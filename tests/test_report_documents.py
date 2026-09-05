@@ -5,13 +5,79 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from tests import test_analysis
+from tests.test_cohort import EXPECTED
+from wcl_raid_coach.analysis import analyze_player
+from wcl_raid_coach.cohort import identify_benchmark
+from wcl_raid_coach.comparison import compare_player
 from wcl_raid_coach.errors import InputError
+from wcl_raid_coach.guides import create_guide_snapshot
 from wcl_raid_coach.report_documents import render_report_document, validate_report_document
+from wcl_raid_coach.storage import sha256_file
 
 
-def mechanic_document() -> dict:
-    source = Path(__file__)
+def _write_source(root: Path, name: str, value: object) -> dict[str, str]:
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return {"path": str(path), "sha256": sha256_file(path)}
+
+
+def mechanic_source() -> dict:
+    return {
+        "action": "coach_mechanics",
+        "selection_required": False,
+        "identity": {
+            "report_code": "AbC123", "report_revision": 7, "fight_id": 17,
+            "encounter_id": 1007, "difficulty_id": 4,
+        },
+        "boss_attempt": {
+            "name_en": "Sarcophagus Sentinel", "name_zh": "石棺哨兵",
+            "difficulty": "Heroic", "kill": False, "start_time": 1000,
+            "end_time": 343318,
+        },
+        "ruleset": {
+            "version": "2026.09.1", "selection_policy": "latest",
+            "sources": ["https://example.com/mechanics"],
+        },
+        "evidence": {
+            "class": "mechanic_evidence_set", "storage": "process_memory",
+            "filter_expression": "type = 'damage'", "event_count": 184,
+            "page_count": 1, "pagination_terminated": True,
+            "report_revision_checked_before_and_after": True,
+        },
+        "mechanics": [
+            {
+                "rule_id": "helical", "name_en": "Helical Toxin", "name_zh": "螺旋毒素",
+                "validation_status": "verified", "expectation": "Pair safely.",
+                "ability_ids": [1284941], "anomaly_detection": "enabled",
+                "summary": {"trigger_count": 18, "success_count": 14, "failure_count": 2},
+                "anomalies": [
+                    {"time_ms": 138440, "event_type": "damage", "ability_id": 1284941,
+                     "actor": {"actor_id": 3, "name": "Player 03", "type": "Player"},
+                     "raw_event": {"timestamp": 139440, "type": "damage", "abilityGameID": 1284941}}
+                ],
+            },
+            {
+                "rule_id": "collapse", "name_en": "Crypt Collapse", "name_zh": "墓穴崩塌",
+                "validation_status": "event_pattern_unverified", "expectation": "Review manually.",
+                "ability_ids": [2], "anomaly_detection": "event_pattern_unverified",
+                "summary": {"trigger_count": 8, "success_count": None, "failure_count": None},
+                "anomalies": [],
+            },
+        ],
+        "judgment": None,
+        "causal_attribution": None,
+    }
+
+
+def mechanic_document(source_root: Path | None = None) -> dict:
+    source = (
+        _write_source(source_root, "mechanic-review.json", mechanic_source())
+        if source_root is not None else {"path": "/work/mechanic-review.json", "sha256": "a" * 64}
+    )
     return {
         "schema_version": 1,
         "document_type": "mechanic_review",
@@ -21,8 +87,7 @@ def mechanic_document() -> dict:
         "source_artifacts": [
             {
                 "kind": "mechanic_review",
-                "path": str(source),
-                "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                **source,
             }
         ],
         "identity": {
@@ -33,7 +98,7 @@ def mechanic_document() -> dict:
             "difficulty_name": "Heroic",
             "duration_ms": 342318,
             "outcome": "wipe",
-            "boss_percentage": 32.7,
+            "boss_percentage": None,
         },
         "ruleset": {
             "version": "2026.09.1",
@@ -57,21 +122,13 @@ def mechanic_document() -> dict:
                     {
                         "fight_time_ms": 138440,
                         "tone": "danger",
-                        "title": "Player 03 + Player 11",
+                        "title": "Player 03",
                         "description": "四名相邻玩家随后受到机制伤害。",
-                        "participants": ["Player 03", "Player 11"],
+                        "participants": ["Player 03"],
                         "evidence_excerpt": {
                             "event_type": "damage",
                             "ability_id": 1284941,
                         },
-                    },
-                    {
-                        "fight_time_ms": 307315,
-                        "tone": "ok",
-                        "title": "Player 02 + Player 09",
-                        "description": "配对信号完整。",
-                        "participants": ["Player 02", "Player 09"],
-                        "evidence_excerpt": None,
                     },
                 ],
             },
@@ -92,9 +149,37 @@ def mechanic_document() -> dict:
     }
 
 
-def personal_document() -> dict:
-    source = Path(__file__)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+def personal_document(source_root: Path | None = None) -> dict:
+    sources = {
+        kind: {"path": f"/work/{kind}.json", "sha256": character * 64}
+        for kind, character in (("personal_analysis", "a"), ("encounter_benchmark", "b"), ("comparison", "c"))
+    }
+    if source_root is not None:
+        manifest, index = test_analysis.AnalysisTests().make_bundle(source_root)
+        index_value = json.loads(index.read_text(encoding="utf-8"))
+        index_value["fights"][0] |= {
+            "name": "石棺哨兵", "kill": False, "boss_percentage": 32.7,
+        }
+        index.write_text(json.dumps(index_value), encoding="utf-8")
+        manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+        manifest_value["report_index_sha256"] = hashlib.sha256(
+            json.dumps(index_value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        manifest.write_text(json.dumps(manifest_value), encoding="utf-8")
+        analysis = analyze_player(manifest, index, 10, partition_id=2)
+        benchmark = identify_benchmark({
+            "schema_version": 2, "cohort_id": "c" * 64,
+            "identity": analysis["comparison_identity"], "sample_count": 3,
+            "confidence": "low", "stable_pattern_claims_allowed": True,
+            "metrics": {"damage_total_median": 200, "casts_median": {"1": 2},
+                        "first_cast_ms_median": {"1": 80}},
+        })
+        comparison = compare_player(analysis, benchmark)
+        sources = {
+            "personal_analysis": _write_source(source_root, "personal-analysis.json", analysis),
+            "encounter_benchmark": _write_source(source_root, "benchmark.json", benchmark),
+            "comparison": _write_source(source_root, "comparison.json", comparison),
+        }
     return {
         "schema_version": 1,
         "document_type": "personal_review",
@@ -102,16 +187,19 @@ def personal_document() -> dict:
         "title": "Player 07 · 个人复盘",
         "subtitle": "Complete Bundle 日志事实 + 同条件 Encounter Benchmark",
         "source_artifacts": [
-            {"kind": "personal_analysis", "path": str(source), "sha256": digest},
-            {"kind": "encounter_benchmark", "path": str(source), "sha256": digest},
+            {"kind": kind, **source} for kind, source in sources.items()
         ],
-        "identity": mechanic_document()["identity"],
+        "identity": {
+            "report_code": "ABC", "report_revision": 1, "fight_id": 7,
+            "encounter_name": "石棺哨兵", "difficulty_name": "Heroic",
+            "duration_ms": 1000, "outcome": "wipe", "boss_percentage": 32.7,
+        },
         "player": {
-            "name": "Player <07>",
+            "name": "Player",
             "class_name": "DeathKnight",
             "spec_name": "Unholy",
-            "item_level": 684.0,
-            "anonymous": True,
+            "item_level": None,
+            "anonymous": False,
         },
         "comparison": {
             "game_version": "12.1",
@@ -120,32 +208,54 @@ def personal_document() -> dict:
             "difficulty_id": 4,
             "class_name": "DeathKnight",
             "spec_name": "Unholy",
-            "sample_count": 8,
+            "sample_count": 3,
             "confidence": "low",
         },
         "metrics": {
-            "damage_total": 248600000,
-            "healing_total": 3800000,
-            "interrupts": 2,
+            "damage_total": 150,
+            "healing_total": 0,
+            "interrupts": 1,
             "deaths": 1,
-            "resource_events": 146,
-            "damage_total_delta": -18200000,
+            "resource_events": 0,
+            "damage_total_delta": -50,
         },
         "abilities": [
             {
-                "name": "黑暗突变",
-                "player_casts": 7,
-                "median_casts": 8.0,
-                "player_first_cast_ms": 4200,
-                "median_first_cast_ms": 3800.0,
+                "name": "Ability",
+                "player_casts": 1,
+                "median_casts": 2.0,
+                "player_first_cast_ms": 100,
+                "median_first_cast_ms": 80.0,
             }
         ],
         "scope_note": "伤害差值不是可实现提升值；死亡计数不提供死亡原因。",
     }
 
 
-def raid_guide_document() -> dict:
-    source = Path(__file__)
+def raid_guide_document(source_root: Path | None = None) -> dict:
+    snapshot_id = "8f4c" + "0" * 60
+    source = {"path": "/work/guide-snapshot.json", "sha256": "a" * 64}
+    encounter_profile_id = "e17a" + "0" * 60
+    specialization_profile_id = "a94c" + "0" * 60
+    if source_root is not None:
+        benchmark = identify_benchmark({
+            "schema_version": 2, "cohort_id": "c" * 64, "identity": EXPECTED | {"game_version": "12.1"},
+            "encounter_profile_id": encounter_profile_id,
+            "specialization_profile_id": specialization_profile_id,
+            "sources": {"encounter": [{"title": "Source <title>", "url": "https://example.com/encounter", "quote_summary": "机制来源摘要。"}], "specialization": []},
+            "sample_count": 3, "confidence": "low", "stable_pattern_claims_allowed": True,
+            "mechanic_anchors": [{"ability_id": 1, "name": "Mechanic", "observed_anchor_ms": 18000}],
+            "metrics": {"damage_total_median": 266800000, "casts_median": {"1": 1},
+                        "first_cast_ms_median": {"1": 1300}, "damage_by_target_median": {"20": 188200000}},
+        })
+        snapshot = create_guide_snapshot(
+            [benchmark], specialization_name="邪恶死亡骑士", output_dir=source_root / "guides",
+            ability_names={"1": "亡者大军"}, ability_names_build="12.1.0.69587",
+            encounter_names={"1007": {"map_id": 3004, "name_en": "Boss 7", "name_zh": "中文首领七"}},
+            content_names_build="12.1.0.69587", content_names_sha256="d" * 64,
+        )
+        snapshot_id = snapshot["snapshot_id"]
+        source = {"path": snapshot["index_path"], "sha256": sha256_file(Path(snapshot["index_path"]))}
     return {
         "schema_version": 1,
         "document_type": "raid_guide",
@@ -155,8 +265,7 @@ def raid_guide_document() -> dict:
         "source_artifacts": [
             {
                 "kind": "guide_snapshot",
-                "path": str(source),
-                "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                **source,
             }
         ],
         "identity": {
@@ -167,13 +276,13 @@ def raid_guide_document() -> dict:
             "spec_name": "Unholy",
         },
         "specialization": "邪恶死亡骑士",
-        "snapshot_id": "8f4c" + "0" * 60,
+        "snapshot_id": snapshot_id,
         "ability_names_build": "12.1.0.69587",
         "chapters": [
             {
                 "encounter_id": 1007,
                 "encounter_name": "中文首领七",
-                "sample_count": 8,
+                "sample_count": 3,
                 "confidence": "low",
                 "damage_total_median": 266800000.0,
                 "abilities": [
@@ -181,7 +290,7 @@ def raid_guide_document() -> dict:
                 ],
                 "target_damage": [{"target_id": 20, "median_amount": 188200000.0}],
                 "mechanic_anchors": [
-                    {"name": "中文机制一", "observed_anchor_ms": 18000.0}
+                    {"name": "亡者大军", "observed_anchor_ms": 18000.0}
                 ],
                 "encounter_profile_id": "e17a" + "0" * 60,
                 "specialization_profile_id": "a94c" + "0" * 60,
@@ -203,7 +312,7 @@ class ReportDocumentTests(unittest.TestCase):
     def test_renders_content_addressed_self_contained_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary) / "outputs" / "reports"
-            result = render_report_document(mechanic_document(), output_dir)
+            result = render_report_document(mechanic_document(Path(temporary)), output_dir)
             html_path = Path(result["html_path"])
             index_path = Path(result["index_path"])
             html = html_path.read_text(encoding="utf-8")
@@ -222,7 +331,7 @@ class ReportDocumentTests(unittest.TestCase):
             self.assertNotIn("<link", html.lower())
             self.assertNotIn("@import", html.lower())
 
-            repeated = render_report_document(mechanic_document(), output_dir)
+            repeated = render_report_document(mechanic_document(Path(temporary)), output_dir)
             self.assertEqual(result, repeated)
 
     def test_rejects_unknown_fields_and_nested_evidence(self) -> None:
@@ -251,18 +360,150 @@ class ReportDocumentTests(unittest.TestCase):
     def test_refuses_to_overwrite_a_damaged_render(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary) / "reports"
-            result = render_report_document(mechanic_document(), output_dir)
+            result = render_report_document(mechanic_document(Path(temporary)), output_dir)
             Path(result["html_path"]).write_text("damaged", encoding="utf-8")
 
             with self.assertRaisesRegex(InputError, "invalid identity"):
-                render_report_document(mechanic_document(), output_dir)
+                render_report_document(mechanic_document(Path(temporary)), output_dir)
 
     def test_rejects_a_source_artifact_hash_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            document = mechanic_document()
+            document = mechanic_document(Path(temporary))
             document["source_artifacts"][0]["sha256"] = "0" * 64
             with self.assertRaisesRegex(InputError, "source artifact"):
                 render_report_document(document, Path(temporary))
+
+    def test_rejects_correctly_hashed_source_kind_substitution_and_malformed_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = mechanic_document(root)
+            unrelated = _write_source(root, "unrelated.json", {"schema_version": 2, "cohort_id": "c" * 64})
+            document["source_artifacts"][0] |= unrelated
+            with self.assertRaisesRegex(InputError, "mechanic_review"):
+                render_report_document(document, root / "reports")
+
+            malformed = root / "malformed.json"
+            malformed.write_text("{", encoding="utf-8")
+            document["source_artifacts"][0] |= {"path": str(malformed), "sha256": sha256_file(malformed)}
+            with self.assertRaisesRegex(InputError, "valid UTF-8 JSON"):
+                render_report_document(document, root / "reports")
+
+    def test_rejects_mechanic_source_identity_and_ruleset_mismatches(self) -> None:
+        mutations = (
+            (lambda source: source["identity"].__setitem__("report_revision", 8), "Report Revision"),
+            (lambda source: source["identity"].__setitem__("fight_id", 18), "Boss Attempt"),
+            (lambda source: source["boss_attempt"].__setitem__("difficulty", "Mythic"), "difficulty"),
+            (lambda source: source["ruleset"].__setitem__("version", "stale"), "ruleset"),
+        )
+        for mutate, message in mutations:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                document = mechanic_document(root)
+                source = mechanic_source()
+                mutate(source)
+                document["source_artifacts"][0] |= _write_source(root, "changed.json", source)
+                with self.assertRaisesRegex(InputError, message):
+                    render_report_document(document, root / "reports")
+
+    def test_personal_review_requires_verified_comparison_and_matching_claims(self) -> None:
+        mutations = (
+            ("personal_analysis", lambda value: value["identity"].__setitem__("report_revision", 2), "Complete Bundle evidence"),
+            ("personal_analysis", lambda value: value["player"].__setitem__("name", "Other"), "Complete Bundle evidence"),
+            ("encounter_benchmark", lambda value: value.__setitem__("sample_count", 4), "content ID"),
+            ("comparison", lambda value: value["identity"].__setitem__("partition_id", 3), "Comparison"),
+        )
+        for kind, mutate, message in mutations:
+            with self.subTest(kind=kind, message=message), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                document = personal_document(root)
+                source_ref = next(item for item in document["source_artifacts"] if item["kind"] == kind)
+                source = json.loads(Path(source_ref["path"]).read_text(encoding="utf-8"))
+                mutate(source)
+                source_ref |= _write_source(root, f"changed-{kind}.json", source)
+                with self.assertRaisesRegex(InputError, message):
+                    render_report_document(document, root / "reports")
+
+        document = personal_document()
+        document["source_artifacts"] = [
+            source for source in document["source_artifacts"] if source["kind"] != "comparison"
+        ]
+        with self.assertRaisesRegex(InputError, "incomplete"):
+            validate_report_document(document)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = personal_document(root)
+            document["player"]["name"] = "Other"
+            with self.assertRaisesRegex(InputError, "player"):
+                render_report_document(document, root / "reports")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = personal_document(root)
+            document["player"]["anonymous"] = True
+            with self.assertRaisesRegex(InputError, "player"):
+                render_report_document(document, root / "reports")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = personal_document(root)
+            document["identity"]["fight_id"] = 8
+            with self.assertRaisesRegex(InputError, "Boss Attempt"):
+                render_report_document(document, root / "reports")
+
+    def test_personal_review_converts_recomputation_parser_errors_to_input_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = personal_document(root)
+            with patch("wcl_raid_coach.comparison.analyze_player", side_effect=KeyError("secret-field")):
+                with self.assertRaisesRegex(InputError, "could not be verified"):
+                    render_report_document(document, root / "reports")
+
+    def test_rejects_stale_analysis_schema_and_snapshot_identity_mismatches(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = personal_document(root)
+            analysis_ref = next(item for item in document["source_artifacts"] if item["kind"] == "personal_analysis")
+            analysis = json.loads(Path(analysis_ref["path"]).read_text(encoding="utf-8"))
+            analysis["schema_version"] = 2
+            analysis_ref |= _write_source(root, "schema-2-analysis.json", analysis)
+            with self.assertRaisesRegex(InputError, "unsupported schema version"):
+                render_report_document(document, root / "reports")
+
+        mutations = (
+            (lambda document: document.__setitem__("snapshot_id", "0" * 64), "Snapshot"),
+            (lambda document: document["identity"].__setitem__("partition_id", 3), "hard conditions"),
+            (lambda document: document["chapters"][0].__setitem__("encounter_profile_id", "0" * 64), "Profile"),
+            (lambda document: document["chapters"][0].__setitem__("sample_count", 4), "chapter"),
+            (lambda document: document["chapters"][0]["abilities"][0].__setitem__("name", "Invented"), "ability names"),
+        )
+        for mutate, message in mutations:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                document = raid_guide_document(root)
+                mutate(document)
+                with self.assertRaisesRegex(InputError, message):
+                    render_report_document(document, root / "reports")
+
+    def test_rejects_modified_guide_snapshot_content_id_and_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = raid_guide_document(root)
+            source_ref = document["source_artifacts"][0]
+            snapshot = json.loads(Path(source_ref["path"]).read_text(encoding="utf-8"))
+            snapshot["specialization"] = "changed"
+            source_ref |= _write_source(root, "changed-snapshot.json", snapshot)
+            with self.assertRaisesRegex(InputError, "content ID"):
+                render_report_document(document, root / "reports")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = raid_guide_document(root)
+            source_ref = document["source_artifacts"][0]
+            snapshot = json.loads(Path(source_ref["path"]).read_text(encoding="utf-8"))
+            Path(snapshot["markdown_path"]).write_text("changed", encoding="utf-8")
+            with self.assertRaisesRegex(InputError, "Markdown"):
+                render_report_document(document, root / "reports")
 
     def test_rejects_boolean_identity_and_inconsistent_status(self) -> None:
         document = mechanic_document()
@@ -338,11 +579,11 @@ class ReportDocumentTests(unittest.TestCase):
 
     def test_renders_personal_review_without_inventing_claims(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            result = render_report_document(personal_document(), Path(temporary))
+            result = render_report_document(personal_document(Path(temporary)), Path(temporary) / "reports")
             html = Path(result["html_path"]).read_text(encoding="utf-8")
 
-        self.assertIn("Player &lt;07&gt;", html)
-        self.assertIn("黑暗突变", html)
+        self.assertIn("Player", html)
+        self.assertIn("Ability", html)
         self.assertIn("不是可实现提升值", html)
         self.assertNotIn("<script", html.lower())
 
@@ -358,11 +599,11 @@ class ReportDocumentTests(unittest.TestCase):
 
     def test_renders_raid_guide_from_snapshot_fields_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            result = render_report_document(raid_guide_document(), Path(temporary))
+            result = render_report_document(raid_guide_document(Path(temporary)), Path(temporary) / "reports")
             html = Path(result["html_path"]).read_text(encoding="utf-8")
 
         self.assertIn("中文首领七", html)
-        self.assertIn("中文机制一", html)
+        self.assertIn("亡者大军", html)
         self.assertIn("Source &lt;title&gt;", html)
         self.assertNotIn("<script", html.lower())
 
