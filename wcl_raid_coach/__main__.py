@@ -23,7 +23,7 @@ from .coach_tasks import CoachTaskStore
 from .cohort import build_benchmark, extract_ranking_candidates, identify_benchmark, identify_cohort, validate_analysis_membership
 from .comparison import compare_player
 from .models import ReportRef
-from .mechanics import MechanicReviewService
+from .mechanics import MechanicReviewService, compact_mechanic_review
 from .guides import create_guide_snapshot
 from .profiles import ProfileStore
 from .report_documents import (
@@ -116,11 +116,23 @@ def create_parser() -> argparse.ArgumentParser:
     )
     mechanics.add_argument("url")
     mechanics.add_argument("--encounter", help="Optional Encounter Designator used to list matching Boss Attempts.")
-    mechanics.add_argument(
+    mechanics_output = mechanics.add_mutually_exclusive_group()
+    mechanics_output.add_argument(
         "--report", action="store_true",
         help="Persist a sanitized source and render a Mechanic Review Report Document.",
     )
+    mechanics_output.add_argument(
+        "--compact", action="store_true",
+        help="Return a small summary without raw WCL payloads or pet-only anomaly records.",
+    )
     mechanics.add_argument("--locale", choices=("zh-CN", "en"), default="zh-CN")
+    evidence = coach_commands.add_parser(
+        "evidence", help="Collect a focused in-memory event window for specific participants."
+    )
+    evidence.add_argument("url")
+    evidence.add_argument("--at-ms", type=float, required=True, help="Fight-relative evidence anchor in milliseconds.")
+    evidence.add_argument("--window-ms", type=float, default=10_000, help="Milliseconds before and after the anchor.")
+    evidence.add_argument("--player-id", dest="player_ids", type=int, action="append", required=True)
     render = coach_commands.add_parser("render", help="Render a validated Report Document as self-contained HTML.")
     render.add_argument("document", type=Path)
     guide_report = coach_commands.add_parser(
@@ -189,8 +201,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 ),
             )
             if not args.report:
-                return review
+                return compact_mechanic_review(review) if args.compact else review
             return create_mechanic_review_report(review, store.data_root, locale=args.locale)
+        if args.coach_command == "evidence":
+            credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
+            return MechanicReviewService(WclClient(credentials)).focused_evidence(
+                ReportRef.parse(args.url),
+                at_ms=args.at_ms,
+                window_ms=args.window_ms,
+                player_ids=args.player_ids,
+            )
         if args.coach_command == "render":
             return {
                 "action": "coach_render",

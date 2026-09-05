@@ -9,6 +9,7 @@ from urllib.error import HTTPError
 from urllib.request import Request
 
 from wcl_raid_coach.api import (
+    FOCUSED_EVENT_QUERY,
     EVENT_QUERY,
     MECHANIC_EVENT_QUERY,
     RANKINGS_QUERY,
@@ -108,6 +109,7 @@ class WclClientTests(unittest.TestCase):
     def test_mechanic_event_query_uses_server_side_filtering(self) -> None:
         self.assertIn("$filterExpression: String!", MECHANIC_EVENT_QUERY)
         self.assertIn("filterExpression: $filterExpression", MECHANIC_EVENT_QUERY)
+        self.assertIn("targetID: $targetID", FOCUSED_EVENT_QUERY)
         self.assertNotIn("includeResources: true", MECHANIC_EVENT_QUERY)
 
     def test_report_index_uses_a_large_safety_reservation(self) -> None:
@@ -155,6 +157,25 @@ class WclClientTests(unittest.TestCase):
         self.assertEqual(variables["startTime"], 2_000)
         self.assertEqual(variables["endTime"], 5_000)
         self.assertEqual(variables["filterExpression"], "ability.id = 1")
+
+    def test_focused_event_request_sends_target_and_fixed_range(self) -> None:
+        client = self.make_client()
+        client._rate_limit_snapshot = {
+            "limitPerHour": 3600,
+            "pointsSpentThisHour": 0,
+            "pointsResetIn": 3600,
+        }
+        response = {"reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
+
+        with patch.object(client, "graphql", return_value=response) as graphql:
+            client.fetch_focused_events_page("AbC123", 1, 2_000, 5_000, 10)
+
+        query, variables = graphql.call_args.args
+        self.assertEqual(query, FOCUSED_EVENT_QUERY)
+        self.assertEqual(variables["startTime"], 2_000)
+        self.assertEqual(variables["endTime"], 5_000)
+        self.assertEqual(variables["targetID"], 10)
+        self.assertNotIn("filterExpression", variables)
 
     def test_report_revision_rejects_a_boolean(self) -> None:
         client = self.make_client()

@@ -281,6 +281,40 @@ class CliTests(unittest.TestCase):
         self.assertEqual(request.kwargs["encounter_designator"].as_dict()["value"], "H2")
         self.assertTrue(result["selection_required"])
 
+    def test_coach_mechanics_compact_returns_sanitized_summary(self) -> None:
+        args = create_parser().parse_args([
+            "coach", "mechanics", "https://www.warcraftlogs.com/reports/AbC123#fight=1", "--compact",
+        ])
+        review = {"action": "coach_mechanics", "selection_required": False, "mechanics": []}
+        with (
+            patch("wcl_raid_coach.__main__.resolve_credentials"),
+            patch("wcl_raid_coach.__main__.WclClient"),
+            patch("wcl_raid_coach.__main__.MechanicReviewService") as service,
+            patch("wcl_raid_coach.__main__.compact_mechanic_review", return_value={"output_mode": "compact"}) as compact,
+        ):
+            service.return_value.review.return_value = review
+            result = run(args)
+
+        compact.assert_called_once_with(review)
+        self.assertEqual(result["output_mode"], "compact")
+
+    def test_coach_evidence_passes_the_focused_window(self) -> None:
+        args = create_parser().parse_args([
+            "coach", "evidence", "https://www.warcraftlogs.com/reports/AbC123#fight=1",
+            "--at-ms", "1000", "--window-ms", "500", "--player-id", "10",
+        ])
+        with (
+            patch("wcl_raid_coach.__main__.resolve_credentials"),
+            patch("wcl_raid_coach.__main__.WclClient"),
+            patch("wcl_raid_coach.__main__.MechanicReviewService") as service,
+        ):
+            service.return_value.focused_evidence.return_value = {"action": "coach_evidence"}
+            result = run(args)
+
+        request = service.return_value.focused_evidence.call_args
+        self.assertEqual(request.kwargs, {"at_ms": 1000.0, "window_ms": 500.0, "player_ids": [10]})
+        self.assertEqual(result["action"], "coach_evidence")
+
     def test_coach_mechanics_report_returns_structured_artifact_paths(self) -> None:
         from tests.test_report_documents import mechanic_source
 

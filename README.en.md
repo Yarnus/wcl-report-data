@@ -68,6 +68,23 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review accepts kills and wipes, but only completed Boss Attempts; it rejects `fight=last`.
 
+For a fast conversational mechanic check, request compact output. It retains mechanic counts and player anomalies, removes raw WCL payloads, summarizes pet/NPC noise, and caps expanded player anomalies per mechanic:
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12" --compact
+```
+
+To inspect one or more participants' death chain around an anomaly without first preparing a full-attempt Complete Bundle, collect a fight-relative event window:
+
+```bash
+python -m wcl_raid_coach coach evidence \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12" \
+  --at-ms 210472 --window-ms 10000 --player-id 17
+```
+
+A Focused Evidence Window fully paginates each selected participant, returns only flat damage, healing, absorb, aura, death, and resurrection events, and rechecks the Report Revision. It remains process-local, creates no Report Index, Raw Page, Fight Bundle, manifest, or checkpoint, and does not establish responsibility or wipe causality.
+
 For a formal Mechanic Review delivery, add `--report` to the same command; select `--locale zh-CN` (the default) or `--locale en`:
 
 ```bash
@@ -192,6 +209,7 @@ Fight Bundles are immutable within a Report Revision. Re-exporting a report crea
 - Query output is evidence, not a conclusion. Without an independent source of encounter mechanics, do not label damage avoidable or infer responsibility.
 - A Mechanic Evidence Set exists only in the current process. It creates no Report Index, Raw Page, Fight Bundle, manifest, or checkpoint. It must follow filtered-event pagination to `nextPageTimestamp: null`, keep the fixed Boss Attempt range, and verify the same Report Revision before and after collection.
 - Mechanic Review uses the newest rules shipped with the installed package rather than replaying historical hotfix rules by report date. Updating rules requires updating the package; output records the ruleset version, sources, and `selection_policy: latest`.
+- `coach mechanics --compact` trims only current stdout and does not alter the Mechanic Evidence Set. A Focused Evidence Window is ephemeral follow-up evidence for explicit participants and a short time range, not a Complete Bundle or Canonical Event collection.
 - Per-mechanic trigger, success, and failure counts describe rule-defined event signals and are `null` when the log cannot establish an outcome. An anomaly means only that a verified event pattern matched; it does not assign player responsibility, performance, or wipe causality.
 - Coaching Artifacts are supported only when this CLI generates and consumes them in the user's local data or work directory. Hashes provide content identity and corruption detection, not origin authentication; externally supplied Artifacts are unsupported. Complete Bundles, Ranking Cohorts, Personal Reviews, Encounter Benchmarks, and Guide Snapshots using the former HMAC schemas must be rebuilt.
 

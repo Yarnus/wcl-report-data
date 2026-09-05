@@ -40,6 +40,8 @@ WCL 的 `translate: true` 会把 Report master ability 名称统一为英文，�
 
 Mechanic Review 使用独立的 `Report.events` 查询：单一数字 `fightID`、首页面以 Boss Attempt 起点作为 `startTime`、后续页以当前游标作为 `startTime`、固定 Boss Attempt `endTime`、`dataType: All`、actor/ability ID、每页上限 10,000，以及由当前规则集 ability ID 加 `death`、`interrupt`、`dispel` 组成的服务端 `filterExpression`。它不请求 `includeResources`。返回事件必须处于当前页游标和固定结束时间之间，并最终到达 `nextPageTimestamp: null`。
 
+Focused Evidence Window 使用独立的 `Report.events` 查询，范围是显式 fight-relative 锚点前后的短窗口。它为每个 Boss Attempt 参与者分别传入 WCL `targetID`，再在本地按返回事件的报告 actor ID 与伤害、治疗、吸收、光环、死亡、战复类型白名单过滤。它不请求 `includeResources`，每个参与者都必须到达 `nextPageTimestamp: null`，全部完成后复查一次 Report Revision。
+
 ## 限流
 
 客户端会使用指数退避重试临时连接失败，以及 HTTP 500、502、503 和 504 响应。HTTP 429 会立即打开进程内断路器。

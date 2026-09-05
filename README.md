@@ -66,6 +66,23 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review 接受击杀和灭团，但只接受已完成的 Boss Attempt；`fight=last` 会被拒绝。
 
+对当前对话中的快速机制检查，可使用紧凑输出。它保留机制计数和玩家异常，去除原始 WCL payload，汇总宠物/NPC 噪声，并限制每条机制展开的玩家异常数量：
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12" --compact
+```
+
+若需要检查某次异常附近一名或多名参与者的死亡链，可按 fight-relative 毫秒采集前后事件窗口，无需先准备全场 Complete Bundle：
+
+```bash
+python -m wcl_raid_coach coach evidence \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12" \
+  --at-ms 210472 --window-ms 10000 --player-id 17
+```
+
+Focused Evidence Window 对每个指定参与者完整分页，只返回扁平的伤害、治疗、吸收、光环、死亡和战复事件，并在采集后复查 Report Revision。它只驻留进程内，不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点，也不构成责任或灭团因果判断。
+
 正式交付 Mechanic Review 时，在同一条命令中加入 `--report`；可用 `--locale zh-CN`（默认）或 `--locale en`：
 
 ```bash
@@ -188,6 +205,7 @@ outputs/reports/
 - 查询结果是证据，不是结论。没有独立的首领机制知识来源时，不得把伤害标记为可规避或推断责任。
 - Mechanic Evidence Set 只在当前进程中存在，不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点。它必须完整跟随过滤事件分页到 `nextPageTimestamp: null`，保持固定 Boss Attempt 时间范围，并在前后校验同一 Report Revision。
 - Mechanic Review 使用安装包内最新版本的规则，不按报告日期回放历史热修规则。更新规则需要更新软件包；输出记录规则版本、来源和 `selection_policy: latest`。
+- `coach mechanics --compact` 只裁剪当前 stdout，不改变 Mechanic Evidence Set；Focused Evidence Window 是显式参与者和短时间范围的临时跟进证据，不是 Complete Bundle 或 Canonical Event 集。
 - 每条机制的触发、成功和失败计数都是规则定义的事件信号统计；不可由日志判定时为 `null`。异常仅表示已验证事件模式命中，不表示玩家责任、表现评价或灭团因果。
 - 教练 Artifact 只支持本 CLI 在用户本地数据目录或工作目录中生成和消费。Hash 用于内容身份和损坏检测，不认证来源；外部提供的 Artifact 不属于受支持输入。使用旧 HMAC schema 的 Complete Bundle、Ranking Cohort、Personal Review、Encounter Benchmark 和 Guide Snapshot 必须重新生成。
 

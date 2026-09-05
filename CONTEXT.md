@@ -44,6 +44,10 @@ _Avoid_: Partial Bundle, cached fight
 The in-memory WCL metadata and complete filtered event range used to evaluate one Boss Attempt at one Report Revision against one Mechanic Ruleset. It is neither a Fight Bundle nor a Canonical Event collection.
 _Avoid_: Complete Bundle, Raw Page, saved dataset
 
+**Focused Evidence Window**:
+A process-local, fully paginated slice around one fight-relative time for explicitly selected Boss Attempt participants. It supports follow-up inspection of damage, healing, aura, death, and resurrection facts without becoming a Complete Bundle or assigning responsibility.
+_Avoid_: death verdict, player history, partial Complete Bundle
+
 ## Coaching
 
 **Mechanic Review**:

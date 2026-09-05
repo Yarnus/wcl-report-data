@@ -24,6 +24,7 @@ metadata:
 
 - **报告数据**：用户要求下载、准备或查询一份 WCL Report 的团队事实。
 - **机制复盘**：用户要求检查一份 WCL Report 中单个 Boss Attempt 的首领机制处理结果，但不要求个人表现评价。
+- **快速责任候选**：用户问“谁是战犯”、谁失误最大或要求快速归因时，先做紧凑机制复盘，再对少量候选建立 Focused Evidence Window；这不是完整个人复盘。
 - **个人复盘**：用户提供 WCL URL，并要求评价一个玩家在一个 Boss Attempt 中的表现。
 - **通用攻略**：用户没有提供个人日志，要求当前 Retail 团本中某专精打一个或多个 Boss 的攻略。
 - **混合请求**：先完成个人复盘；用户明确要求通用打法时，再附同一 Boss 的通用原则。个人结论和群体结论必须分开。
@@ -89,6 +90,24 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_REPORT_URL>"
 ```bash
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>"
 ```
+
+用户只需要当前对话中的快速机制结论，或询问“谁是战犯”时，优先使用紧凑输出，避免把原始 WCL payload 和宠物噪声放入模型上下文：
+
+```bash
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>" --compact
+```
+
+紧凑输出保留机制计数、玩家异常和团队异常中的玩家，删除 `raw_event`、`raw_events`，汇总被抑制的宠物/NPC 异常记录，并把每条机制的玩家异常展示限制为 20 条。它不改变底层 Mechanic Evidence Set，也不能把异常提升为责任或灭团因果。
+
+若紧凑结果提供了候选玩家和异常时间，按 fight-relative 毫秒建立该玩家前后默认 10 秒的 Focused Evidence Window：
+
+```bash
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach evidence "<WCL_URL_WITH_NUMERIC_FIGHT>" --at-ms <TIME_MS> --player-id <ACTOR_ID>
+```
+
+可用 `--window-ms` 调整前后窗口，并可重复 `--player-id`。该命令只接受 Boss Attempt 参与者；每个玩家单独完整分页，使用 WCL `targetID` 请求参数并在本地再次按报告 actor ID 过滤。结果只保留扁平伤害、治疗、吸收、光环、死亡和战复字段，前后复查 Report Revision，不请求资源、不落盘，也不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点。
+
+快速责任候选必须先陈述 Boss Attempt 是击杀还是灭团，再分别列出机制命中、死亡链和团队影响。Focused Evidence Window 只支持当前窗口内的事实，不能证明站位责任、治疗责任或灭团因果；证据仍不足时明确保留不确定性。只有用户要求完整个人表现评价、Benchmark、Guide，或确实需要全场 Canonical Event 时才运行 `prepare`，不得为了快速责任候选默认下载 Complete Bundle。
 
 用户要求正式报告或 HTML 时，不要从 stdout 重抄字段，也不要先保存完整 Mechanic Review 结果；必须在同一采集进程直接运行：
 
