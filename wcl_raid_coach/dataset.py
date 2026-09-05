@@ -3,7 +3,6 @@ from __future__ import annotations
 import errno
 import gzip
 import hashlib
-import hmac
 import json
 import math
 import os
@@ -29,6 +28,7 @@ else:
 
 
 SCHEMA_VERSION = 1
+BUNDLE_SCHEMA_VERSION = 2
 COLLECTION_PROTOCOL_VERSION = 2
 RETAIL_GAME_VERSION = 1
 PRODUCT_NAME = "wcl-raid-coach"
@@ -553,18 +553,19 @@ class DatasetService:
         manifest_path = target / "manifest.json"
         if manifest_path.exists():
             manifest = _read_bundle_manifest(manifest_path)
-            if manifest.get("complete") is True and _has_current_collection_range(manifest, fight):
+            if (
+                manifest.get("complete") is True
+                and manifest.get("schema_version") == BUNDLE_SCHEMA_VERSION
+                and _has_current_collection_range(manifest, fight)
+            ):
                 expected_identity = {
                     "report_code": code,
                     "report_revision": revision,
                     "fight_id": fight_id,
                 }
-                schema_version = manifest.get("schema_version")
-                if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
-                    raise DatasetError("Fight Bundle uses an unsupported schema version.")
                 if manifest.get("identity") != expected_identity:
                     raise DatasetError("Fight Bundle manifest identity does not match its dataset path.")
-                _validate_bundle_file(manifest_path, manifest)
+                validate_complete_bundle(manifest_path)
                 return _bundle_result(manifest_path, manifest, cache_hit=True)
 
         import_root = self.store.import_root(code, revision, fight_id)
@@ -591,10 +592,6 @@ class DatasetService:
         temporary = Path(tempfile.mkdtemp(prefix=f".{fight_id}.", dir=target.parent))
         try:
             manifest = self._normalize_bundle(index, fight, checkpoint, temporary)
-            credentials = getattr(self.client, "credentials", None)
-            signing_key = getattr(credentials, "client_secret", None)
-            if isinstance(signing_key, str) and signing_key:
-                manifest = sign_bundle_manifest(manifest, signing_key)
             atomic_write_json(temporary / "manifest.json", manifest)
             if target.exists():
                 shutil.rmtree(target)
@@ -785,13 +782,14 @@ class DatasetService:
         temporary: Path,
     ) -> dict[str, Any]:
         events_path = temporary / "events.jsonl.gz"
+        canonical_digest = hashlib.sha256()
         unknown_fields: Counter[str] = Counter()
         event_types: Counter[str] = Counter()
         sequence = 0
         previous_timestamp: float | None = None
         fight_start = float(fight["start_time"])
         fight_end = float(fight["end_time"])
-        with gzip.open(events_path, "wt", encoding="utf-8") as output:
+        with gzip.open(events_path, "wb") as output:
             for page in checkpoint["pages"]:
                 page_path = Path(page["path"])
                 if sha256_file(page_path) != page.get("sha256"):
@@ -817,13 +815,14 @@ class DatasetService:
                     previous_timestamp = timestamp
                     unknown_fields.update(unknown)
                     event_types[canonical["type"]] += 1
-                    output.write(json.dumps(canonical, ensure_ascii=False, separators=(",", ":")))
-                    output.write("\n")
+                    line = (json.dumps(canonical, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+                    output.write(line)
+                    canonical_digest.update(line)
                     sequence += 1
 
         return {
             "product": PRODUCT_NAME,
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": BUNDLE_SCHEMA_VERSION,
             "complete": True,
             "generated_at": _now(),
             "identity": {
@@ -835,7 +834,8 @@ class DatasetService:
             "report_index": "../../report.json",
             "report_index_sha256": _json_sha256(index),
             "events_file": events_path.name,
-            "events_sha256": sha256_file(events_path),
+            "events_file_sha256": sha256_file(events_path),
+            "canonical_events_sha256": canonical_digest.hexdigest(),
             "event_count": sequence,
             "event_type_counts": dict(sorted(event_types.items())),
             "unknown_fields": dict(sorted(unknown_fields.items())),
@@ -1029,8 +1029,8 @@ def query_bundle(
 def validate_complete_bundle(manifest_path: Path) -> tuple[dict[str, Any], Path]:
     manifest = _read_bundle_manifest(manifest_path)
     schema_version = manifest.get("schema_version")
-    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
-        raise DatasetError("Fight Bundle uses an unsupported schema version.")
+    if type(schema_version) is not int or schema_version != BUNDLE_SCHEMA_VERSION:
+        raise DatasetError("Fight Bundle uses an unsupported schema version; prepare it again.")
     if manifest.get("complete") is not True:
         raise DatasetError("Only complete Fight Bundles can be queried.")
     collection = manifest.get("collection")
@@ -1063,35 +1063,46 @@ def validate_complete_bundle(manifest_path: Path) -> tuple[dict[str, Any], Path]
         page_path = Path(page.get("path", ""))
         if page_path.exists() and (not page_path.is_file() or sha256_file(page_path) != page["sha256"]):
             raise DatasetError("Complete Bundle Raw Page failed checksum validation.")
+    report_index_name = manifest.get("report_index")
+    expected_index_path = (manifest_path.parent.parent.parent / "report.json").resolve()
+    if not isinstance(report_index_name, str):
+        raise DatasetError("Complete Bundle manifest has no Report Index reference.")
+    report_index_path = (manifest_path.parent / report_index_name).resolve()
+    if report_index_path != expected_index_path or not report_index_path.is_file():
+        raise DatasetError("Complete Bundle Report Index reference is invalid.")
+    try:
+        report_index = read_json(report_index_path)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise DatasetError("Complete Bundle Report Index must be valid UTF-8 JSON.") from exc
+    if not isinstance(report_index, dict) or _json_sha256(report_index) != manifest.get("report_index_sha256"):
+        raise DatasetError("Complete Bundle Report Index failed content hash validation.")
+    identity = manifest.get("identity")
+    index_identity = report_index.get("report")
+    if not isinstance(identity, dict) or not isinstance(index_identity, dict) or (
+        identity.get("report_code"), identity.get("report_revision")
+    ) != (index_identity.get("code"), index_identity.get("revision")):
+        raise DatasetError("Complete Bundle and Report Index belong to different Report Revisions.")
     events_path = _validate_bundle_file(manifest_path, manifest)
     observed = 0
-    with gzip.open(events_path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise DatasetError("Canonical Event stream contains invalid JSON.") from exc
-            if not isinstance(event, dict) or event.get("sequence") != observed:
-                raise DatasetError("Canonical Event stream sequence is malformed.")
-            observed += 1
+    canonical_digest = hashlib.sha256()
+    try:
+        with gzip.open(events_path, "rb") as handle:
+            for line in handle:
+                canonical_digest.update(line)
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    raise DatasetError("Canonical Event stream contains invalid JSON.") from exc
+                if not isinstance(event, dict) or event.get("sequence") != observed:
+                    raise DatasetError("Canonical Event stream sequence is malformed.")
+                observed += 1
+    except (OSError, EOFError, zlib.error) as exc:
+        raise DatasetError("Complete Bundle compressed event stream is invalid.") from exc
     if observed != manifest.get("event_count"):
         raise DatasetError("Canonical Event stream count does not match the manifest.")
+    if canonical_digest.hexdigest() != manifest.get("canonical_events_sha256"):
+        raise DatasetError("Canonical Event stream failed content hash validation.")
     return manifest, events_path
-
-
-def sign_bundle_manifest(manifest: dict[str, Any], key: str) -> dict[str, Any]:
-    unsigned = dict(manifest)
-    unsigned.pop("coaching_signature", None)
-    message = json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    signature = hmac.new(key.encode(), message, hashlib.sha256).hexdigest()
-    return unsigned | {"coaching_signature": signature}
-
-
-def verify_bundle_signature(manifest: dict[str, Any], key: str) -> None:
-    signature = manifest.get("coaching_signature")
-    expected = sign_bundle_manifest(manifest, key)["coaching_signature"]
-    if not isinstance(signature, str) or not hmac.compare_digest(signature, expected):
-        raise DatasetError("Complete Bundle coaching signature is missing or invalid.")
 
 
 def _json_sha256(value: Any) -> str:
@@ -1160,7 +1171,7 @@ def _validate_bundle_file(manifest_path: Path, manifest: dict[str, Any]) -> Path
     events_path = (manifest_path.parent / events_name).resolve()
     if events_path.parent != manifest_path.parent.resolve():
         raise DatasetError("Fight Bundle events file points outside the bundle directory.")
-    if not events_path.is_file() or sha256_file(events_path) != manifest.get("events_sha256"):
+    if not events_path.is_file() or sha256_file(events_path) != manifest.get("events_file_sha256"):
         raise DatasetError(f"Fight Bundle event stream failed checksum validation: {events_path}")
     return events_path
 

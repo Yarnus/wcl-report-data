@@ -79,7 +79,7 @@ A Ranking Candidate that has a Complete Bundle and passes the cohort's hard cond
 _Avoid_: Ranking Candidate
 
 **Ranking Cohort**:
-The signed record of Ranking Candidates and accepted Reference Samples for one encounter, difficulty, specialization, and ranking partition.
+The content-addressed local record of Ranking Candidates and accepted Reference Samples for one encounter, difficulty, specialization, and ranking partition.
 _Avoid_: Benchmark, leaderboard
 
 **Encounter Benchmark**:

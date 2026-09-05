@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import DatasetError, InputError
-from .dataset import validate_complete_bundle, verify_bundle_signature
+from .dataset import validate_complete_bundle
 from .storage import read_json, sha256_file
 
 
@@ -18,17 +18,14 @@ def analyze_player(
     actor_id: int,
     *,
     partition_id: int | None = None,
-    signing_key: str | None = None,
 ) -> dict[str, Any]:
     manifest, events_path = validate_complete_bundle(manifest_path)
-    if signing_key is not None:
-        verify_bundle_signature(manifest, signing_key)
     index = _object(read_json(index_path), "Report Index")
     index_digest = hashlib.sha256(
         json.dumps(index, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     if manifest.get("report_index_sha256") != index_digest:
-        raise DatasetError("Report Index does not match the signed Complete Bundle.")
+        raise DatasetError("Report Index does not match the Complete Bundle.")
     identity = _object(manifest.get("identity"), "Complete Bundle identity")
     index_identity = _object(index.get("report"), "Report Index report identity")
     if (identity.get("report_code"), identity.get("report_revision")) != (
@@ -104,7 +101,7 @@ def analyze_player(
             if to_player and event_type == "death":
                 deaths += 1
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "identity": dict(identity),
         "player": dict(player),
         "evidence": {

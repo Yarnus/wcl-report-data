@@ -97,6 +97,8 @@ python -m wcl_raid_coach query \
 
 CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。完整参数参见 `python -m wcl_raid_coach --help`，完整工作流参见 [Skill 使用说明](SKILL.md)。
 
+`coach review`、`coach benchmark`、`coach guide` 和 `coach compare` 只消费本地 Artifact；本地名称 mapping 已存在时，它们不会为了校验 Artifact 而读取 WCL 凭据。访问 WCL API 的命令仍需要 OAuth client credentials。
+
 ## Encounter Designator 与名称映射
 
 Skill 能理解 `PT6`、`H6`、`M6` 形式的 Encounter Designator。前缀分别表示 Normal、Heroic、Mythic，数字表示 WCL `zone.encounters` 原始列表中的一基位置。Designator 只确定难度和 encounter；同一报告有多次匹配 Boss Attempt 时，Skill 必须列出明确的 fight ID 等待选择，不能自动选择击杀、最后一次或全部尝试。
@@ -152,6 +154,7 @@ outputs/reports/
 
 - 只有 `manifest.json` 中 `complete: true` 的 Fight Bundle 才能用于个人复盘、Benchmark 或 Guide；Mechanic Review 使用下述临时证据例外。
 - Complete Bundle 必须到达显式的 `nextPageTimestamp: null`，事件时间戳有序，未跨 Report Revision，并通过文件哈希校验。
+- Complete Bundle 同时校验压缩事件文件的 SHA-256 与解压后 Canonical Event JSONL 的内容 SHA-256。Ranking Cohort 和 Encounter Benchmark 使用规范 JSON 的内容 ID，不使用 WCL client secret 做 HMAC。
 - 所有分页请求都重复传入该战斗的固定 `startTime` 和 `endTime`；旧采集协议生成的 Bundle 会被拒绝并要求重新准备。
 - Canonical Event 只保留已知字段；未知字段名和次数写入 manifest，未知值留在 Raw Page 缓存中。
 - 角色名和服务器会保留在本地数据集，以便识别团队成员；对话中展示的数据可能由当前配置的模型服务商处理。
@@ -159,6 +162,7 @@ outputs/reports/
 - Mechanic Evidence Set 只在当前进程中存在，不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点。它必须完整跟随过滤事件分页到 `nextPageTimestamp: null`，保持固定 Boss Attempt 时间范围，并在前后校验同一 Report Revision。
 - Mechanic Review 使用安装包内最新版本的规则，不按报告日期回放历史热修规则。更新规则需要更新软件包；输出记录规则版本、来源和 `selection_policy: latest`。
 - 每条机制的触发、成功和失败计数都是规则定义的事件信号统计；不可由日志判定时为 `null`。异常仅表示已验证事件模式命中，不表示玩家责任、表现评价或灭团因果。
+- 教练 Artifact 只支持本 CLI 在用户本地数据目录或工作目录中生成和消费。Hash 用于内容身份和损坏检测，不认证来源；外部提供的 Artifact 不属于受支持输入。使用旧 HMAC schema 的 Complete Bundle、Ranking Cohort、Personal Review、Encounter Benchmark 和 Guide Snapshot 必须重新生成。
 
 ## 数据管理
 

@@ -9,13 +9,12 @@ from .errors import InputError
 
 
 def compare_player(
-    target: dict[str, Any], benchmark: dict[str, Any], *, signing_key: str | None = None
+    target: dict[str, Any], benchmark: dict[str, Any]
 ) -> dict[str, Any]:
     if not isinstance(target, dict) or not isinstance(benchmark, dict):
         raise InputError("Personal Review and Encounter Benchmark must be JSON objects.")
-    if signing_key is not None:
-        verify_benchmark(benchmark, signing_key)
-        _verify_analysis_evidence(target, signing_key)
+    verify_benchmark(benchmark)
+    _verify_analysis_evidence(target)
     target_identity = target.get("comparison_identity")
     benchmark_identity = benchmark.get("identity")
     if not isinstance(target_identity, dict) or not isinstance(benchmark_identity, dict):
@@ -39,7 +38,7 @@ def compare_player(
     if isinstance(damage_median, (int, float)) and isinstance(metrics.get("damage_total"), (int, float)):
         damage_delta = metrics["damage_total"] - damage_median
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "identity": dict(target_identity),
         "target": target.get("player"),
         "benchmark_sample_count": benchmark.get("sample_count"),
@@ -53,7 +52,7 @@ def compare_player(
     }
 
 
-def _verify_analysis_evidence(analysis: dict[str, Any], signing_key: str) -> None:
+def _verify_analysis_evidence(analysis: dict[str, Any]) -> None:
     evidence = analysis.get("evidence")
     player = analysis.get("player")
     identity = analysis.get("comparison_identity")
@@ -73,7 +72,6 @@ def _verify_analysis_evidence(analysis: dict[str, Any], signing_key: str) -> Non
             index_path,
             actor_id,
             partition_id=identity.get("partition_id"),
-            signing_key=signing_key,
         )
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise InputError("Personal Review evidence could not be verified.") from exc

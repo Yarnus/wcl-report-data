@@ -20,7 +20,7 @@ from .errors import InputError, WclRaidCoachError
 from .coach_models import CoachRequest, EncounterDesignator, parse_specialization
 from .coach_context import resolve_current_raid
 from .coach_tasks import CoachTaskStore
-from .cohort import build_benchmark, extract_ranking_candidates, sign_benchmark, sign_cohort, validate_analysis_membership
+from .cohort import build_benchmark, extract_ranking_candidates, identify_benchmark, identify_cohort, validate_analysis_membership
 from .comparison import compare_player
 from .models import ReportRef
 from .mechanics import MechanicReviewService
@@ -112,7 +112,7 @@ def create_parser() -> argparse.ArgumentParser:
     mechanics.add_argument("--encounter", help="Optional Encounter Designator used to list matching Boss Attempts.")
     render = coach_commands.add_parser("render", help="Render a validated Report Document as self-contained HTML.")
     render.add_argument("document", type=Path)
-    candidates = coach_commands.add_parser("candidates", help="Discover and sign recent ranking candidates.")
+    candidates = coach_commands.add_parser("candidates", help="Discover content-addressed recent ranking candidates.")
     candidates.add_argument("--encounter-id", type=int, required=True)
     candidates.add_argument("--difficulty-id", type=int, required=True)
     candidates.add_argument("--partition-id", type=int, required=True)
@@ -124,7 +124,7 @@ def create_parser() -> argparse.ArgumentParser:
     candidates.add_argument("--output", type=Path)
     profile = coach_commands.add_parser("profile", help="Validate and store a sourced Profile.")
     profile.add_argument("path", type=Path)
-    benchmark = coach_commands.add_parser("benchmark", help="Aggregate signed Reference Sample analyses.")
+    benchmark = coach_commands.add_parser("benchmark", help="Aggregate content-addressed Reference Sample analyses.")
     benchmark.add_argument("analyses", nargs="+", type=Path)
     benchmark.add_argument("--cohort", type=Path, required=True)
     benchmark.add_argument("--encounter-profile", type=Path, required=True)
@@ -195,7 +195,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
             return {"action": "coach_record", "task": task}
         if args.coach_command == "review":
-            credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
             result = {
                 "action": "coach_review",
                 "evidence_class": "log_fact",
@@ -204,7 +203,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     args.index,
                     args.source_id,
                     partition_id=args.partition_id,
-                    signing_key=credentials.client_secret,
                 ),
             }
             if args.output:
@@ -216,6 +214,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             client = WclClient(credentials)
             if not 1 <= args.sample_goal <= 10:
                 raise InputError("--sample-goal must be between 1 and 10.")
+            game_version: str | int = (
+                int(args.game_version) if args.game_version.isdigit() else args.game_version
+            )
             page = args.page
             discovered = {"eligible_recent_candidates": [], "unverified_recency_candidates": [], "rejected_candidates": []}
             while len(discovered["eligible_recent_candidates"]) < args.sample_goal:
@@ -249,12 +250,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     break
                 page += 1
             discovered["eligible_recent_candidates"] = discovered["eligible_recent_candidates"][: args.sample_goal]
-            cohort = sign_cohort(
+            cohort = identify_cohort(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "filters": {
                         "encounter_id": args.encounter_id,
-                        "game_version": args.game_version,
+                        "game_version": game_version,
                         "difficulty_id": args.difficulty_id,
                         "partition_id": args.partition_id,
                         "class_name": args.class_name,
@@ -262,8 +263,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "recency": "recent_14_days",
                     },
                     **discovered,
-                },
-                credentials.client_secret,
+                }
             )
             result = {"action": "coach_candidates", "cohort": cohort}
             if args.output:
@@ -274,14 +274,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             path = ProfileStore(args.data_root).store(read_json(args.path))
             return {"action": "coach_profile_store", "profile_path": str(path)}
         if args.coach_command == "benchmark":
-            credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
             analyses = [read_json(path) for path in args.analyses]
             if any(not isinstance(item, dict) for item in analyses):
                 raise InputError("Every Reference Sample analysis must be a JSON object.")
             cohort = read_json(args.cohort)
             if not isinstance(cohort, dict):
                 raise InputError("Ranking Cohort must be a JSON object.")
-            validate_analysis_membership(analyses, cohort, credentials.client_secret)
+            validate_analysis_membership(analyses, cohort)
             filters = cohort.get("filters")
             if not isinstance(filters, dict):
                 raise InputError("Ranking Cohort filters are missing.")
@@ -291,14 +290,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             }
             encounter_profile = read_json(args.encounter_profile)
             specialization_profile = read_json(args.specialization_profile)
-            result = sign_benchmark(
-                build_benchmark(analyses, encounter_profile, specialization_profile, expected),
-                credentials.client_secret,
+            result = identify_benchmark(
+                build_benchmark(
+                    analyses,
+                    encounter_profile,
+                    specialization_profile,
+                    expected,
+                    cohort_id=cohort["cohort_id"],
+                )
             )
             atomic_write_json(args.output, result)
             return {"action": "coach_benchmark", "benchmark_path": str(args.output), "benchmark": result}
         if args.coach_command == "guide":
-            credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
             benchmarks = [read_json(path) for path in args.benchmarks]
             ability_names_info = _ensure_ability_names(store)
             ability_names = read_json(Path(ability_names_info["mapping_path"]))
@@ -312,7 +315,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 benchmarks,
                 specialization_name=args.spec_display_name,
                 output_dir=args.data_root / "guides",
-                signing_key=credentials.client_secret,
                 ability_names=ability_names,
                 ability_names_build=ability_names_info["build"],
                 encounter_names=_encounter_names(content_names),
@@ -321,10 +323,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
             return {"action": "coach_guide", "guide": result, "content_names": content_names_info}
         if args.coach_command == "compare":
-            credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
-            result = compare_player(
-                read_json(args.analysis), read_json(args.benchmark), signing_key=credentials.client_secret
-            )
+            result = compare_player(read_json(args.analysis), read_json(args.benchmark))
             response = {"action": "coach_compare", "comparison": result}
             if args.output:
                 atomic_write_json(args.output, result)
