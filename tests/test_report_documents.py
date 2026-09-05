@@ -520,6 +520,9 @@ class ReportDocumentTests(unittest.TestCase):
             self.assertNotIn("<script", html.lower())
             self.assertNotIn("<link", html.lower())
             self.assertNotIn("@import", html.lower())
+            self.assertIn("overflow-wrap:anywhere", html)
+            self.assertIn("#theme-auto:focus-visible", html)
+            self.assertIn('<a href="https://example.com/mechanics" rel="noreferrer">', html)
 
             repeated = render_report_document(mechanic_document(Path(temporary)), output_dir)
             self.assertEqual(result, repeated)
