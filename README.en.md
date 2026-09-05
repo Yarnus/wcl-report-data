@@ -68,7 +68,16 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review accepts kills and wipes, but only completed Boss Attempts; it rejects `fight=last`.
 
-A formal Mechanic Review or Personal Review can be expressed as its corresponding structured Report Document defined by the [dataset contract](references/data-contract.en.md), then rendered as self-contained HTML. This command does not access WCL or require credentials:
+For a formal Mechanic Review delivery, add `--report` to the same command; select `--locale zh-CN` (the default) or `--locale en`:
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12" --report --locale en
+```
+
+Only after the in-memory Mechanic Review completes pagination and verifies the same Report Revision before and after collection, this path writes a strictly sanitized source to `outputs/mechanic-reviews/<sha256>.json`, assembles and validates its Report Document from that source, and renders into `outputs/reports/`. JSON stdout returns `source.path`, `source.sha256`, the `document`, and content identities and paths under `report`; no mixed output needs scraping. The source retains only WCL Report, Report Revision, Boss Attempt, and Mechanic Ruleset identity and metadata, counts, supported conclusions, phases, participants, and flat minimal evidence excerpts. It omits the complete filtered event range, Raw Pages, Fight Bundles, `raw_event`, `raw_events`, aura application objects, arbitrary WCL payloads, responsibility, and wipe causality. Pagination, revision, collection, sanitization, validation, or initial rendering failure leaves no new source artifact; identical content reuses the existing immutable artifact.
+
+Other already-assembled Report Document types can still be rendered separately according to the [dataset contract](references/data-contract.en.md). This command does not access WCL or require credentials:
 
 ```bash
 python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"

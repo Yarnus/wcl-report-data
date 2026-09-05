@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from wcl_raid_coach.__main__ import create_parser, main, run
 from wcl_raid_coach.cohort import identify_benchmark
+from wcl_raid_coach.errors import RevisionChangedError
 
 
 class CliTests(unittest.TestCase):
@@ -279,6 +280,53 @@ class CliTests(unittest.TestCase):
         self.assertEqual(request.args[0].code, "AbC123")
         self.assertEqual(request.kwargs["encounter_designator"].as_dict()["value"], "H2")
         self.assertTrue(result["selection_required"])
+
+    def test_coach_mechanics_report_returns_structured_artifact_paths(self) -> None:
+        from tests.test_report_documents import mechanic_source
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = io.StringIO()
+            with (
+                patch("wcl_raid_coach.__main__.resolve_credentials"),
+                patch("wcl_raid_coach.__main__.WclClient"),
+                patch("wcl_raid_coach.__main__.MechanicReviewService") as service,
+                redirect_stdout(output),
+            ):
+                service.return_value.review.return_value = mechanic_source()
+                status = main([
+                    "--data-root", str(root / "data"),
+                    "--cache-root", str(root / "cache"),
+                    "coach", "mechanics",
+                    "https://www.warcraftlogs.com/reports/AbC123#fight=17",
+                    "--report", "--locale", "en",
+                ])
+            result = json.loads(output.getvalue())
+
+            self.assertEqual(status, 0)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["action"], "coach_mechanic_report")
+            self.assertNotIn("mechanics", result)
+            self.assertTrue(Path(result["source"]["path"]).is_file())
+            self.assertTrue(Path(result["report"]["html_path"]).is_file())
+
+    def test_coach_mechanics_report_failure_is_a_structured_domain_error(self) -> None:
+        output = io.StringIO()
+        with (
+            patch("wcl_raid_coach.__main__.resolve_credentials"),
+            patch("wcl_raid_coach.__main__.WclClient"),
+            patch("wcl_raid_coach.__main__.MechanicReviewService") as service,
+            redirect_stdout(output),
+        ):
+            service.return_value.review.side_effect = RevisionChangedError("revision changed")
+            status = main([
+                "coach", "mechanics",
+                "https://www.warcraftlogs.com/reports/AbC123#fight=17", "--report",
+            ])
+        result = json.loads(output.getvalue())
+
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "report_revision_changed")
 
     def test_invalid_coach_profile_encoding_returns_a_structured_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

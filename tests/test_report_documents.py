@@ -15,8 +15,10 @@ from wcl_raid_coach.comparison import compare_player
 from wcl_raid_coach.errors import InputError
 from wcl_raid_coach.guides import create_guide_snapshot
 from wcl_raid_coach.report_documents import (
+    create_mechanic_review_report,
     assemble_raid_guide_document,
     render_report_document,
+    sanitize_mechanic_review,
     validate_report_document,
 )
 from wcl_raid_coach.storage import sha256_file
@@ -78,8 +80,15 @@ def mechanic_source() -> dict:
 
 
 def mechanic_document(source_root: Path | None = None) -> dict:
+    review = mechanic_source()
+    review["phases"] = [
+        {"name_en": "Phase one", "name_zh": "阶段一", "start_ms": 0, "end_ms": 120000},
+        {"name_en": "Phase two", "name_zh": "阶段二", "start_ms": 120000, "end_ms": 342318},
+    ]
+    source_value = sanitize_mechanic_review(review)
+    source_value["mechanics"][0]["conclusion"]["zh"] = "事件确认异常，但不裁定责任。<img src=x onerror=alert(1)>"
     source = (
-        _write_source(source_root, "mechanic-review.json", mechanic_source())
+        _write_source(source_root, "mechanic-review.json", source_value)
         if source_root is not None else {"path": "/work/mechanic-review.json", "sha256": "a" * 64}
     )
     return {
@@ -121,13 +130,13 @@ def mechanic_document(source_root: Path | None = None) -> dict:
                 "trigger_count": 18,
                 "success_count": 14,
                 "failure_count": 2,
-                "description": "事件确认异常，但不裁定责任。<img src=x onerror=alert(1)>",
+                "description": source_value["mechanics"][0]["conclusion"]["zh"],
                 "events": [
                     {
                         "fight_time_ms": 138440,
                         "tone": "danger",
-                        "title": "Player 03",
-                        "description": "四名相邻玩家随后受到机制伤害。",
+                        "title": "螺旋毒素",
+                        "description": "damage 事件支持该结论（ability 1284941）",
                         "participants": ["Player 03"],
                         "evidence_excerpt": {
                             "event_type": "damage",
@@ -138,18 +147,16 @@ def mechanic_document(source_root: Path | None = None) -> dict:
             },
             {
                 "name": "墓穴崩塌",
-                "status": "review",
+                "status": "unverified",
                 "trigger_count": 8,
                 "success_count": None,
                 "failure_count": None,
-                "description": "日志不足以自动裁决。",
+                "description": source_value["mechanics"][1]["conclusion"]["zh"],
                 "events": [],
             },
         ],
-        "actions": [
-            {"title": "配对确认", "description": "点名后两秒内口头确认搭档。"}
-        ],
-        "scope_note": "异常不表示玩家责任、表现评价或灭团因果。",
+        "actions": [],
+        "scope_note": source_value["scope_note"]["zh"],
     }
 
 
@@ -314,6 +321,61 @@ def raid_guide_document(source_root: Path | None = None) -> dict:
 
 
 class ReportDocumentTests(unittest.TestCase):
+    def test_completed_review_creates_sanitized_source_document_html_and_index(self) -> None:
+        review = mechanic_source()
+        review["mechanics"][0]["anomalies"][0]["raw_events"] = [
+            {"timestamp": 139440, "type": "damage", "arbitraryWclField": {"secret": True}}
+        ]
+        review["mechanics"][0]["anomalies"][0]["aura_application_raw_event"] = {
+            "timestamp": 130000, "type": "applydebuff"
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = create_mechanic_review_report(review, root, locale="zh-CN")
+            source_path = Path(result["source"]["path"])
+            source = json.loads(source_path.read_text(encoding="utf-8"))
+            index = json.loads(Path(result["report"]["index_path"]).read_text(encoding="utf-8"))
+            html = Path(result["report"]["html_path"]).read_text(encoding="utf-8")
+
+            self.assertEqual(source_path.parent, (root / "outputs" / "mechanic-reviews").resolve())
+            self.assertEqual(source_path.stem, result["source"]["sha256"])
+            self.assertEqual(source["artifact_type"], "mechanic_review")
+            self.assertEqual(source["identity"]["report_revision"], 7)
+            self.assertEqual(source["mechanics"][0]["counts"], {
+                "trigger_count": 18, "success_count": 14, "failure_count": 2,
+            })
+            self.assertEqual(source["mechanics"][0]["events"][0]["participants"], ["Player 03"])
+            self.assertEqual(source["mechanics"][0]["events"][0]["evidence_excerpt"], {
+                "event_type": "damage", "ability_id": 1284941,
+            })
+            serialized = json.dumps(source)
+            for forbidden in (
+                "raw_event", "raw_events", "aura_application_raw_event",
+                "filter_expression", "judgment", "causal_attribution", "arbitraryWclField",
+            ):
+                self.assertNotIn(forbidden, serialized)
+            self.assertEqual(index["document"]["source_artifacts"][0], {
+                "kind": "mechanic_review", "path": str(source_path),
+                "sha256": result["source"]["sha256"],
+            })
+            self.assertEqual(index["document"]["document_id"], result["report"]["document_id"])
+            self.assertIn("螺旋毒素", html)
+
+            repeated = create_mechanic_review_report(review, root, locale="zh-CN")
+            self.assertEqual(result, repeated)
+
+    def test_render_failure_removes_new_mechanic_source_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch(
+                "wcl_raid_coach.report_documents.render_report_document",
+                side_effect=InputError("render failed"),
+            ):
+                with self.assertRaisesRegex(InputError, "render failed"):
+                    create_mechanic_review_report(mechanic_source(), root, locale="en")
+
+            self.assertFalse((root / "outputs" / "mechanic-reviews").exists())
+
     def test_renders_content_addressed_self_contained_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary) / "outputs" / "reports"
@@ -397,17 +459,33 @@ class ReportDocumentTests(unittest.TestCase):
         mutations = (
             (lambda source: source["identity"].__setitem__("report_revision", 8), "Report Revision"),
             (lambda source: source["identity"].__setitem__("fight_id", 18), "Boss Attempt"),
-            (lambda source: source["boss_attempt"].__setitem__("difficulty", "Mythic"), "difficulty"),
+            (lambda source: source["identity"].__setitem__("difficulty_name", "Mythic"), "difficulty"),
             (lambda source: source["ruleset"].__setitem__("version", "stale"), "ruleset"),
         )
         for mutate, message in mutations:
             with self.subTest(message=message), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 document = mechanic_document(root)
-                source = mechanic_source()
+                source = sanitize_mechanic_review(mechanic_source())
                 mutate(source)
                 document["source_artifacts"][0] |= _write_source(root, "changed.json", source)
                 with self.assertRaisesRegex(InputError, message):
+                    render_report_document(document, root / "reports")
+
+    def test_rejects_mechanic_narrative_not_derived_from_the_source(self) -> None:
+        mutations = (
+            lambda document: document.__setitem__("title", "Player 03 caused the wipe"),
+            lambda document: document.__setitem__("scope_note", "Player 03 is responsible."),
+            lambda document: document["actions"].append({
+                "title": "Assign blame", "description": "Treat the event as wipe causality."
+            }),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                document = mechanic_document(root)
+                mutate(document)
+                with self.assertRaisesRegex(InputError, "narrative"):
                     render_report_document(document, root / "reports")
 
     def test_personal_review_requires_verified_comparison_and_matching_claims(self) -> None:

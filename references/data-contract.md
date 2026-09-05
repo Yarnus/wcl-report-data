@@ -91,6 +91,10 @@ Mechanic Evidence Set 仅存在于当前进程内，不创建 Report Index、Raw
 
 每条机制的计数只描述规则定义的事件信号；日志无法客观判定成功或失败时，相应值为 `null`。只有当前难度标记为 `verified` 的事件模式才可产生异常；`event_pattern_unverified` 和 observation 规则不得产生异常。异常不是责任、表现评价或灭团因果。
 
+`coach mechanics <URL_WITH_NUMERIC_FIGHT> --report [--locale zh-CN|en]` 是 Mechanic Review 的第一方持久化与渲染路径。它必须在完成采集和 revision 复查的同一进程中，从实际结果派生 schema `1` 的净化 `mechanic_review` 来源。来源只允许保存 WCL Report、Report Revision、Boss Attempt 与 Mechanic Ruleset 身份及元数据、事件页/事件计数、受支持结论或异常、阶段、参与者，以及下文允许的扁平最小证据摘录；不得保存完整过滤事件范围、Raw Page、Fight Bundle 或 Complete Bundle 替代物、`raw_event`、`raw_events`、光环应用对象、任意 WCL payload、责任或灭团因果。
+
+校验后的来源按格式化 JSON 文件字节的 SHA-256 写入 `outputs/mechanic-reviews/<sha256>.json`，通过 artifact lock 和原子写入协调；已有同身份内容必须复用，身份不匹配时拒绝覆盖。分页未到达显式 null、Report Revision 变化或采集失败时不会调用持久化。净化、来源校验或首次 HTML 渲染失败时删除本次新建的来源，因此不会留下误导性的部分来源。
+
 ## Report Document
 
 Report Document 是展示层输入，不是证据层数据。schema `1` 接受 `document_type: "mechanic_review"`、`"personal_review"` 或 `"raid_guide"`。三者共享 locale、标题、副标题、来源 artifact 和审计边界说明，其余字段按类型严格区分。
@@ -168,7 +172,7 @@ Personal Review 没有机制归因或建议字段。Raid Guide 没有 rotation�
 
 调用方不得提交 HTML、CSS 或 JavaScript，未知字段一律拒绝。Mechanic Review 每条机制最多保存 20 个展示事件。事件 `evidence_excerpt` 只接受 `event_type`、`ability_id`、`source_id`、`target_id`、`amount`、`duration_ms`、`delta_ms`、`episode`、`outcome` 和 `note` 这些扁平标量字段，文本值最多 300 字符；不得嵌入原始事件对象或完整 Mechanic Evidence Set。`anomaly` 状态必须有正数失败计数和展示事件；`ok` 必须有零失败计数；`unverified` 不能声明成功或失败计数。Report Document 不提供 `judgment` 或 `causal_attribution` 字段。
 
-renderer 的信任边界不止是路径和文件 SHA-256。每个来源必须是有效 UTF-8 JSON，并符合其声明的 artifact 类型和当前 schema；Encounter Benchmark 和 Guide Snapshot 必须通过规范 JSON 内容 ID 校验，Guide Snapshot 的 Markdown 也必须通过哈希校验，Personal Analysis 必须从其 Complete Bundle 和 Report Index 重新计算。renderer 随后逐项核对文档声明的 Report Revision、Boss Attempt、actor/player、比较硬条件、Benchmark 样本数与置信度、Snapshot ID、Profile ID 及章节隔离。Mechanic Review 来源必须是一次已完成、分页终止并在采集前后确认 Report Revision 的进程内 Mechanic Evidence Set 结果；持久化 Report Document 仍不得保存完整 Mechanic Evidence Set。只有上述校验实际建立后，HTML 才会显示 Complete Bundle 或硬条件已校验。普通 SHA-256 仍只提供本地内容身份和损坏检测，不认证 artifact 的生成者。
+renderer 的信任边界不止是路径和文件 SHA-256。每个来源必须是有效 UTF-8 JSON，并符合其声明的 artifact 类型和当前 schema；Encounter Benchmark 和 Guide Snapshot 必须通过规范 JSON 内容 ID 校验，Guide Snapshot 的 Markdown 也必须通过哈希校验，Personal Analysis 必须从其 Complete Bundle 和 Report Index 重新计算。renderer 随后逐项核对文档声明的 Report Revision、Boss Attempt、actor/player、比较硬条件、Benchmark 样本数与置信度、Snapshot ID、Profile ID 及章节隔离。Mechanic Review 来源必须通过上述严格 schema，并记录分页终止及采集前后 Report Revision 已确认；renderer 会逐项核对来源中的身份、规则集、计数、结论、阶段和最小摘录。持久化 Report Document 仍不得保存完整 Mechanic Evidence Set。只有上述校验实际建立后，HTML 才会显示 Complete Bundle 或硬条件已校验。普通 SHA-256 仍只提供本地内容身份和损坏检测，不认证 artifact 的生成者。
 
 `coach guide-report` 是 Raid Guide 的第一方组装路径。它只接受一个已校验 Guide Snapshot JSON artifact，不接受调用方重写章节；派生文档保留精确 Snapshot ID 与 artifact 文件 SHA-256，并按原章节复制 encounter identity、`benchmark_id`、Profile ID、样本数/置信度、指标、本地化技能、机制锚点和来源。每章必须逐项回查同一 Snapshot 章节，禁止跨 Boss 交换同值指标、技能或来源。
 
