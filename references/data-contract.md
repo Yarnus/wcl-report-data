@@ -91,6 +91,16 @@ Mechanic Evidence Set 仅存在于当前进程内，不创建 Report Index、Raw
 
 每条机制的计数只描述规则定义的事件信号；日志无法客观判定成功或失败时，相应值为 `null`。只有当前难度标记为 `verified` 的事件模式才可产生异常；`event_pattern_unverified` 和 observation 规则不得产生异常。异常不是责任、表现评价或灭团因果。
 
+`coach mechanics ... --compact` 只派生当前 stdout 视图，不改变或持久化 Mechanic Evidence Set。该视图删除 `raw_event` 和 `raw_events`，只展开涉及玩家的异常，团队异常中的参与者只保留玩家，每条机制最多展开 20 条玩家异常，并统计被抑制的宠物/NPC 记录与事件数量。机制原始计数保持不变，因此抑制记录不表示这些事件不存在。
+
+## Focused Evidence Window
+
+`coach evidence <URL_WITH_NUMERIC_FIGHT> --at-ms <TIME> --player-id <ID> [--window-ms <RADIUS>]` 为快速局部追问建立进程内 Focused Evidence Window。锚点和半径使用 fight-relative 毫秒；半径默认 10,000 且最多 30,000，范围截断在 Boss Attempt 起止边界。所有 player ID 必须是该 Boss Attempt 的明确参与者且不得重复。
+
+每个参与者使用相同短时间范围独立完整分页；所有页必须有序、位于当前查询范围、无重复游标并到达显式 `nextPageTimestamp: null`。全部参与者采集完成后必须确认 Report Revision 未变化。输出按时间合并，只保留目标 actor ID 匹配指定参与者的事件，以及 `fight_time_ms`、事件类型、source/target/ability/extra ability ID、amount、absorbed、overheal、overkill、当前/最大生命值、killer/killing ability ID 和 stack 这些存在且有效的扁平字段。
+
+Focused Evidence Window 不请求资源，不创建 Report Index、Raw Page、Fight Bundle、Complete Bundle、Canonical Event、manifest、哈希或检查点，不得持久化，也不得作为个人 Benchmark 或 Guide 输入。它只能支持窗口内的伤害、治疗、光环、死亡和战复事实；顶层 `judgment` 和 `causal_attribution` 始终为 `null`，不能证明玩家责任、治疗责任、站位责任或灭团因果。
+
 `coach mechanics <URL_WITH_NUMERIC_FIGHT> --report [--locale zh-CN|en]` 是 Mechanic Review 的第一方持久化与渲染路径。它必须在完成采集和 revision 复查的同一进程中，从实际结果派生 schema `1` 的净化 `mechanic_review` 来源。来源只允许保存 WCL Report、Report Revision、Boss Attempt 与 Mechanic Ruleset 身份及元数据、事件页/事件计数、受支持结论或异常、阶段、参与者，以及下文允许的扁平最小证据摘录；不得保存完整过滤事件范围、Raw Page、Fight Bundle 或 Complete Bundle 替代物、`raw_event`、`raw_events`、光环应用对象、任意 WCL payload、责任或灭团因果。
 
 校验后的来源按格式化 JSON 文件字节的 SHA-256 写入 `outputs/mechanic-reviews/<sha256>.json`，通过 artifact lock 和原子写入协调；已有同身份内容必须复用，身份不匹配时拒绝覆盖。分页未到达显式 null、Report Revision 变化或采集失败时不会调用持久化。净化、来源校验或首次 HTML 渲染失败时删除本次新建的来源，因此不会留下误导性的部分来源。

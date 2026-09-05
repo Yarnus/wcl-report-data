@@ -42,6 +42,8 @@ The collector follows `nextPageTimestamp`, preserves event order, allows duplica
 
 Mechanic Review uses a separate `Report.events` query with one numeric `fightID`, the Boss Attempt start as the first-page `startTime`, the current cursor as each later `startTime`, a fixed Boss Attempt `endTime`, `dataType: All`, actor and ability IDs, a 10,000 event page limit, and a server-side `filterExpression` built from ruleset ability IDs plus `death`, `interrupt`, and `dispel`. It does not request `includeResources`. Returned events must lie between the current page cursor and the fixed end time, and pagination must reach `nextPageTimestamp: null`.
 
+A Focused Evidence Window uses a separate `Report.events` query over a short range around an explicit fight-relative anchor. It issues a WCL `targetID` request for each selected Boss Attempt participant, then locally filters returned report actor target IDs and the damage, healing, absorb, aura, death, and resurrection event-type allowlist. It does not request `includeResources`; every participant query must reach `nextPageTimestamp: null`, followed by one Report Revision recheck after all queries complete.
+
 ## Rate Limits
 
 The client retries transient connection failures and HTTP 500, 502, 503, and 504 responses with exponential backoff. HTTP 429 opens a process-local circuit breaker immediately.

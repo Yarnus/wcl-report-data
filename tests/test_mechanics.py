@@ -7,7 +7,7 @@ from pathlib import Path
 
 from wcl_raid_coach.errors import ApiError, RevisionChangedError
 from wcl_raid_coach.mechanic_rules import RAID_ENCOUNTERS, RULES, build_filter_expression, rules_for
-from wcl_raid_coach.mechanics import MechanicReviewService, evaluate_rules
+from wcl_raid_coach.mechanics import MechanicReviewService, compact_mechanic_review, evaluate_rules
 from wcl_raid_coach.models import ReportRef
 from wcl_raid_coach.report_documents import create_mechanic_review_report
 
@@ -84,9 +84,15 @@ class FakeClient:
         return copy.deepcopy(self.report), None
 
     def fetch_mechanic_events_page(
-        self, code: str, fight_id: int, start_time: float, end_time: float, filter_expression: str
+        self, code: str, fight_id: int, start_time: float, end_time: float, filter_expression: str,
     ) -> dict:
         self.requests.append((code, fight_id, start_time, end_time, filter_expression))
+        return copy.deepcopy(self.pages[start_time])
+
+    def fetch_focused_events_page(
+        self, code: str, fight_id: int, start_time: float, end_time: float, target_id: int
+    ) -> dict:
+        self.requests.append((code, fight_id, start_time, end_time, "focused", target_id))
         return copy.deepcopy(self.pages[start_time])
 
     def fetch_report_revision(self, code: str) -> int:
@@ -132,6 +138,47 @@ class MechanicRuleTests(unittest.TestCase):
 
 
 class MechanicReviewServiceTests(unittest.TestCase):
+    def test_compact_review_removes_raw_payloads_and_summarizes_pet_noise(self) -> None:
+        review = {
+            "action": "coach_mechanics",
+            "selection_required": False,
+            "evidence": {"event_count": 20},
+            "mechanics": [{
+                "rule_id": "TEST",
+                "name_zh": "测试机制",
+                "summary": {"failure_count": 3},
+                "anomalies": [
+                    {
+                        "time_ms": 1_000.0,
+                        "event_type": "damage",
+                        "event_count": 1,
+                        "actor": {"actor_id": 10, "name": "Alpha", "type": "Player"},
+                        "raw_event": {"amount": 100},
+                    },
+                    {
+                        "time_ms": 1_000.0,
+                        "event_type": "damage",
+                        "event_count": 2,
+                        "actor": {"actor_id": 20, "name": "Pet", "type": "Pet"},
+                        "raw_event": {"amount": 10},
+                    },
+                ],
+            }],
+        }
+
+        compact = compact_mechanic_review(review)
+
+        self.assertEqual(compact["output_mode"], "compact")
+        mechanic = compact["mechanics"][0]
+        self.assertEqual(mechanic["anomalies"], [{
+            "time_ms": 1_000.0,
+            "event_type": "damage",
+            "event_count": 1,
+            "actor": {"actor_id": 10, "name": "Alpha", "type": "Player"},
+        }])
+        self.assertEqual(mechanic["suppressed_anomalies"], {"pet_or_npc_records": 1, "event_count": 2})
+        self.assertNotIn("raw_event", str(compact))
+
     def test_bare_report_lists_only_supported_boss_attempts(self) -> None:
         result = MechanicReviewService(FakeClient()).review(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123"))
 
@@ -231,6 +278,94 @@ class MechanicReviewServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(result["evidence"]["event_count"], 1)
+
+    def test_focused_evidence_fetches_only_the_player_window_and_sanitizes_events(self) -> None:
+        client = FakeClient(
+            {
+                2_500: {
+                    "data": [
+                        {
+                            "timestamp": 3_000,
+                            "type": "damage",
+                            "sourceID": 99,
+                            "targetID": 10,
+                            "abilityGameID": 1284941,
+                            "amount": 123,
+                            "hitPoints": 456,
+                            "unknown": "not persisted",
+                        }
+                    ],
+                    "nextPageTimestamp": None,
+                }
+            }
+        )
+
+        result = MechanicReviewService(client).focused_evidence(
+            ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"),
+            at_ms=1_000,
+            window_ms=500,
+            player_ids=[10],
+        )
+
+        self.assertEqual(client.requests[0][2:4], (2_500.0, 3_500.0))
+        self.assertEqual(client.requests[0][4], "focused")
+        self.assertEqual(client.requests[0][5], 10)
+        self.assertEqual(result["evidence"]["class"], "focused_event_window")
+        self.assertEqual(result["evidence"]["fetched_event_count"], 1)
+        self.assertEqual(result["evidence"]["server_filter"], "target_id")
+        self.assertEqual(result["window"], {"at_ms": 1_000.0, "from_ms": 500.0, "to_ms": 1_500.0})
+        self.assertEqual(result["players"], [{"actor_id": 10, "name": "Alpha"}])
+        self.assertEqual(result["events"], [{
+            "fight_time_ms": 1_000.0,
+            "type": "damage",
+            "source_id": 99,
+            "target_id": 10,
+            "ability_id": 1284941,
+            "amount": 123,
+            "hit_points": 456,
+        }])
+
+    def test_focused_evidence_discards_window_events_unrelated_to_the_player(self) -> None:
+        client = FakeClient(
+            {
+                2_500: {
+                    "data": [
+                        {"timestamp": 3_000, "type": "damage", "sourceID": 99, "targetID": 11, "abilityGameID": 1},
+                        {"timestamp": 3_001, "type": "heal", "sourceID": 11, "targetID": 10, "abilityGameID": 2},
+                    ],
+                    "nextPageTimestamp": None,
+                }
+            }
+        )
+
+        result = MechanicReviewService(client).focused_evidence(
+            ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"),
+            at_ms=1_000,
+            window_ms=500,
+            player_ids=[10],
+        )
+
+        self.assertEqual(result["evidence"]["fetched_event_count"], 2)
+        self.assertEqual(result["evidence"]["event_count"], 1)
+        self.assertEqual(result["events"][0]["type"], "heal")
+
+    def test_focused_evidence_rejects_non_participants(self) -> None:
+        with self.assertRaisesRegex(Exception, "participant"):
+            MechanicReviewService(FakeClient()).focused_evidence(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"),
+                at_ms=1_000,
+                window_ms=500,
+                player_ids=[99],
+            )
+
+    def test_focused_evidence_rejects_a_non_focused_window(self) -> None:
+        with self.assertRaisesRegex(Exception, "30000"):
+            MechanicReviewService(FakeClient()).focused_evidence(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"),
+                at_ms=1_000,
+                window_ms=30_001,
+                player_ids=[10],
+            )
 
     def test_bare_report_rejects_a_malformed_boss_attempt(self) -> None:
         client = FakeClient()

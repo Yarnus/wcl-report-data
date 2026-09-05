@@ -91,6 +91,23 @@ query MechanicEvents(
 """
 
 
+FOCUSED_EVENT_QUERY = """
+query FocusedEvents(
+  $code: String!, $fightIDs: [Int], $startTime: Float, $endTime: Float, $targetID: Int!, $limit: Int!
+) {
+  reportData {
+    report(code: $code, allowUnlisted: true) {
+      events(
+        fightIDs: $fightIDs, dataType: All, startTime: $startTime, endTime: $endTime, limit: $limit,
+        targetID: $targetID, translate: true, useAbilityIDs: true, useActorIDs: true
+      ) { data nextPageTimestamp }
+    }
+  }
+  rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn }
+}
+"""
+
+
 REVISION_QUERY = """
 query ReportRevision($code: String!) {
   reportData { report(code: $code, allowUnlisted: true) { revision } }
@@ -294,6 +311,37 @@ class WclClient:
         page = report.get("events")
         if not isinstance(page, dict):
             raise ApiError("WCL returned no mechanic event paginator.")
+        return page
+
+    def fetch_focused_events_page(
+        self,
+        code: str,
+        fight_id: int,
+        start_time: float,
+        end_time: float,
+        target_id: int,
+        limit: int = 10_000,
+    ) -> dict[str, Any]:
+        self._ensure_circuit()
+        with self.reserve_api_points():
+            data = self.graphql(
+                FOCUSED_EVENT_QUERY,
+                {
+                    "code": code,
+                    "fightIDs": [fight_id],
+                    "startTime": start_time,
+                    "endTime": end_time,
+                    "targetID": target_id,
+                    "limit": limit,
+                },
+            )
+        report_data = data.get("reportData")
+        report = report_data.get("report") if isinstance(report_data, dict) else None
+        if not isinstance(report, dict):
+            raise ApiError("The WCL report became inaccessible while fetching focused events.")
+        page = report.get("events")
+        if not isinstance(page, dict):
+            raise ApiError("WCL returned no focused event paginator.")
         return page
 
     def fetch_report_revision(self, code: str) -> int:
