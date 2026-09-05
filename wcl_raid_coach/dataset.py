@@ -424,7 +424,11 @@ class DatasetService:
         selected_fight_id = self._resolve_url_fight(ref, fights)
         report_zone = report.get("zone")
         zone = (
-            {key: value for key, value in report_zone.items() if key != "encounters"}
+            {
+                key: (_normalize_ranking_partitions(value) if key == "partitions" else value)
+                for key, value in report_zone.items()
+                if key != "encounters"
+            }
             if isinstance(report_zone, dict)
             else report_zone
         )
@@ -873,6 +877,7 @@ class DatasetService:
             raise InputError("Mythic+ reports are unsupported; provide a Retail raid report.")
         if not _is_raid_zone(report.get("zone")):
             raise InputError("The WCL report is not identified as a Retail raid zone.")
+        _normalize_ranking_partitions((report.get("zone") or {}).get("partitions"))
 
     def _fight_summaries(self, report: dict[str, Any]) -> list[dict[str, Any]]:
         actors = {
@@ -1108,6 +1113,40 @@ def validate_complete_bundle(manifest_path: Path) -> tuple[dict[str, Any], Path]
 def _json_sha256(value: Any) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def _normalize_ranking_partitions(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise ApiError("WCL report ranking partitions are malformed.")
+    normalized = []
+    seen_ids: set[int] = set()
+    for partition in value:
+        if not isinstance(partition, dict):
+            raise ApiError("WCL report ranking partitions are malformed.")
+        partition_id = partition.get("id")
+        name = partition.get("name")
+        compact_name = partition.get("compactName")
+        default = partition.get("default")
+        if (
+            type(partition_id) is not int
+            or partition_id <= 0
+            or partition_id in seen_ids
+            or not isinstance(name, str)
+            or not name.strip()
+            or compact_name is not None and not isinstance(compact_name, str)
+            or not isinstance(default, bool)
+        ):
+            raise ApiError("WCL report ranking partitions are malformed.")
+        seen_ids.add(partition_id)
+        normalized.append(
+            {
+                "id": partition_id,
+                "name": name.strip(),
+                "compactName": compact_name.strip() if isinstance(compact_name, str) else None,
+                "default": default,
+            }
+        )
+    return normalized
 
 
 def _canonical_event(

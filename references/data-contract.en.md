@@ -20,6 +20,7 @@ A Fight Bundle adds one numeric `fight_id`. Files from different Report Revision
 - report actors and abilities
 - every WCL fight classified as `boss` or `trash`
 - team participants with actor ID, name, server, class, specialization, and item level
+- each WCL zone ranking partition's positive integer `id`, non-empty `name`, nullable `compactName`, and boolean `default`
 - `packable` and `unpackable_reason`
 
 A WCL Report with raid Boss Attempts may also contain Mythic+ fights. Those Mythic+ fights remain in the Report Index with `unpackable_reason: "mythic_plus"`, but are omitted from `inspect` `fight_choices` and cannot produce a Fight Bundle. Pure Mythic+ reports are still rejected.
@@ -185,6 +186,8 @@ Personal Reviews, Benchmarks, and Guides consume only Complete Bundles that pass
 - `tasks/` stores Coach Request Manifests. Partial work retains each encounter's blocker and artifact references.
 - `guides/` stores immutable Guide Snapshots. Every chapter records the exact `benchmark_id`; a snapshot may reference multiple Encounter Benchmarks but cannot overwrite an older snapshot.
 
-A Personal Review analysis records Report Revision, fight ID, actor ID, and comparison hard conditions. The comparison identity `game_version` uses the selected ranking partition's `compactName` from the same Report Index, falling back to that partition's `name`; it never uses the numeric WCL `masterData.gameVersion` product ID. Comparison fails unless analysis and benchmark game version, encounter, difficulty, class, specialization, and partition match exactly.
+A Personal Analysis at schema `3` records Report Revision, fight ID, actor ID, and comparison hard conditions. The comparison identity `game_version` uses the selected ranking partition's non-empty `compactName` from the same Report Index, falling back to that partition's non-empty `name` when `compactName` is absent or blank; it never uses the numeric WCL `masterData.gameVersion` product ID. Analysis fails when the partition list is missing, is not a non-empty array, contains a non-object, has a non-positive integer ID (including a boolean), has duplicate IDs, has an invalid name or `compactName` type, or has a non-boolean `default`. An unknown selected ID also fails rather than guessing the default partition. Comparison fails unless analysis and benchmark game version, encounter, difficulty, class, specialization, and partition match exactly.
+
+Personal Analysis schema `2` used the former `game_version` meaning and is explicitly rejected by `coach benchmark` and `coach compare`; run `coach review` again to produce schema `3`. An older immutable Report Index without ranking partition fields, and a Complete Bundle that references it, remain usable for operations that do not need a partition comparison identity but cannot be used for a Personal Review with `--partition-id`. Remove that local Report Revision dataset and run `prepare` again instead of rewriting the Report Index or manifest hash in place.
 
 Coaching Artifacts are supported only when this CLI generates and consumes them in the user's local data or work directory. Plain SHA-256 does not authenticate a producer; externally supplied Artifacts must not be treated as trusted input. Complete Bundles, Ranking Cohorts, Personal Reviews, Encounter Benchmarks, and Guide Snapshots from the former HMAC schemas are incompatible and must be rebuilt.

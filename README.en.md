@@ -99,7 +99,7 @@ python -m wcl_raid_coach query \
 
 The CLI always writes JSON to standard output, including structured domain errors. See `python -m wcl_raid_coach --help` for all arguments and [the Skill instructions](SKILL.md) for the complete workflow.
 
-`coach review`, `coach benchmark`, `coach guide`, and `coach compare` consume only local Artifacts. When required local name mappings already exist, they do not read WCL credentials merely to verify an Artifact. Commands that access the WCL API still require OAuth client credentials.
+`coach review`, `coach benchmark`, `coach guide`, and `coach compare` consume only local Artifacts. When required local name mappings already exist, they do not read WCL credentials merely to verify an Artifact. With `--partition-id`, `coach review` resolves game version from the same Report Index's ranking partition and emits Personal Analysis schema `3`; schema `2` analyses must be regenerated. An older Report Index without partition metadata requires removing that local Report Revision dataset and running `prepare` again. Commands that access the WCL API still require OAuth client credentials.
 
 ## Encounter Designators And Name Mappings
 

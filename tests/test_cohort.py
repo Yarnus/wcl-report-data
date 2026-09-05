@@ -34,6 +34,7 @@ EXPECTED = {"game_version": "retail", "partition_id": 2, "encounter_id": 1007, "
 class CohortTests(unittest.TestCase):
     def analysis(self, metrics: dict, expected: dict = EXPECTED, suffix: str = "1") -> dict:
         return {
+            "schema_version": 3,
             "identity": {"report_code": f"ABC{suffix}", "report_revision": 1, "fight_id": int(suffix)},
             "player": {"actor_id": 10, "name": "Player"},
             "evidence": {"manifest_path": f"/tmp/manifest-{suffix}.json", "manifest_sha256": "hash", "index_path": f"/tmp/index-{suffix}.json", "index_sha256": "hash"},
@@ -98,6 +99,14 @@ class CohortTests(unittest.TestCase):
             other = analysis | {"identity": analysis["identity"] | {"report_code": "OTHER"}}
             with self.assertRaises(InputError):
                 validate_analysis_membership([other], cohort)
+
+    def test_rejects_persisted_personal_analysis_schema_2(self) -> None:
+        analysis = self.analysis({"deaths": 0})
+        analysis["schema_version"] = 2
+        cohort = identify_cohort({"schema_version": 2, "eligible_recent_candidates": []})
+
+        with self.assertRaisesRegex(InputError, "unsupported schema version"):
+            validate_analysis_membership([analysis], cohort)
 
     def test_builds_one_encounter_benchmark_from_three_safe_samples(self) -> None:
         analyses = []

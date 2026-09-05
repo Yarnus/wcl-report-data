@@ -97,7 +97,7 @@ python -m wcl_raid_coach query \
 
 CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。完整参数参见 `python -m wcl_raid_coach --help`，完整工作流参见 [Skill 使用说明](SKILL.md)。
 
-`coach review`、`coach benchmark`、`coach guide` 和 `coach compare` 只消费本地 Artifact；本地名称 mapping 已存在时，它们不会为了校验 Artifact 而读取 WCL 凭据。访问 WCL API 的命令仍需要 OAuth client credentials。
+`coach review`、`coach benchmark`、`coach guide` 和 `coach compare` 只消费本地 Artifact；本地名称 mapping 已存在时，它们不会为了校验 Artifact 而读取 WCL 凭据。带 `--partition-id` 的 `coach review` 从同一 Report Index 的 ranking partition 解析 game version，并生成 Personal Analysis schema `3`；schema `2` 分析必须重新生成。缺少 partition 元数据的旧 Report Index 需要删除对应本地 Report Revision 数据后重新 `prepare`。访问 WCL API 的命令仍需要 OAuth client credentials。
 
 ## Encounter Designator 与名称映射
 

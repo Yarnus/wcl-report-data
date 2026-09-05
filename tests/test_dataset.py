@@ -31,6 +31,9 @@ def report_fixture() -> dict:
             "id": 42,
             "name": "Test Raid",
             "difficulties": [{"id": 5, "name": "Mythic", "sizes": [20]}],
+            "partitions": [
+                {"id": 2, "name": "Current Season", "compactName": " 12.1 ", "default": True}
+            ],
             "encounters": [
                 {"id": 4001, "name": "First Boss"},
                 {"id": 5001, "name": "Test Boss"},
@@ -227,6 +230,10 @@ class DatasetTests(unittest.TestCase):
         self.assertNotIn("input_reference", index)
         self.assertNotIn("encounters", index["report"]["zone"])
         self.assertEqual(
+            index["report"]["zone"]["partitions"],
+            [{"id": 2, "name": "Current Season", "compactName": "12.1", "default": True}],
+        )
+        self.assertEqual(
             result["encounter_choices"],
             [
                 {"ordinal": 1, "encounter_id": 4001, "name": "First Boss"},
@@ -236,6 +243,27 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual([item["actor_id"] for item in index["fights"][0]["participants"]], [10, 11])
         self.assertEqual(index["fights"][1]["kind"], "trash")
         self.assertFalse(index["fights"][2]["packable"])
+
+    def test_inspect_rejects_malformed_ranking_partitions_as_api_errors(self) -> None:
+        malformed = (
+            None,
+            [{"id": True, "name": "Current", "compactName": "12.1", "default": True}],
+            [{"id": 2, "name": " ", "compactName": None, "default": True}],
+            [{"id": 2, "name": "Current", "compactName": 12.1, "default": True}],
+            [{"id": 2, "name": "Current", "compactName": "12.1", "default": 1}],
+            [
+                {"id": 2, "name": "Current", "compactName": "12.1", "default": True},
+                {"id": 2, "name": "Earlier", "compactName": "12.0", "default": False},
+            ],
+        )
+        for partitions in malformed:
+            with self.subTest(partitions=partitions), tempfile.TemporaryDirectory() as temporary:
+                client = FakeClient()
+                client.report["zone"]["partitions"] = partitions
+                service = self.make_service(temporary, client)
+
+                with self.assertRaisesRegex(ApiError, "ranking partition"):
+                    service.inspect(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123"))
 
     def test_inspect_resolves_difficulty_name_from_report_zone(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
