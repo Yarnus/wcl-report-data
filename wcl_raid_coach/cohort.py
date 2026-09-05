@@ -11,7 +11,7 @@ from typing import Any
 from .errors import ApiError, InputError
 from .coach_models import specialization_role
 from .profiles import validate_profile
-from .analysis import analyze_player
+from .analysis import ANALYSIS_SCHEMA_VERSION, analyze_player
 from .storage import sha256_file
 
 
@@ -114,6 +114,12 @@ def validate_analysis_membership(analyses: list[dict[str, Any]], cohort: dict[st
     }
     seen = set()
     for analysis in analyses:
+        if (
+            not isinstance(analysis, dict)
+            or type(analysis.get("schema_version")) is not int
+            or analysis["schema_version"] != ANALYSIS_SCHEMA_VERSION
+        ):
+            raise InputError("Personal Analysis uses an unsupported schema version; run coach review again.")
         identity = analysis.get("identity") if isinstance(analysis, dict) else None
         player = analysis.get("player") if isinstance(analysis, dict) else None
         key_value = (

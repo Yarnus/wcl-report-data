@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import tempfile
@@ -169,6 +170,78 @@ class CliTests(unittest.TestCase):
             run(args)
 
         resolve.assert_not_called()
+
+    def test_coach_review_resolves_production_report_partition_labels(self) -> None:
+        from tests.test_analysis import AnalysisTests
+
+        for compact_name, expected in (("12.1", "12.1"), (None, "Current Season")):
+            with self.subTest(compact_name=compact_name), tempfile.TemporaryDirectory() as temporary:
+                manifest, index = AnalysisTests().make_bundle(Path(temporary))
+                value = json.loads(index.read_text(encoding="utf-8"))
+                value["report"]["zone"]["partitions"][0]["compactName"] = compact_name
+                index.write_text(json.dumps(value), encoding="utf-8")
+                manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+                manifest_value["report_index_sha256"] = hashlib.sha256(
+                    json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                manifest.write_text(json.dumps(manifest_value), encoding="utf-8")
+                output = io.StringIO()
+
+                with redirect_stdout(output):
+                    status = main(
+                        [
+                            "coach", "review", str(manifest), "--index", str(index),
+                            "--source-id", "10", "--partition-id", "2",
+                        ]
+                    )
+
+                result = json.loads(output.getvalue())
+                self.assertEqual(status, 0)
+                self.assertEqual(result["analysis"]["comparison_identity"]["game_version"], expected)
+
+    def test_coach_review_unknown_partition_returns_structured_domain_error(self) -> None:
+        from tests.test_analysis import AnalysisTests
+
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, index = AnalysisTests().make_bundle(Path(temporary))
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(
+                    [
+                        "coach", "review", str(manifest), "--index", str(index),
+                        "--source-id", "10", "--partition-id", "99",
+                    ]
+                )
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "dataset_error")
+        self.assertIn("ranking partition", result["message"])
+
+    def test_coach_review_malformed_partitions_return_structured_domain_error(self) -> None:
+        from tests.test_analysis import AnalysisTests
+
+        with tempfile.TemporaryDirectory() as temporary:
+            helper = AnalysisTests()
+            manifest, index = helper.make_bundle(Path(temporary))
+            helper.replace_partitions(
+                manifest,
+                index,
+                [{"id": True, "name": "Current", "compactName": "12.1", "default": True}],
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(
+                    [
+                        "coach", "review", str(manifest), "--index", str(index),
+                        "--source-id", "10", "--partition-id", "2",
+                    ]
+                )
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "dataset_error")
+        self.assertIn("ranking partitions are malformed", result["message"])
 
     def test_coach_mechanics_uses_the_in_memory_review_service(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -17,7 +17,7 @@ CN 报告链接可直接作为输入，并会规范化为全球站报告链接�
 
 ## 查询
 
-建立 Report Index 时会获取 Report Revision、归档状态、Retail 游戏版本、主 actor 与 ability、战斗参与元数据、报告难度元数据和 WCL zone encounter 顺序。`zone.encounters` 只作为当前 `inspect` 的选择元数据返回，不写入已有不可变 Report Index。
+建立 Report Index 时会获取 Report Revision、归档状态、Retail 游戏版本、主 actor 与 ability、战斗参与元数据、报告难度元数据、ranking partition 的 `id`、`name`、`compactName`、`default`，以及 WCL zone encounter 顺序。严格校验并规范化后的 `zone.partitions` 写入不可变 Report Index，供 Personal Analysis 解析比较身份；`zone.encounters` 只作为当前 `inspect` 的选择元数据返回，不写入已有不可变 Report Index。
 
 通用攻略解析通过 `worldData.zones` 获取当前未冻结的 Retail raid zone、原始 encounter 顺序、difficulty 和默认 partition。必须恰好得到一个当前 zone、一个 Heroic difficulty 和一个默认 partition；否则停止，不能猜测。
 

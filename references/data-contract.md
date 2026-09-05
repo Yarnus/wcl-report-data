@@ -20,6 +20,7 @@ Fight Bundle 还包含一个数字 `fight_id`。不同 Report Revision 的文件
 - 报告中的 actor 和 ability
 - 每场 WCL 战斗，并分类为 `boss` 或 `trash`
 - 团队参与者的 actor ID、名称、服务器、职业、专精和物品等级
+- WCL zone ranking partition 的正整数 `id`、非空 `name`、可空 `compactName` 和布尔 `default`
 - `packable` 和 `unpackable_reason`
 
 包含团本 Boss Attempt 的 WCL Report 可以同时包含 Mythic+ fight。此时 Mythic+ fight 保留在 Report Index 中并标记为 `unpackable_reason: "mythic_plus"`，但不进入 `inspect` 的 `fight_choices`，也不能创建 Fight Bundle。纯 Mythic+ 报告仍被拒绝。
@@ -181,6 +182,8 @@ Report Document 的持久化不改变 Mechanic Evidence Set 的临时性：只�
 - `tasks/` 保存 Coach Request Manifest。部分完成状态必须保留每个 encounter 的 blocker 与 artifact 引用。
 - `guides/` 保存不可变 Guide Snapshot。每个章节记录准确的 `benchmark_id`；一个 snapshot 可以引用多个 Encounter Benchmark，但不能覆盖旧 snapshot。
 
-个人复盘分析必须记录 Report Revision、fight ID、actor ID 和比较硬条件。比较身份中的 `game_version` 使用同一 Report Index 中指定 ranking partition 的 `compactName`，缺失时回退该 partition 的 `name`；不得使用 WCL `masterData.gameVersion` 数字产品 ID。分析与 benchmark 的 game version、encounter、difficulty、class、spec 和 partition 不完全相同时，比较必须失败。
+个人复盘分析 schema `3` 必须记录 Report Revision、fight ID、actor ID 和比较硬条件。比较身份中的 `game_version` 使用同一 Report Index 中指定 ranking partition 的非空 `compactName`，缺失或为空白时回退该 partition 的非空 `name`；不得使用 WCL `masterData.gameVersion` 数字产品 ID。partition 列表缺失、不是数组、为空、包含非对象、ID 不是正整数（包括布尔值）、ID 重复、名称无效、`compactName` 类型无效或 `default` 不是布尔值时，分析必须失败。指定 ID 不存在时也必须失败，不能猜测默认 partition。分析与 benchmark 的 game version、encounter、difficulty、class、spec 和 partition 不完全相同时，比较必须失败。
+
+Personal Analysis schema `2` 使用旧的 `game_version` 语义，`coach benchmark` 和 `coach compare` 会明确拒绝它；必须重新运行 `coach review` 生成 schema `3`。缺少 ranking partition 字段的旧不可变 Report Index 和引用它的 Complete Bundle 仍可用于不需要 partition 比较身份的操作，但不能用于带 `--partition-id` 的个人复盘；必须先删除对应本地 Report Revision 数据，再重新 `prepare`，不能在原地改写 Report Index 或 manifest hash。
 
 教练 Artifact 只支持本 CLI 在用户本地数据目录或工作目录中生成和消费。普通 SHA-256 不认证生成者；不得把外部提供的 Artifact 当作可信输入。旧 HMAC schema 的 Complete Bundle、Ranking Cohort、Personal Review、Encounter Benchmark 和 Guide Snapshot 不兼容，必须重新生成。
