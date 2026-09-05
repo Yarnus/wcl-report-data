@@ -90,17 +90,27 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_REPORT_URL>"
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>"
 ```
 
+用户要求正式报告或 HTML 时，不要从 stdout 重抄字段，也不要先保存完整 Mechanic Review 结果；必须在同一采集进程直接运行：
+
+```bash
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>" --report --locale zh-CN
+```
+
+英文交付使用 `--locale en`。向用户交付 JSON stdout 中的短摘要和 `report.html_path` 链接，并保留 `source.path`、`source.sha256`、`report.document_id`、`report.html_sha256` 与 `report.index_path` 供复核。
+
 击杀和灭团均可分析，但 Boss Attempt 必须已完成；`fight=last` 不够明确，必须拒绝。`--encounter` 与 URL 数字 fight 同时存在时，两者必须匹配。
 
 该命令用当前 Mechanic Ruleset 的 ability ID 和 `death`、`interrupt`、`dispel` 建立服务端过滤表达式，固定 Boss Attempt 起止时间，完整分页到 `nextPageTimestamp: null`，并在结束后再次校验 Report Revision。Mechanic Evidence Set 只驻留进程内，不得创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点，也不得称为 Complete Bundle 或 Canonical Event 集。
 
 输出必须保留规则集版本、来源和 `selection_policy: latest`。`latest` 指当前安装包随附规则，不按报告发生时间回放历史热修规则，也不会运行时在线更新。机制名称使用规则集内版本化的中英文名称，不触发本地 Wago mapping 初始化。
 
-每条机制展示规则定义的触发、成功和失败事件计数；无法客观判断时值为 `null`。只有当前难度标记为 `verified` 的事件模式才能产生异常；`event_pattern_unverified` 和 observation 规则只列观察事实。没有匹配事件不等于机制处理正确。异常展开时间、玩家和原始 WCL 事件证据，但只表示事件模式命中，不表示玩家责任、表现评价或灭团因果；最终裁决交给人。
+每条机制展示规则定义的触发、成功和失败事件计数；无法客观判断时值为 `null`。只有当前难度标记为 `verified` 的事件模式才能产生异常；`event_pattern_unverified` 和 observation 规则只列观察事实。没有匹配事件不等于机制处理正确。普通内存输出可以展开用于当前分析的原始 WCL 事件证据；`--report` 来源只能保留参与者和扁平最小证据摘录，必须删除完整事件范围、`raw_event`、`raw_events`、光环应用对象和任意 WCL payload。异常只表示事件模式命中，不表示玩家责任、表现评价或灭团因果；最终裁决交给人。
 
 ### 正式 HTML 交付
 
-完成正式 Mechanic Review、Personal Review 或 Raid Guide 时，默认根据 `references/data-contract.md` 的 schema `1` 生成对应 `document_type` 的 Report Document，并调用：
+Mechanic Review 的正式交付必须使用上面的 `coach mechanics ... --report`，由同一进程完成采集、净化来源持久化、Report Document 组装、来源校验和 HTML 渲染。只有分页明确结束且 Report Revision 前后一致后才允许写入；净化、校验或首次渲染失败时不留下新来源，重复内容复用 content-addressed 不可变来源。不得用下面的通用 renderer 绕过该边界。
+
+其他已构造的 Report Document 可调用：
 
 ```bash
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"

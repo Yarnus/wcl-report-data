@@ -23,6 +23,460 @@ EVIDENCE_EXCERPT_FIELDS = {
     "event_type", "ability_id", "source_id", "target_id", "amount",
     "duration_ms", "delta_ms", "episode", "outcome", "note",
 }
+MECHANIC_REVIEW_SOURCE_SCHEMA_VERSION = 1
+
+
+def create_mechanic_review_report(
+    review: Any, data_root: Path, *, locale: str = "zh-CN"
+) -> dict[str, Any]:
+    source = sanitize_mechanic_review(review)
+    source_bytes = _json_file_bytes(source)
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    source_dir = data_root.expanduser().resolve() / "outputs" / "mechanic-reviews"
+    source_path = source_dir / f"{source_sha256}.json"
+    created = False
+    try:
+        with artifact_lock(source_path):
+            if source_path.exists():
+                if (
+                    not source_path.is_file()
+                    or sha256_file(source_path) != source_sha256
+                    or read_json(source_path) != source
+                ):
+                    raise InputError("Existing Mechanic Review source has an invalid identity.")
+            else:
+                atomic_write_json(source_path, source)
+                created = True
+            try:
+                document = assemble_mechanic_review_document(source, source_path, locale=locale)
+                report = render_report_document(document, data_root / "outputs" / "reports")
+            except BaseException:
+                if created:
+                    source_path.unlink(missing_ok=True)
+                raise
+    except BaseException:
+        if created:
+            try:
+                source_dir.rmdir()
+                source_dir.parent.rmdir()
+            except OSError:
+                pass
+        raise
+    return {
+        "action": "coach_mechanic_report",
+        "source": {"path": str(source_path), "sha256": source_sha256},
+        "document": validate_report_document(document),
+        "report": report,
+    }
+
+
+def sanitize_mechanic_review(value: Any) -> dict[str, Any]:
+    try:
+        review = _object(value, "Mechanic Review")
+        if review.get("action") != "coach_mechanics" or review.get("selection_required") is not False:
+            raise InputError("Only a completed Mechanic Review can be persisted.")
+        identity = _object(review.get("identity"), "Mechanic Review identity")
+        attempt = _object(review.get("boss_attempt"), "Mechanic Review Boss Attempt")
+        evidence = _object(review.get("evidence"), "Mechanic Review evidence")
+        if (
+            evidence.get("class") != "mechanic_evidence_set"
+            or evidence.get("storage") != "process_memory"
+            or evidence.get("pagination_terminated") is not True
+            or evidence.get("report_revision_checked_before_and_after") is not True
+        ):
+            raise InputError("Mechanic Review collection is not complete and revision-isolated.")
+        mechanics = _list(review.get("mechanics"), "Mechanic Review mechanics", nonempty=True, maximum=50)
+        return validate_mechanic_review_source({
+            "schema_version": MECHANIC_REVIEW_SOURCE_SCHEMA_VERSION,
+            "artifact_type": "mechanic_review",
+            "identity": {
+                "report_code": identity.get("report_code"),
+                "report_revision": identity.get("report_revision"),
+                "fight_id": identity.get("fight_id"),
+                "encounter_id": identity.get("encounter_id"),
+                "difficulty_id": identity.get("difficulty_id"),
+                "encounter_name_en": attempt.get("name_en"),
+                "encounter_name_zh": attempt.get("name_zh"),
+                "difficulty_name": attempt.get("difficulty"),
+                "start_time": attempt.get("start_time"),
+                "end_time": attempt.get("end_time"),
+                "outcome": "kill" if attempt.get("kill") is True else "wipe" if attempt.get("kill") is False else None,
+                "boss_percentage": attempt.get("boss_percentage"),
+            },
+            "ruleset": review.get("ruleset"),
+            "collection": {
+                "event_count": evidence.get("event_count"),
+                "page_count": evidence.get("page_count"),
+                "pagination_terminated": True,
+                "report_revision_checked_before_and_after": True,
+                "storage": "minimal_excerpts",
+            },
+            "phases": _sanitize_source_phases(review.get("phases", [])),
+            "mechanics": [_sanitize_source_mechanic(item) for item in mechanics],
+            "scope_note": {
+                "en": "Anomalies are verified event-pattern matches; they do not assign player responsibility, performance, or wipe causality.",
+                "zh": "异常仅表示已验证事件模式命中，不表示玩家责任、表现评价或灭团因果。",
+            },
+        })
+    except InputError:
+        raise
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise InputError("Mechanic Review could not be sanitized for persistence.") from exc
+
+
+def validate_mechanic_review_source(value: Any) -> dict[str, Any]:
+    source = _object(value, "Mechanic Review source")
+    if source.get("artifact_type") != "mechanic_review":
+        raise InputError("Report Document mechanic_review source kind is invalid.")
+    _fields(source, "Mechanic Review source", {
+        "schema_version", "artifact_type", "identity", "ruleset", "collection",
+        "phases", "mechanics", "scope_note",
+    })
+    if source.get("schema_version") != MECHANIC_REVIEW_SOURCE_SCHEMA_VERSION:
+        raise InputError("Mechanic Review source schema_version is unsupported.")
+    identity = _object(source["identity"], "Mechanic Review source identity")
+    _fields(identity, "Mechanic Review source identity", {
+        "report_code", "report_revision", "fight_id", "encounter_id", "difficulty_id",
+        "encounter_name_en", "encounter_name_zh", "difficulty_name", "start_time",
+        "end_time", "outcome", "boss_percentage",
+    })
+    report_code = _text(identity["report_code"], "Mechanic Review source report_code", 64)
+    if re.fullmatch(r"[A-Za-z0-9]+", report_code) is None:
+        raise InputError("Mechanic Review source report_code must be alphanumeric.")
+    start = _finite_number(identity["start_time"], "Mechanic Review source start_time")
+    end = _finite_number(identity["end_time"], "Mechanic Review source end_time")
+    if end <= start or not float(end - start).is_integer():
+        raise InputError("Mechanic Review source Boss Attempt range is invalid.")
+    if identity["outcome"] not in {"kill", "wipe"}:
+        raise InputError("Mechanic Review source outcome must be kill or wipe.")
+    percentage = identity["boss_percentage"]
+    if percentage is not None and (not _number(percentage) or not 0 <= float(percentage) <= 100):
+        raise InputError("Mechanic Review source boss_percentage is invalid.")
+    collection = _object(source["collection"], "Mechanic Review source collection")
+    _fields(collection, "Mechanic Review source collection", {
+        "event_count", "page_count", "pagination_terminated",
+        "report_revision_checked_before_and_after", "storage",
+    })
+    if (
+        collection["pagination_terminated"] is not True
+        or collection["report_revision_checked_before_and_after"] is not True
+        or collection["storage"] != "minimal_excerpts"
+    ):
+        raise InputError("Mechanic Review source does not establish complete collection.")
+    phases = _validate_source_phases(source["phases"], int(end - start))
+    mechanics = _validate_source_mechanics(source["mechanics"], int(end - start))
+    scope_note = _validate_localized_text(source["scope_note"], "Mechanic Review source scope_note", 2000)
+    return {
+        "schema_version": MECHANIC_REVIEW_SOURCE_SCHEMA_VERSION,
+        "artifact_type": "mechanic_review",
+        "identity": {
+            "report_code": report_code,
+            "report_revision": _integer(identity["report_revision"], "Mechanic Review source report_revision", positive=True),
+            "fight_id": _integer(identity["fight_id"], "Mechanic Review source fight_id", positive=True),
+            "encounter_id": _integer(identity["encounter_id"], "Mechanic Review source encounter_id", positive=True),
+            "difficulty_id": _integer(identity["difficulty_id"], "Mechanic Review source difficulty_id", positive=True),
+            "encounter_name_en": _text(identity["encounter_name_en"], "Mechanic Review source encounter_name_en", 200),
+            "encounter_name_zh": _text(identity["encounter_name_zh"], "Mechanic Review source encounter_name_zh", 200),
+            "difficulty_name": _text(identity["difficulty_name"], "Mechanic Review source difficulty_name", 100),
+            "start_time": start,
+            "end_time": end,
+            "outcome": identity["outcome"],
+            "boss_percentage": float(percentage) if percentage is not None else None,
+        },
+        "ruleset": _validate_ruleset(source["ruleset"]),
+        "collection": {
+            "event_count": _integer(collection["event_count"], "Mechanic Review source event_count"),
+            "page_count": _integer(collection["page_count"], "Mechanic Review source page_count", positive=True),
+            "pagination_terminated": True,
+            "report_revision_checked_before_and_after": True,
+            "storage": "minimal_excerpts",
+        },
+        "phases": phases,
+        "mechanics": mechanics,
+        "scope_note": scope_note,
+    }
+
+
+def assemble_mechanic_review_document(
+    value: Any, source_path: Path, *, locale: str = "zh-CN"
+) -> dict[str, Any]:
+    source = validate_mechanic_review_source(value)
+    if locale not in {"zh-CN", "en"}:
+        raise InputError("Mechanic Review report locale must be zh-CN or en.")
+    source_path = source_path.expanduser().resolve()
+    if not source_path.is_file():
+        raise InputError("Mechanic Review source artifact is missing.")
+    identity = source["identity"]
+    language = "zh" if locale == "zh-CN" else "en"
+    name_field = "encounter_name_zh" if locale == "zh-CN" else "encounter_name_en"
+    mechanics = []
+    for item in source["mechanics"]:
+        mechanics.append({
+            "name": item["name"][language],
+            "status": item["status"],
+            **item["counts"],
+            "description": item["conclusion"][language],
+            "events": [
+                {
+                    "fight_time_ms": event["fight_time_ms"],
+                    "tone": "danger",
+                    "title": item["name"][language],
+                    "description": _event_description(event, language),
+                    "participants": event["participants"],
+                    "evidence_excerpt": event["evidence_excerpt"],
+                }
+                for event in item["events"]
+            ],
+        })
+    return {
+        "schema_version": DOCUMENT_SCHEMA_VERSION,
+        "document_type": "mechanic_review",
+        "locale": locale,
+        "title": f"{identity[name_field]}{'机制复盘' if locale == 'zh-CN' else ' mechanic review'}",
+        "subtitle": f"{identity['difficulty_name']} Boss Attempt {identity['fight_id']}",
+        "source_artifacts": [{
+            "kind": "mechanic_review", "path": str(source_path), "sha256": sha256_file(source_path),
+        }],
+        "identity": {
+            "report_code": identity["report_code"],
+            "report_revision": identity["report_revision"],
+            "fight_id": identity["fight_id"],
+            "encounter_name": identity[name_field],
+            "difficulty_name": identity["difficulty_name"],
+            "duration_ms": int(identity["end_time"] - identity["start_time"]),
+            "outcome": identity["outcome"],
+            "boss_percentage": identity["boss_percentage"],
+        },
+        "ruleset": source["ruleset"],
+        "evidence": {"event_count": source["collection"]["event_count"], "storage": "minimal_excerpts"},
+        "phases": [
+            {"name": phase["name"][language], "start_ms": phase["start_ms"], "end_ms": phase["end_ms"]}
+            for phase in source["phases"]
+        ],
+        "mechanics": mechanics,
+        "actions": [],
+        "scope_note": source["scope_note"][language],
+    }
+
+
+def _sanitize_source_phases(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    phases = _list(value, "Mechanic Review phases", maximum=20)
+    result = []
+    for value in phases:
+        phase = _object(value, "Mechanic Review phase")
+        name_en = phase.get("name_en", phase.get("name"))
+        name_zh = phase.get("name_zh", phase.get("name"))
+        result.append({
+            "name": {"en": name_en, "zh": name_zh},
+            "start_ms": phase.get("start_ms"),
+            "end_ms": phase.get("end_ms"),
+        })
+    return result
+
+
+def _sanitize_source_mechanic(value: Any) -> dict[str, Any]:
+    mechanic = _object(value, "Mechanic Review mechanic")
+    summary = _object(mechanic.get("summary"), "Mechanic Review mechanic summary")
+    counts = {
+        field: summary.get(field)
+        for field in ("trigger_count", "success_count", "failure_count")
+    }
+    anomalies = mechanic.get("anomalies")
+    anomalies = anomalies if isinstance(anomalies, list) else []
+    verified = mechanic.get("anomaly_detection") == "enabled"
+    if mechanic.get("validation_status") == "event_pattern_unverified":
+        status = "unverified"
+    elif verified and counts["failure_count"]:
+        status = "anomaly"
+    elif verified and counts["failure_count"] == 0:
+        status = "ok"
+    else:
+        status = "review"
+    expectation = mechanic.get("expectation")
+    conclusion_en = {
+        "anomaly": "The verified event pattern matched; review the listed minimal excerpts.",
+        "ok": "No anomaly matched this verified event pattern; this does not prove perfect execution.",
+        "unverified": "This event pattern is not verified for the selected difficulty; no anomaly is asserted.",
+        "review": "The observed counts require manual review and do not establish an anomaly.",
+    }[status]
+    conclusion_zh = {
+        "anomaly": "已验证事件模式命中；请复核列出的最小证据摘录。",
+        "ok": "该已验证事件模式未命中异常；这不证明机制处理完全正确。",
+        "unverified": "该事件模式尚未在所选难度验证，因此不声明异常。",
+        "review": "观察计数需要人工复核，不能据此确认异常。",
+    }[status]
+    if isinstance(expectation, str) and expectation.strip():
+        conclusion_en = f"{conclusion_en} Ruleset expectation: {expectation.strip()}"
+    return {
+        "rule_id": mechanic.get("rule_id"),
+        "name": {"en": mechanic.get("name_en"), "zh": mechanic.get("name_zh")},
+        "validation_status": mechanic.get("validation_status"),
+        "status": status,
+        "counts": counts,
+        "conclusion": {"en": conclusion_en, "zh": conclusion_zh},
+        "events": [_sanitize_source_event(item) for item in anomalies[:20]] if status == "anomaly" else [],
+    }
+
+
+def _sanitize_source_event(value: Any) -> dict[str, Any]:
+    anomaly = _object(value, "Mechanic Review anomaly")
+    actors = anomaly.get("actors") if isinstance(anomaly.get("actors"), list) else [anomaly.get("actor")]
+    participants = [
+        actor["name"] for actor in actors
+        if isinstance(actor, dict) and isinstance(actor.get("name"), str) and actor["name"].strip()
+    ]
+    excerpt = {
+        "event_type": anomaly.get("event_type"),
+        "ability_id": anomaly.get("ability_id"),
+        "duration_ms": anomaly.get("aura_duration_ms"),
+        "episode": anomaly.get("episode"),
+        "outcome": anomaly.get("outcome"),
+    }
+    raw = anomaly.get("raw_event") if isinstance(anomaly.get("raw_event"), dict) else {}
+    excerpt |= {
+        "source_id": raw.get("sourceID"),
+        "target_id": raw.get("targetID"),
+        "amount": raw.get("amount"),
+    }
+    return {
+        "fight_time_ms": _whole_milliseconds(
+            anomaly.get("time_ms"), "Mechanic Review anomaly time_ms"
+        ),
+        "participants": participants,
+        "evidence_excerpt": {
+            key: value for key, value in excerpt.items() if value is not None
+        },
+    }
+
+
+def _validate_source_phases(value: Any, duration_ms: int) -> list[dict[str, Any]]:
+    phases = _list(value, "Mechanic Review source phases", maximum=20)
+    result = []
+    previous_end = 0
+    for value in phases:
+        phase = _object(value, "Mechanic Review source phase")
+        _fields(phase, "Mechanic Review source phase", {"name", "start_ms", "end_ms"})
+        start = _integer(phase["start_ms"], "Mechanic Review source phase start_ms")
+        end = _integer(phase["end_ms"], "Mechanic Review source phase end_ms", positive=True)
+        if start < previous_end or end <= start or end > duration_ms:
+            raise InputError("Mechanic Review source phases must be ordered within the Boss Attempt.")
+        result.append({
+            "name": _validate_localized_text(phase["name"], "Mechanic Review source phase name", 100),
+            "start_ms": start,
+            "end_ms": end,
+        })
+        previous_end = end
+    return result
+
+
+def _validate_source_mechanics(value: Any, duration_ms: int) -> list[dict[str, Any]]:
+    mechanics = _list(value, "Mechanic Review source mechanics", nonempty=True, maximum=50)
+    result = []
+    rule_ids = set()
+    for value in mechanics:
+        mechanic = _object(value, "Mechanic Review source mechanic")
+        _fields(mechanic, "Mechanic Review source mechanic", {
+            "rule_id", "name", "validation_status", "status", "counts", "conclusion", "events",
+        })
+        rule_id = _text(mechanic["rule_id"], "Mechanic Review source rule_id", 200)
+        if rule_id in rule_ids:
+            raise InputError("Mechanic Review source rule IDs must be unique.")
+        rule_ids.add(rule_id)
+        validation_status = mechanic["validation_status"]
+        if validation_status not in {"verified", "event_pattern_unverified"}:
+            raise InputError("Mechanic Review source validation_status is invalid.")
+        status = mechanic["status"]
+        if status not in {"anomaly", "review", "ok", "unverified"}:
+            raise InputError("Mechanic Review source mechanic status is invalid.")
+        counts_value = _object(mechanic["counts"], "Mechanic Review source mechanic counts")
+        _fields(counts_value, "Mechanic Review source mechanic counts", {
+            "trigger_count", "success_count", "failure_count",
+        })
+        counts = {
+            field: None if counts_value[field] is None else _integer(
+                counts_value[field], f"Mechanic Review source mechanic {field}"
+            )
+            for field in ("trigger_count", "success_count", "failure_count")
+        }
+        events = _validate_source_events(mechanic["events"], duration_ms)
+        if status == "anomaly" and (validation_status != "verified" or not counts["failure_count"] or not events):
+            raise InputError("Mechanic Review source anomaly is not supported by verified evidence.")
+        if status == "ok" and counts["failure_count"] != 0:
+            raise InputError("Mechanic Review source ok status requires zero failures.")
+        if status == "unverified" and (counts["success_count"] is not None or counts["failure_count"] is not None or events):
+            raise InputError("Mechanic Review source unverified status cannot claim outcomes.")
+        result.append({
+            "rule_id": rule_id,
+            "name": _validate_localized_text(mechanic["name"], "Mechanic Review source mechanic name", 200),
+            "validation_status": validation_status,
+            "status": status,
+            "counts": counts,
+            "conclusion": _validate_localized_text(mechanic["conclusion"], "Mechanic Review source conclusion", 5000),
+            "events": events,
+        })
+    return result
+
+
+def _validate_source_events(value: Any, duration_ms: int) -> list[dict[str, Any]]:
+    events = _list(value, "Mechanic Review source events", maximum=20)
+    result = []
+    for value in events:
+        event = _object(value, "Mechanic Review source event")
+        _fields(event, "Mechanic Review source event", {"fight_time_ms", "participants", "evidence_excerpt"})
+        timestamp = _integer(event["fight_time_ms"], "Mechanic Review source fight_time_ms")
+        if timestamp > duration_ms:
+            raise InputError("Mechanic Review source event is outside the Boss Attempt.")
+        participants = _list(event["participants"], "Mechanic Review source participants", maximum=40)
+        excerpt = _object(event["evidence_excerpt"], "Mechanic Review source evidence excerpt")
+        if len(excerpt) > len(EVIDENCE_EXCERPT_FIELDS) or any(key not in EVIDENCE_EXCERPT_FIELDS for key in excerpt):
+            raise InputError("Mechanic Review source evidence excerpt contains an unsupported field.")
+        if any(not _scalar(item) for item in excerpt.values()):
+            raise InputError("Mechanic Review source evidence excerpt values must be scalar.")
+        if any(isinstance(item, str) and len(item) > 300 for item in excerpt.values()):
+            raise InputError("Mechanic Review source evidence excerpt text must not exceed 300 characters.")
+        result.append({
+            "fight_time_ms": timestamp,
+            "participants": [_text(item, "Mechanic Review source participant", 200) for item in participants],
+            "evidence_excerpt": dict(excerpt),
+        })
+    result.sort(key=lambda item: item["fight_time_ms"])
+    return result
+
+
+def _validate_localized_text(value: Any, label: str, maximum: int) -> dict[str, str]:
+    localized = _object(value, label)
+    _fields(localized, label, {"en", "zh"})
+    return {
+        "en": _text(localized["en"], f"{label} en", maximum),
+        "zh": _text(localized["zh"], f"{label} zh", maximum),
+    }
+
+
+def _event_description(event: dict[str, Any], language: str) -> str:
+    excerpt = event["evidence_excerpt"]
+    event_type = excerpt.get("event_type", "event")
+    ability_id = excerpt.get("ability_id")
+    if language == "zh":
+        return f"{event_type} 事件支持该结论" + (f"（ability {ability_id}）" if ability_id is not None else "。")
+    return f"A {event_type} event supports this conclusion" + (f" (ability {ability_id})." if ability_id is not None else ".")
+
+
+def _finite_number(value: Any, label: str) -> int | float:
+    if not _number(value):
+        raise InputError(f"{label} must be a finite number.")
+    return value
+
+
+def _whole_milliseconds(value: Any, label: str) -> int:
+    if not _number(value) or not float(value).is_integer() or value < 0:
+        raise InputError(f"{label} must be non-negative whole milliseconds.")
+    return int(value)
+
+
+def _json_file_bytes(value: Any) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
 def assemble_raid_guide_document(snapshot: Any, snapshot_path: Path) -> dict[str, Any]:
@@ -317,59 +771,76 @@ def _validate_source_artifacts(document: dict[str, Any]) -> dict[str, bool]:
 
 
 def _verify_mechanic_source(document: dict[str, Any], source: dict[str, Any]) -> None:
-    if source.get("action") != "coach_mechanics" or source.get("selection_required") is not False:
-        raise InputError("Report Document mechanic_review source kind is invalid.")
-    identity = source.get("identity")
-    attempt = source.get("boss_attempt")
-    ruleset = source.get("ruleset")
-    evidence = source.get("evidence")
-    mechanics = source.get("mechanics")
-    if not all(isinstance(item, dict) for item in (identity, attempt, ruleset, evidence)) or not isinstance(mechanics, list):
-        raise InputError("Report Document mechanic_review source is malformed.")
+    source = validate_mechanic_review_source(source)
+    identity = source["identity"]
     claimed = document["identity"]
     if identity.get("report_code") != claimed["report_code"] or identity.get("report_revision") != claimed["report_revision"]:
         raise InputError("Report Document source Report Revision does not match.")
     if identity.get("fight_id") != claimed["fight_id"]:
         raise InputError("Report Document source Boss Attempt does not match.")
-    source_name = attempt.get("name_zh") if document["locale"] == "zh-CN" else attempt.get("name_en")
+    language = "zh" if document["locale"] == "zh-CN" else "en"
+    source_name = identity["encounter_name_zh"] if document["locale"] == "zh-CN" else identity["encounter_name_en"]
     expected_attempt = {
         "encounter_name": source_name,
-        "difficulty_name": attempt.get("difficulty"),
-        "duration_ms": _source_duration(attempt),
-        "outcome": "kill" if attempt.get("kill") is True else "wipe" if attempt.get("kill") is False else None,
-        "boss_percentage": attempt.get("boss_percentage"),
+        "difficulty_name": identity["difficulty_name"],
+        "duration_ms": int(identity["end_time"] - identity["start_time"]),
+        "outcome": identity["outcome"],
+        "boss_percentage": identity["boss_percentage"],
     }
     if any(claimed[field] != value for field, value in expected_attempt.items()):
         raise InputError("Report Document source Boss Attempt difficulty or outcome does not match.")
-    if ruleset != document["ruleset"]:
+    if source["ruleset"] != document["ruleset"]:
         raise InputError("Report Document source ruleset does not match.")
+    expected_title = f"{source_name}{'机制复盘' if document['locale'] == 'zh-CN' else ' mechanic review'}"
+    expected_subtitle = f"{identity['difficulty_name']} Boss Attempt {identity['fight_id']}"
     if (
-        evidence.get("class") != "mechanic_evidence_set"
-        or evidence.get("storage") != "process_memory"
-        or evidence.get("pagination_terminated") is not True
-        or evidence.get("report_revision_checked_before_and_after") is not True
-        or evidence.get("event_count") != document["evidence"]["event_count"]
+        document["title"] != expected_title
+        or document["subtitle"] != expected_subtitle
+        or document["scope_note"] != source["scope_note"][language]
+        or document["actions"]
     ):
+        raise InputError("Report Document narrative does not match the Mechanic Review source.")
+    if source["collection"]["event_count"] != document["evidence"]["event_count"]:
         raise InputError("Report Document Mechanic Evidence Set verification does not match.")
+    expected_phases = [
+        {
+            "name": phase["name"][language],
+            "start_ms": phase["start_ms"],
+            "end_ms": phase["end_ms"],
+        }
+        for phase in source["phases"]
+    ]
+    if document["phases"] != expected_phases:
+        raise InputError("Report Document phases do not match the Mechanic Review source.")
     source_by_name = {
-        item.get("name_zh") if document["locale"] == "zh-CN" else item.get("name_en"): item
-        for item in mechanics if isinstance(item, dict)
+        item["name"][language]: item for item in source["mechanics"]
     }
+    if len(document["mechanics"]) != len(source_by_name):
+        raise InputError("Report Document mechanics do not match the Mechanic Review source.")
     for mechanic in document["mechanics"]:
         source_mechanic = source_by_name.get(mechanic["name"])
-        summary = source_mechanic.get("summary") if isinstance(source_mechanic, dict) else None
-        if not isinstance(summary, dict) or any(
-            mechanic[field] != summary.get(field)
+        counts = source_mechanic.get("counts") if isinstance(source_mechanic, dict) else None
+        if not isinstance(counts, dict) or any(
+            mechanic[field] != counts.get(field)
             for field in ("trigger_count", "success_count", "failure_count")
         ):
             raise InputError("Report Document mechanic claims do not match the Mechanic Review source.")
-        if mechanic["status"] == "anomaly" and source_mechanic.get("anomaly_detection") != "enabled":
-            raise InputError("Report Document anomaly was not verified by the Mechanic Review source.")
-        anomalies = source_mechanic.get("anomalies")
-        anomalies = anomalies if isinstance(anomalies, list) else []
+        if mechanic["status"] != source_mechanic["status"] or mechanic["description"] != source_mechanic["conclusion"][language]:
+            raise InputError("Report Document mechanic conclusions do not match the Mechanic Review source.")
+        anomalies = source_mechanic["events"]
+        if len(mechanic["events"]) != len(anomalies):
+            raise InputError("Report Document evidence excerpts do not match the Mechanic Review source.")
         for event in mechanic["events"]:
             excerpt = event["evidence_excerpt"]
-            if not any(_event_matches_anomaly(event, excerpt, item) for item in anomalies):
+            if not any(
+                event["fight_time_ms"] == item["fight_time_ms"]
+                and event["participants"] == item["participants"]
+                and excerpt == item["evidence_excerpt"]
+                and event["tone"] == "danger"
+                and event["title"] == source_mechanic["name"][language]
+                and event["description"] == _event_description(item, language)
+                for item in anomalies
+            ):
                 raise InputError("Report Document evidence excerpt does not match a source anomaly.")
 
 

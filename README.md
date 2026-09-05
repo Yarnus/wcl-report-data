@@ -66,7 +66,16 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review 接受击杀和灭团，但只接受已完成的 Boss Attempt；`fight=last` 会被拒绝。
 
-正式 Mechanic Review 和 Personal Review 可以先按[数据集契约](references/data-contract.md)生成对应类型的结构化 Report Document，再渲染为自包含 HTML。该命令不访问 WCL，也不需要凭据：
+正式交付 Mechanic Review 时，在同一条命令中加入 `--report`；可用 `--locale zh-CN`（默认）或 `--locale en`：
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12" --report --locale zh-CN
+```
+
+该路径只在内存 Mechanic Review 完整分页且前后 Report Revision 一致后，写入 `outputs/mechanic-reviews/<sha256>.json` 的严格净化来源，再从该来源组装并校验 Report Document，渲染到 `outputs/reports/`。JSON stdout 返回 `source.path`、`source.sha256`、`document` 及 `report` 的内容身份和路径，不需要抓取混合输出。来源只保留 WCL Report、Report Revision、Boss Attempt 和 Mechanic Ruleset 身份及元数据、计数、受支持结论、阶段、参与者和扁平最小证据摘录；不保存完整过滤事件范围、Raw Page、Fight Bundle、`raw_event`、`raw_events`、光环应用对象、任意 WCL payload、责任或灭团因果。分页、revision、采集、净化、校验或首次渲染失败时不留下新的来源 artifact；相同内容复用现有不可变 artifact。
+
+其他类型的已构造 Report Document 仍可按[数据集契约](references/data-contract.md)单独渲染。该命令不访问 WCL，也不需要凭据：
 
 ```bash
 python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
