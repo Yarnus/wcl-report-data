@@ -15,6 +15,7 @@ from wcl_raid_coach.comparison import compare_player
 from wcl_raid_coach.errors import InputError
 from wcl_raid_coach.guides import create_guide_snapshot
 from wcl_raid_coach.report_documents import (
+    assemble_personal_review_document,
     create_mechanic_review_report,
     assemble_raid_guide_document,
     render_report_document,
@@ -163,7 +164,10 @@ def mechanic_document(source_root: Path | None = None) -> dict:
 def personal_document(source_root: Path | None = None) -> dict:
     sources = {
         kind: {"path": f"/work/{kind}.json", "sha256": character * 64}
-        for kind, character in (("personal_analysis", "a"), ("encounter_benchmark", "b"), ("comparison", "c"))
+        for kind, character in (
+            ("personal_analysis", "a"), ("encounter_benchmark", "b"), ("comparison", "c"),
+            ("ability_names", "d"), ("ability_names_metadata", "e"),
+        )
     }
     if source_root is not None:
         manifest, index = test_analysis.AnalysisTests().make_bundle(source_root)
@@ -191,11 +195,16 @@ def personal_document(source_root: Path | None = None) -> dict:
             "encounter_benchmark": _write_source(source_root, "benchmark.json", benchmark),
             "comparison": _write_source(source_root, "comparison.json", comparison),
         }
+        mapping = _write_source(source_root, "ability-names.zhCN.json", {})
+        metadata = _write_source(source_root, "ability-names.zhCN.meta.json", {
+            "build": "12.1.0.69587", "mapping_sha256": mapping["sha256"],
+        })
+        sources |= {"ability_names": mapping, "ability_names_metadata": metadata}
     return {
         "schema_version": 1,
         "document_type": "personal_review",
         "locale": "zh-CN",
-        "title": "Player 07 · 个人复盘",
+        "title": "Player · 个人复盘",
         "subtitle": "Complete Bundle 日志事实 + 同条件 Encounter Benchmark",
         "source_artifacts": [
             {"kind": kind, **source} for kind, source in sources.items()
@@ -206,6 +215,7 @@ def personal_document(source_root: Path | None = None) -> dict:
             "duration_ms": 1000, "outcome": "wipe", "boss_percentage": 32.7,
         },
         "player": {
+            "actor_id": 10,
             "name": "Player",
             "class_name": "DeathKnight",
             "spec_name": "Unholy",
@@ -219,6 +229,7 @@ def personal_document(source_root: Path | None = None) -> dict:
             "difficulty_id": 4,
             "class_name": "DeathKnight",
             "spec_name": "Unholy",
+            "benchmark_id": benchmark["benchmark_id"] if source_root is not None else "b" * 64,
             "sample_count": 3,
             "confidence": "low",
         },
@@ -232,14 +243,17 @@ def personal_document(source_root: Path | None = None) -> dict:
         },
         "abilities": [
             {
+                "ability_id": 1,
                 "name": "Ability",
+                "wcl_name": "Ability",
+                "ability_names_build": None,
                 "player_casts": 1,
                 "median_casts": 2.0,
                 "player_first_cast_ms": 100,
                 "median_first_cast_ms": 80.0,
             }
         ],
-        "scope_note": "伤害差值不是可实现提升值；死亡计数不提供死亡原因。",
+        "scope_note": "仅展示已校验日志事实和同硬条件样本比较；不提供机制归因、死亡原因、建议或可实现提升声明。",
     }
 
 
@@ -321,6 +335,115 @@ def raid_guide_document(source_root: Path | None = None) -> dict:
 
 
 class ReportDocumentTests(unittest.TestCase):
+    def test_assembles_real_shaped_personal_artifacts_through_html_and_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_document = personal_document(root)
+            refs = {item["kind"]: Path(item["path"]) for item in source_document["source_artifacts"]}
+            index_path = Path(json.loads(refs["personal_analysis"].read_text(encoding="utf-8"))["evidence"]["index_path"])
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index["abilities"].append({"gameID": 2, "name": "Fallback Ability", "type": 1, "icon": "spell"})
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+            manifest_path = Path(json.loads(refs["personal_analysis"].read_text(encoding="utf-8"))["evidence"]["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["report_index_sha256"] = hashlib.sha256(
+                json.dumps(index, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            analysis = analyze_player(manifest_path, index_path, 10, partition_id=2)
+            benchmark = json.loads(refs["encounter_benchmark"].read_text(encoding="utf-8"))
+            benchmark["metrics"]["casts_median"]["2"] = 3
+            benchmark["metrics"]["first_cast_ms_median"]["2"] = 250
+            benchmark = identify_benchmark(benchmark)
+            comparison = compare_player(analysis, benchmark)
+            refs["personal_analysis"].write_text(json.dumps(analysis), encoding="utf-8")
+            refs["encounter_benchmark"].write_text(json.dumps(benchmark), encoding="utf-8")
+            refs["comparison"].write_text(json.dumps(comparison), encoding="utf-8")
+            mapping_path = refs["ability_names"]
+            mapping_path.write_text(json.dumps({"1": "本地化技能"}), encoding="utf-8")
+            metadata_path = refs["ability_names_metadata"]
+            metadata_path.write_text(json.dumps({
+                "build": "12.1.0.69587", "mapping_sha256": sha256_file(mapping_path),
+            }), encoding="utf-8")
+
+            document = assemble_personal_review_document(
+                refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
+                ability_names_path=mapping_path,
+                ability_names_metadata_path=metadata_path,
+                locale="zh-CN",
+            )
+            result = render_report_document(document, root / "outputs" / "reports")
+            report_index = json.loads(Path(result["index_path"]).read_text(encoding="utf-8"))
+            html = Path(result["html_path"]).read_text(encoding="utf-8")
+
+            self.assertEqual(document["player"]["actor_id"], 10)
+            self.assertEqual(document["comparison"]["benchmark_id"], benchmark["benchmark_id"])
+            self.assertEqual(document["comparison"]["game_version"], "12.1")
+            self.assertEqual(document["abilities"], [
+                {
+                    "ability_id": 1, "name": "本地化技能", "wcl_name": "Ability",
+                    "ability_names_build": "12.1.0.69587", "player_casts": 1,
+                    "median_casts": 2.0, "player_first_cast_ms": 100.0,
+                    "median_first_cast_ms": 80.0,
+                },
+                {
+                    "ability_id": 2, "name": "Fallback Ability", "wcl_name": "Fallback Ability",
+                    "ability_names_build": None, "player_casts": 0,
+                    "median_casts": 3.0, "player_first_cast_ms": None,
+                    "median_first_cast_ms": 250.0,
+                },
+            ])
+            self.assertIn("本地化技能", html)
+            self.assertIn("Fallback Ability", html)
+            self.assertIn("Actor 10", html)
+            self.assertIn(benchmark["benchmark_id"][:12], html)
+            self.assertIn("Spell 1", html)
+            self.assertEqual(report_index["document"], validate_report_document(document))
+            self.assertEqual(result, render_report_document(document, root / "outputs" / "reports"))
+            serialized = json.dumps(report_index["document"])
+            for forbidden in ("recommendation", "advice", "death_cause", "mechanic_attribution", "achievable_improvement"):
+                self.assertNotIn(forbidden, serialized)
+
+            changed = json.loads(json.dumps(document))
+            changed["abilities"][0]["name"] = "调用方伪造名称"
+            with self.assertRaisesRegex(InputError, "ability claims"):
+                render_report_document(changed, root / "other-reports")
+
+    def test_personal_assembler_rejects_mismatched_or_malformed_sources(self) -> None:
+        mutations = (
+            ("personal_analysis", lambda value: value["player"].__setitem__("actor_id", 11), "Actor 11"),
+            ("personal_analysis", lambda value: value["identity"].__setitem__("fight_id", 8), "Complete Bundle"),
+            ("encounter_benchmark", lambda value: value["identity"].__setitem__("partition_id", 3), "content ID"),
+            ("encounter_benchmark", lambda value: value.__setitem__("sample_count", 4), "content ID"),
+            ("comparison", lambda value: value["identity"].__setitem__("class_name", "Mage"), "Comparison"),
+        )
+        for kind, mutate, message in mutations:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source_document = personal_document(root)
+                refs = {item["kind"]: Path(item["path"]) for item in source_document["source_artifacts"]}
+                value = json.loads(refs[kind].read_text(encoding="utf-8"))
+                mutate(value)
+                refs[kind].write_text(json.dumps(value), encoding="utf-8")
+                with self.assertRaisesRegex(InputError, message):
+                    assemble_personal_review_document(
+                        refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
+                        ability_names_path=refs["ability_names"],
+                        ability_names_metadata_path=refs["ability_names_metadata"], locale="en",
+                    )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_document = personal_document(root)
+            refs = {item["kind"]: Path(item["path"]) for item in source_document["source_artifacts"]}
+            refs["comparison"].write_text("{", encoding="utf-8")
+            with self.assertRaisesRegex(InputError, "valid UTF-8 JSON"):
+                assemble_personal_review_document(
+                    refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
+                    ability_names_path=refs["ability_names"],
+                    ability_names_metadata_path=refs["ability_names_metadata"], locale="en",
+                )
+
     def test_completed_review_creates_sanitized_source_document_html_and_index(self) -> None:
         review = mechanic_source()
         review["mechanics"][0]["anomalies"][0]["raw_events"] = [

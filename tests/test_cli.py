@@ -519,6 +519,41 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result["action"], "coach_guide_report")
         self.assertEqual(result["report"]["document_id"], result["document"]["document_id"])
 
+    def test_coach_personal_report_assembles_and_renders_three_artifacts(self) -> None:
+        from tests.test_report_documents import personal_document
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_document = personal_document(root)
+            refs = {item["kind"]: item["path"] for item in source_document["source_artifacts"]}
+            mapping_path = root / "ability-names.zhCN.json"
+            mapping_path.write_text(json.dumps({"1": "本地化技能"}), encoding="utf-8")
+            metadata_path = root / "ability-names.zhCN.meta.json"
+            metadata_path.write_text(json.dumps({
+                "build": "12.1.0.69587", "mapping_sha256": hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
+            }), encoding="utf-8")
+            output = io.StringIO()
+            with (
+                patch("wcl_raid_coach.__main__._ensure_ability_names", return_value={
+                    "mapping_path": str(mapping_path), "metadata_path": str(metadata_path),
+                    "build": "12.1.0.69587",
+                }),
+                redirect_stdout(output),
+            ):
+                status = main([
+                    "--data-root", str(root / "data"), "--cache-root", str(root / "cache"),
+                    "coach", "personal-report", refs["personal_analysis"],
+                    refs["encounter_benchmark"], refs["comparison"], "--locale", "zh-CN",
+                ])
+            result = json.loads(output.getvalue())
+            html_exists = Path(result["report"]["html_path"]).is_file()
+
+        self.assertEqual(status, 0)
+        self.assertEqual(result["action"], "coach_personal_report")
+        self.assertEqual(result["document"]["abilities"][0]["ability_id"], 1)
+        self.assertEqual(result["document"]["abilities"][0]["name"], "本地化技能")
+        self.assertTrue(html_exists)
+
 
 if __name__ == "__main__":
     unittest.main()

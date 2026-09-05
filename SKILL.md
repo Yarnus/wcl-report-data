@@ -132,6 +132,16 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach review "<MANIFEST_PATH>" --i
 
 `coach review` 只产生结构化日志事实。要评价表现，必须再建立同 encounter、difficulty、class、spec 和 partition 的 Encounter Benchmark。不得把总排名差距写成可实现提升。
 
+运行 `coach benchmark` 建立 Encounter Benchmark，再运行 `coach compare` 保存精确 Comparison 后，正式交付不得手工重写身份、指标或正文。直接把三个 artifact 组装为 Personal Review Report Document 并渲染自包含 HTML：
+
+```text
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-report "<PERSONAL_ANALYSIS_PATH>" "<ENCOUNTER_BENCHMARK_PATH>" "<COMPARISON_PATH>" --locale zh-CN
+```
+
+英文交付使用 `--locale en`。命令会重新校验 schema `3`/`2`/`2`，从 Complete Bundle 重算 Personal Analysis，从 Analysis 与 Benchmark 重算并精确核对 Comparison，再派生完整文档。向用户交付短摘要和 `report.html_path`，并保留 `report.document_id`、`report.html_sha256` 与 `report.index_path` 供复核。
+
+Personal Review 必须保留精确 Report Revision、Boss Attempt、actor、匿名状态、职业/专精、可用装等、完整比较硬条件、Benchmark ID、样本数、置信度和指标。技能以数字 `ability_id` 作为审计身份；中文展示仅使用已校验 `ability-names.zhCN.json` 的 ID mapping，未命中时回退同一 Report Index 的 WCL 原名并把 mapping build 记录为 `null`。不得根据文本名称反查技能。assembler 不接受自定义标题、摘要、指标或建议参数，并使用固定中性文字；不得补写机制归因、死亡原因、责任、建议、推荐或可实现提升。
+
 ## 6. 通用攻略
 
 例如用户说“给我一个邪 DK 打 H7 H8 的攻略”，先解析请求：

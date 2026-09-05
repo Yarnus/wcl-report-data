@@ -89,7 +89,19 @@ A Raid Guide does not require the caller to rewrite a Report Document. Pass the 
 python -m wcl_raid_coach coach guide-report "<DATA_ROOT>/guides/<SNAPSHOT_ID>.json"
 ```
 
-The CLI returns the derived `document` and a `report` containing `html_path`, `html_sha256`, `index_path`, `document_id`, and both schema versions. HTML loads no remote fonts, styles, scripts, or images and supports the system theme plus manual Auto/light/dark selection. The assembler preserves the exact Snapshot ID and file SHA-256 and copies encounter, Benchmark, and Profile identities, sample count, confidence, metrics, localized abilities, mechanic anchors, and sources within each Boss chapter; fields from different Bosses are never mixed. The renderer parses and validates every source artifact rather than checking only its path and SHA-256; a Personal Review must provide Personal Analysis, Encounter Benchmark, and Comparison sources. Ruleset and Guide source URLs must be public HTTP(S) URLs with no user information in their authority and no credential or signature parameters in their query string or fragment. Mechanic Review accepts only flat minimal evidence excerpts; Personal Review accepts no mechanic attribution or recommendations; Raid Guide generates no rotation, talent, gear, phase strategy, recommendation, or achievable target absent from its Snapshot.
+A Personal Review likewise requires no retyped metrics or identity. Pass the three JSON artifacts produced by `coach review`, `coach benchmark`, and `coach compare` directly to the first-party assembler:
+
+```bash
+python -m wcl_raid_coach coach personal-report \
+  "<WORK_DIR>/personal-analysis.json" \
+  "<WORK_DIR>/encounter-benchmark.json" \
+  "<WORK_DIR>/comparison.json" \
+  --locale en
+```
+
+This command revalidates Personal Analysis schema `3`, Encounter Benchmark schema `2`, and Comparison schema `2`, recomputes Personal Analysis from its Complete Bundle, then recomputes and exactly checks Comparison from the first two artifacts. Report Revision, Boss Attempt, actor, anonymity, class, specialization, item level, ranking partition, game version, encounter, difficulty, Benchmark ID, sample count, confidence, and every metric are artifact-derived. It accepts no caller title, summary, metric, or advice text. Ability rows retain numeric `ability_id` and the original WCL name. A Chinese name is used and its mapping build recorded only when the ID occurs in both the Report Index and the validated `ability-names.zhCN.json`; a mapping miss falls back to the WCL name with a null mapping build.
+
+The CLI returns the derived `document` and a `report` containing `html_path`, `html_sha256`, `index_path`, `document_id`, and both schema versions. HTML loads no remote fonts, styles, scripts, or images and supports the system theme plus manual Auto/light/dark selection. The assembler preserves the exact Snapshot ID and file SHA-256 and copies encounter, Benchmark, and Profile identities, sample count, confidence, metrics, localized abilities, mechanic anchors, and sources within each Boss chapter; fields from different Bosses are never mixed. The renderer parses and validates every source artifact rather than checking only its path and SHA-256; a Personal Review must provide Personal Analysis, Encounter Benchmark, and Comparison sources. Ruleset and Guide source URLs must be public HTTP(S) URLs with no user information in their authority and no credential or signature parameters in their query string or fragment. Mechanic Review accepts only flat minimal evidence excerpts; Personal Review uses fixed neutral wording and generates no mechanic attribution, death cause, responsibility, advice, or achievable-improvement claim; Raid Guide generates no rotation, talent, gear, phase strategy, recommendation, or achievable target absent from its Snapshot.
 
 Prepare the fight selected in the URL:
 

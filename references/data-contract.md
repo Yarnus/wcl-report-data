@@ -153,12 +153,12 @@ Report Document 是展示层输入，不是证据层数据。schema `1` 接受 `
 }
 ```
 
-`personal_review` 的完整顶层字段是 `schema_version`、`document_type`、`locale`、`title`、`subtitle`、`source_artifacts`、`identity`、`player`、`comparison`、`metrics`、`abilities` 和 `scope_note`。`identity` 与 Mechanic Review 使用相同 Boss Attempt 形状；来源必须同时包含 schema `3` 的 `personal_analysis`、schema `2` 的 `encounter_benchmark` 和 schema `2` 的 `comparison`。Comparison 必须与前两个来源重新计算的结果完全相同，不能由 renderer 静默重建后替代 provenance。
+`personal_review` 的完整顶层字段是 `schema_version`、`document_type`、`locale`、`title`、`subtitle`、`source_artifacts`、`identity`、`player`、`comparison`、`metrics`、`abilities` 和 `scope_note`。`identity` 与 Mechanic Review 使用相同 Boss Attempt 形状；来源必须同时包含 schema `3` 的 `personal_analysis`、schema `2` 的 `encounter_benchmark`、schema `2` 的 `comparison`，以及 assembler 自动附加的 `ability_names` 与 `ability_names_metadata`。Comparison 必须与前两个来源重新计算的结果完全相同，不能由 renderer 静默重建后替代 provenance。
 
-- `player`：`name`、`class_name`、`spec_name`、可空 `item_level`、布尔 `anonymous`。
-- `comparison`：完整比较硬条件 `game_version`、`partition_id`、`encounter_id`、`difficulty_id`、`class_name`、`spec_name`，至少 3 的 `sample_count`，以及 `low` 或 `normal` 的 `confidence`。ID 均为正数，class/spec 必须与 `player` 一致。
+- `player`：正整数 `actor_id`、`name`、`class_name`、`spec_name`、可空 `item_level`、布尔 `anonymous`。
+- `comparison`：完整比较硬条件 `game_version`、`partition_id`、`encounter_id`、`difficulty_id`、`class_name`、`spec_name`，精确 `benchmark_id`，至少 3 的 `sample_count`，以及 `low` 或 `normal` 的 `confidence`。ID 均为正数，class/spec 必须与 `player` 一致。
 - `metrics`：非负整数 `damage_total`、`healing_total`、`interrupts`、`deaths`、`resource_events`，以及可空有限数 `damage_total_delta`。
-- `abilities`：至多 100 项，每项包含 `name`、非负整数 `player_casts`，以及可空非负有限数 `median_casts`、`player_first_cast_ms`、`median_first_cast_ms`。
+- `abilities`：至多 100 项，每项包含作为审计身份的正整数 `ability_id`、展示 `name`、`wcl_name`、可空 `ability_names_build`、非负整数 `player_casts`，以及可空非负有限数 `median_casts`、`player_first_cast_ms`、`median_first_cast_ms`。中文 mapping 命中时 `name` 使用已校验的 SpellName 并记录 build；未命中时 `name` 回退 `wcl_name` 且 build 为 `null`。
 
 `raid_guide` 的完整顶层字段是共享字段加 `identity`、`specialization`、`snapshot_id`、`ability_names_build` 和 `chapters`；唯一来源类型是 `guide_snapshot`。`identity` 包含 `game_version`、正数 `partition_id`、`difficulty_name`、`class_name` 和 `spec_name`。`snapshot_id` 以及章节的两个 Profile ID 必须是 SHA-256。
 
@@ -175,6 +175,8 @@ Personal Review 没有机制归因或建议字段。Raid Guide 没有 rotation�
 renderer 的信任边界不止是路径和文件 SHA-256。每个来源必须是有效 UTF-8 JSON，并符合其声明的 artifact 类型和当前 schema；Encounter Benchmark 和 Guide Snapshot 必须通过规范 JSON 内容 ID 校验，Guide Snapshot 的 Markdown 也必须通过哈希校验，Personal Analysis 必须从其 Complete Bundle 和 Report Index 重新计算。renderer 随后逐项核对文档声明的 Report Revision、Boss Attempt、actor/player、比较硬条件、Benchmark 样本数与置信度、Snapshot ID、Profile ID 及章节隔离。Mechanic Review 来源必须通过上述严格 schema，并记录分页终止及采集前后 Report Revision 已确认；renderer 会逐项核对来源中的身份、规则集、计数、结论、阶段和最小摘录。持久化 Report Document 仍不得保存完整 Mechanic Evidence Set。只有上述校验实际建立后，HTML 才会显示 Complete Bundle 或硬条件已校验。普通 SHA-256 仍只提供本地内容身份和损坏检测，不认证 artifact 的生成者。
 
 `coach guide-report` 是 Raid Guide 的第一方组装路径。它只接受一个已校验 Guide Snapshot JSON artifact，不接受调用方重写章节；派生文档保留精确 Snapshot ID 与 artifact 文件 SHA-256，并按原章节复制 encounter identity、`benchmark_id`、Profile ID、样本数/置信度、指标、本地化技能、机制锚点和来源。每章必须逐项回查同一 Snapshot 章节，禁止跨 Boss 交换同值指标、技能或来源。
+
+`coach personal-report <PERSONAL_ANALYSIS> <ENCOUNTER_BENCHMARK> <COMPARISON> [--locale zh-CN|en]` 是 Personal Review 的第一方组装路径。它只接受三个本地 artifact 路径，不接受调用方重写身份、指标、标题、摘要或建议。命令重新校验 schema `3`/`2`/`2`、Complete Bundle 和 Report Index provenance、Benchmark content ID，并从前两个 artifact 重算 Comparison 后要求与第三个 artifact 完全相同；随后派生固定中性文档并立即渲染。中文技能展示通过 data root 中已校验的 ability-name artifact 按 ID enrichment；ID 不在 mapping 时安全回退同一 Report Index 的 WCL 名称。renderer 再次逐项核对 Report Revision、Boss Attempt、actor/player、完整硬条件、Benchmark ID、样本数/置信度、指标和 ability ID。
 
 校验后的规范 JSON 以排序、紧凑 UTF-8 JSON 的 SHA-256 作为 `document_id`。renderer schema `1` 生成无外部资源的自包含 HTML；HTML 文件名是最终 UTF-8 HTML 字节的 SHA-256。HTML 与 JSON 索引写入 `outputs/reports/<html-sha256>.html` 和同名 `.json`，已有内容必须复用，身份或哈希不匹配时拒绝覆盖。JSON 索引保存规范 Report Document、来源 artifact、renderer schema 和 HTML 哈希。
 
