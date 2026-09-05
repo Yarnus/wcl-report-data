@@ -149,7 +149,7 @@ Report Document 是展示层输入，不是证据层数据。schema `1` 接受 `
 }
 ```
 
-`personal_review` 的完整顶层字段是 `schema_version`、`document_type`、`locale`、`title`、`subtitle`、`source_artifacts`、`identity`、`player`、`comparison`、`metrics`、`abilities` 和 `scope_note`。`identity` 与 Mechanic Review 使用相同 Boss Attempt 形状；来源必须同时包含 `personal_analysis` 和 `encounter_benchmark`。
+`personal_review` 的完整顶层字段是 `schema_version`、`document_type`、`locale`、`title`、`subtitle`、`source_artifacts`、`identity`、`player`、`comparison`、`metrics`、`abilities` 和 `scope_note`。`identity` 与 Mechanic Review 使用相同 Boss Attempt 形状；来源必须同时包含 schema `3` 的 `personal_analysis`、schema `2` 的 `encounter_benchmark` 和 schema `2` 的 `comparison`。Comparison 必须与前两个来源重新计算的结果完全相同，不能由 renderer 静默重建后替代 provenance。
 
 - `player`：`name`、`class_name`、`spec_name`、可空 `item_level`、布尔 `anonymous`。
 - `comparison`：完整比较硬条件 `game_version`、`partition_id`、`encounter_id`、`difficulty_id`、`class_name`、`spec_name`，至少 3 的 `sample_count`，以及 `low` 或 `normal` 的 `confidence`。ID 均为正数，class/spec 必须与 `player` 一致。
@@ -166,7 +166,9 @@ Personal Review 没有机制归因或建议字段。Raid Guide 没有 rotation�
 
 `locale` 只接受 `zh-CN` 或 `en`；`status` 只接受 `anomaly`、`review`、`ok` 或 `unverified`；`tone` 只接受 `danger`、`warn`、`ok` 或 `info`。`boss_percentage` 可以为 `null`。
 
-调用方不得提交 HTML、CSS 或 JavaScript，未知字段一律拒绝。Mechanic Review 每条机制最多保存 20 个展示事件。事件 `evidence_excerpt` 只接受 `event_type`、`ability_id`、`source_id`、`target_id`、`amount`、`duration_ms`、`delta_ms`、`episode`、`outcome` 和 `note` 这些扁平标量字段，文本值最多 300 字符；不得嵌入原始事件对象或完整 Mechanic Evidence Set。`anomaly` 状态必须有正数失败计数和展示事件；`ok` 必须有零失败计数；`unverified` 不能声明成功或失败计数。Report Document 不提供 `judgment` 或 `causal_attribution` 字段。renderer 会验证每个来源 artifact 文件存在且 SHA-256 匹配。
+调用方不得提交 HTML、CSS 或 JavaScript，未知字段一律拒绝。Mechanic Review 每条机制最多保存 20 个展示事件。事件 `evidence_excerpt` 只接受 `event_type`、`ability_id`、`source_id`、`target_id`、`amount`、`duration_ms`、`delta_ms`、`episode`、`outcome` 和 `note` 这些扁平标量字段，文本值最多 300 字符；不得嵌入原始事件对象或完整 Mechanic Evidence Set。`anomaly` 状态必须有正数失败计数和展示事件；`ok` 必须有零失败计数；`unverified` 不能声明成功或失败计数。Report Document 不提供 `judgment` 或 `causal_attribution` 字段。
+
+renderer 的信任边界不止是路径和文件 SHA-256。每个来源必须是有效 UTF-8 JSON，并符合其声明的 artifact 类型和当前 schema；Encounter Benchmark 和 Guide Snapshot 必须通过规范 JSON 内容 ID 校验，Guide Snapshot 的 Markdown 也必须通过哈希校验，Personal Analysis 必须从其 Complete Bundle 和 Report Index 重新计算。renderer 随后逐项核对文档声明的 Report Revision、Boss Attempt、actor/player、比较硬条件、Benchmark 样本数与置信度、Snapshot ID、Profile ID 及章节隔离。Mechanic Review 来源必须是一次已完成、分页终止并在采集前后确认 Report Revision 的进程内 Mechanic Evidence Set 结果；持久化 Report Document 仍不得保存完整 Mechanic Evidence Set。只有上述校验实际建立后，HTML 才会显示 Complete Bundle 或硬条件已校验。普通 SHA-256 仍只提供本地内容身份和损坏检测，不认证 artifact 的生成者。
 
 校验后的规范 JSON 以排序、紧凑 UTF-8 JSON 的 SHA-256 作为 `document_id`。renderer schema `1` 生成无外部资源的自包含 HTML；HTML 文件名是最终 UTF-8 HTML 字节的 SHA-256。HTML 与 JSON 索引写入 `outputs/reports/<html-sha256>.html` 和同名 `.json`，已有内容必须复用，身份或哈希不匹配时拒绝覆盖。JSON 索引保存规范 Report Document、来源 artifact、renderer schema 和 HTML 哈希。
 

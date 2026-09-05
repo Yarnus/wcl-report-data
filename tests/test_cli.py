@@ -299,7 +299,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             document_path = root / "document.json"
-            document_path.write_text(json.dumps(mechanic_document()), encoding="utf-8")
+            document_path.write_text(json.dumps(mechanic_document(root)), encoding="utf-8")
             output = io.StringIO()
             with redirect_stdout(output):
                 status = main(
@@ -325,6 +325,25 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             document_path = Path(temporary) / "document.json"
             document_path.write_text("{}", encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(["coach", "render", str(document_path)])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "invalid_input")
+
+    def test_coach_render_returns_input_error_for_a_malformed_source(self) -> None:
+        from tests.test_report_documents import mechanic_document
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = mechanic_document(root)
+            source = Path(document["source_artifacts"][0]["path"])
+            source.write_text("{", encoding="utf-8")
+            document["source_artifacts"][0]["sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+            document_path = root / "document.json"
+            document_path.write_text(json.dumps(document), encoding="utf-8")
             output = io.StringIO()
             with redirect_stdout(output):
                 status = main(["coach", "render", str(document_path)])
