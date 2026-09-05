@@ -159,7 +159,7 @@ Report Document 是展示层输入，不是证据层数据。schema `1` 接受 `
 
 - `chapters`：1 至 20 个 encounter ID 不重复的章节；每章包含 `encounter_id`、`encounter_name`、至少 3 的 `sample_count`、`confidence`、可空 `damage_total_median`、`abilities`、`target_damage`、`mechanic_anchors`、两个 Profile ID 和 `sources`。
 - 章节 `abilities` 只保存技能名、施放中位数和首次施放中位时间；`target_damage` 只保存数字 target ID 与中位伤害；`mechanic_anchors` 只保存名称与可空观察时间。
-- 章节 `sources` 只接受 `encounter` 或 `specialization` 类型、标题、公开 HTTP(S) URL 和引用摘要。URL 不得包含凭据。
+- 章节 `sources` 只接受 `encounter` 或 `specialization` 类型、标题、公开 HTTP(S) URL 和引用摘要。规则集和章节来源 URL 的 authority 不得包含用户信息；query string 和 fragment 的参数名在忽略大小写、常见分隔符及百分号编码后，不得是凭据、密钥、令牌、认证或签名参数。
 
 Personal Review 没有机制归因或建议字段。Raid Guide 没有 rotation、天赋、装备、阶段策略或具体建议字段。调用方不得利用标题、摘要或 `scope_note` 把伤害差值声明为可实现提升，也不得把样本中位数写成推荐次数。
 

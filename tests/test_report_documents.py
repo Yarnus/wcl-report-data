@@ -275,16 +275,66 @@ class ReportDocumentTests(unittest.TestCase):
         with self.assertRaisesRegex(InputError, "anomaly"):
             validate_report_document(document)
 
+    def test_accepts_ordinary_public_source_urls(self) -> None:
+        urls = [
+            "https://example.com/clientSecret/guide?locale=en#overview",
+            "http://example.com/source?token_count=3&signature_algorithm=sha256",
+            "https://example.com/source?authentication_method=public&author=guide",
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                mechanic = mechanic_document()
+                mechanic["ruleset"]["sources"] = [url]
+                self.assertEqual(validate_report_document(mechanic)["ruleset"]["sources"], [url])
+
+                guide = raid_guide_document()
+                guide["chapters"][0]["sources"][0]["url"] = url
+                self.assertEqual(
+                    validate_report_document(guide)["chapters"][0]["sources"][0]["url"],
+                    url,
+                )
+
     def test_rejects_malformed_or_credential_bearing_source_urls(self) -> None:
         document = mechanic_document()
         document["ruleset"]["sources"] = ["https://["]
         with self.assertRaisesRegex(InputError, "malformed"):
             validate_report_document(document)
 
-        document = mechanic_document()
-        document["ruleset"]["sources"] = ["https://example.com/source#access_token=secret"]
-        with self.assertRaisesRegex(InputError, "credentials"):
-            validate_report_document(document)
+        credential_urls = [
+            "https://example.com/source?clientSecret=secret",
+            "https://example.com/source?ACCESS-TOKEN=secret",
+            "https://example.com/source?api.key=secret",
+            "https://example.com/source?X-Amz-Credential=secret",
+            "https://example.com/source?X_Amz_Signature=secret",
+            "https://example.com/source?signature=secret",
+            "https://example.com/source?authorization=secret",
+            "https://example.com/source?safe=yes&auth=secret&auth=secret-again",
+            "https://example.com/source#token=secret",
+            "https://example.com/source#%61ccess%2Dtoken=secret",
+        ]
+        for url in credential_urls:
+            with self.subTest(url=url):
+                document = mechanic_document()
+                document["ruleset"]["sources"] = [url]
+                with self.assertRaisesRegex(InputError, "credentials"):
+                    validate_report_document(document)
+
+                document = raid_guide_document()
+                document["chapters"][0]["sources"][0]["url"] = url
+                with self.assertRaisesRegex(InputError, "credentials"):
+                    validate_report_document(document)
+
+    def test_rejects_source_url_user_information(self) -> None:
+        for url in (
+            "https://user@example.com/source",
+            "https://user:secret@example.com/source",
+            "https://@example.com/source",
+        ):
+            with self.subTest(url=url):
+                document = mechanic_document()
+                document["ruleset"]["sources"] = [url]
+                with self.assertRaisesRegex(InputError, "public HTTP or HTTPS"):
+                    validate_report_document(document)
 
     def test_renders_personal_review_without_inventing_claims(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

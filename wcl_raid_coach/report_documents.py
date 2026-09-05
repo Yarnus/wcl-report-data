@@ -7,7 +7,7 @@ import re
 from html import escape
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from .errors import InputError
 from .storage import artifact_lock, atomic_write_json, atomic_write_text, read_json, sha256_file
@@ -910,10 +910,25 @@ def _public_url(value: Any, label: str) -> str:
         )
     except ValueError as exc:
         raise InputError(f"{label} URL is malformed.") from exc
-    if parsed.scheme not in {"http", "https"} or not hostname or parsed.username or parsed.password:
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise InputError(f"{label} must be a public HTTP or HTTPS URL.")
-    sensitive_names = {"access_token", "token", "client_secret", "api_key", "key", "auth"}
-    if any(name.lower() in sensitive_names for name, _ in parameters):
+    sensitive_names = {
+        "accesstoken", "apikey", "auth", "authentication", "authorization",
+        "clientsecret", "credential", "key", "secret", "signature", "token",
+        "xamzcredential", "xamzsignature",
+    }
+    normalized_names = []
+    for name, _ in parameters:
+        decoded = name
+        while (next_decoded := unquote(decoded)) != decoded:
+            decoded = next_decoded
+        normalized_names.append(re.sub(r"[^a-z0-9]", "", decoded.lower()))
+    if any(name in sensitive_names for name in normalized_names):
         raise InputError(f"{label} must not contain credentials.")
     return source
 
