@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import tempfile
@@ -10,6 +11,7 @@ from unittest.mock import patch
 
 from wcl_raid_coach.__main__ import create_parser, main, run
 from wcl_raid_coach.cohort import identify_benchmark
+from wcl_raid_coach.errors import RevisionChangedError
 
 
 class CliTests(unittest.TestCase):
@@ -170,6 +172,78 @@ class CliTests(unittest.TestCase):
 
         resolve.assert_not_called()
 
+    def test_coach_review_resolves_production_report_partition_labels(self) -> None:
+        from tests.test_analysis import AnalysisTests
+
+        for compact_name, expected in (("12.1", "12.1"), (None, "Current Season")):
+            with self.subTest(compact_name=compact_name), tempfile.TemporaryDirectory() as temporary:
+                manifest, index = AnalysisTests().make_bundle(Path(temporary))
+                value = json.loads(index.read_text(encoding="utf-8"))
+                value["report"]["zone"]["partitions"][0]["compactName"] = compact_name
+                index.write_text(json.dumps(value), encoding="utf-8")
+                manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+                manifest_value["report_index_sha256"] = hashlib.sha256(
+                    json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                manifest.write_text(json.dumps(manifest_value), encoding="utf-8")
+                output = io.StringIO()
+
+                with redirect_stdout(output):
+                    status = main(
+                        [
+                            "coach", "review", str(manifest), "--index", str(index),
+                            "--source-id", "10", "--partition-id", "2",
+                        ]
+                    )
+
+                result = json.loads(output.getvalue())
+                self.assertEqual(status, 0)
+                self.assertEqual(result["analysis"]["comparison_identity"]["game_version"], expected)
+
+    def test_coach_review_unknown_partition_returns_structured_domain_error(self) -> None:
+        from tests.test_analysis import AnalysisTests
+
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest, index = AnalysisTests().make_bundle(Path(temporary))
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(
+                    [
+                        "coach", "review", str(manifest), "--index", str(index),
+                        "--source-id", "10", "--partition-id", "99",
+                    ]
+                )
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "dataset_error")
+        self.assertIn("ranking partition", result["message"])
+
+    def test_coach_review_malformed_partitions_return_structured_domain_error(self) -> None:
+        from tests.test_analysis import AnalysisTests
+
+        with tempfile.TemporaryDirectory() as temporary:
+            helper = AnalysisTests()
+            manifest, index = helper.make_bundle(Path(temporary))
+            helper.replace_partitions(
+                manifest,
+                index,
+                [{"id": True, "name": "Current", "compactName": "12.1", "default": True}],
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(
+                    [
+                        "coach", "review", str(manifest), "--index", str(index),
+                        "--source-id", "10", "--partition-id", "2",
+                    ]
+                )
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "dataset_error")
+        self.assertIn("ranking partitions are malformed", result["message"])
+
     def test_coach_mechanics_uses_the_in_memory_review_service(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_root = Path(temporary) / "data"
@@ -207,6 +281,53 @@ class CliTests(unittest.TestCase):
         self.assertEqual(request.kwargs["encounter_designator"].as_dict()["value"], "H2")
         self.assertTrue(result["selection_required"])
 
+    def test_coach_mechanics_report_returns_structured_artifact_paths(self) -> None:
+        from tests.test_report_documents import mechanic_source
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = io.StringIO()
+            with (
+                patch("wcl_raid_coach.__main__.resolve_credentials"),
+                patch("wcl_raid_coach.__main__.WclClient"),
+                patch("wcl_raid_coach.__main__.MechanicReviewService") as service,
+                redirect_stdout(output),
+            ):
+                service.return_value.review.return_value = mechanic_source()
+                status = main([
+                    "--data-root", str(root / "data"),
+                    "--cache-root", str(root / "cache"),
+                    "coach", "mechanics",
+                    "https://www.warcraftlogs.com/reports/AbC123#fight=17",
+                    "--report", "--locale", "en",
+                ])
+            result = json.loads(output.getvalue())
+
+            self.assertEqual(status, 0)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["action"], "coach_mechanic_report")
+            self.assertNotIn("mechanics", result)
+            self.assertTrue(Path(result["source"]["path"]).is_file())
+            self.assertTrue(Path(result["report"]["html_path"]).is_file())
+
+    def test_coach_mechanics_report_failure_is_a_structured_domain_error(self) -> None:
+        output = io.StringIO()
+        with (
+            patch("wcl_raid_coach.__main__.resolve_credentials"),
+            patch("wcl_raid_coach.__main__.WclClient"),
+            patch("wcl_raid_coach.__main__.MechanicReviewService") as service,
+            redirect_stdout(output),
+        ):
+            service.return_value.review.side_effect = RevisionChangedError("revision changed")
+            status = main([
+                "coach", "mechanics",
+                "https://www.warcraftlogs.com/reports/AbC123#fight=17", "--report",
+            ])
+        result = json.loads(output.getvalue())
+
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "report_revision_changed")
+
     def test_invalid_coach_profile_encoding_returns_a_structured_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             profile = Path(temporary) / "profile.json"
@@ -219,6 +340,85 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "dataset_io_error")
+
+    def test_coach_render_writes_html_without_credentials(self) -> None:
+        from tests.test_report_documents import mechanic_document
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document_path = root / "document.json"
+            document_path.write_text(json.dumps(mechanic_document(root)), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(
+                    [
+                        "--data-root",
+                        str(root / "data"),
+                        "--cache-root",
+                        str(root / "cache"),
+                        "coach",
+                        "render",
+                        str(document_path),
+                    ]
+                )
+
+            result = json.loads(output.getvalue())
+
+        self.assertEqual(status, 0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "coach_render")
+        self.assertIn(str(Path("outputs") / "reports"), result["report"]["html_path"])
+
+    def test_coach_render_returns_structured_schema_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            document_path = Path(temporary) / "document.json"
+            document_path.write_text("{}", encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(["coach", "render", str(document_path)])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "invalid_input")
+
+    def test_coach_render_returns_input_error_for_a_malformed_source(self) -> None:
+        from tests.test_report_documents import mechanic_document
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = mechanic_document(root)
+            source = Path(document["source_artifacts"][0]["path"])
+            source.write_text("{", encoding="utf-8")
+            document["source_artifacts"][0]["sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+            document_path = root / "document.json"
+            document_path.write_text(json.dumps(document), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(["coach", "render", str(document_path)])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "invalid_input")
+
+    def test_coach_render_returns_structured_error_without_echoing_url_secret(self) -> None:
+        from tests.test_report_documents import mechanic_document
+
+        secret = "must-not-appear-in-stdout"
+        with tempfile.TemporaryDirectory() as temporary:
+            document = mechanic_document()
+            document["ruleset"]["sources"] = [
+                f"https://example.com/source?X-Amz-Signature={secret}"
+            ]
+            document_path = Path(temporary) / "document.json"
+            document_path.write_text(json.dumps(document), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(["coach", "render", str(document_path)])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "invalid_input")
+        self.assertNotIn(secret, output.getvalue())
 
     def test_coach_guide_uses_zhcn_spell_names(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -298,6 +498,61 @@ class CliTests(unittest.TestCase):
         self.assertIn("中文技能", markdown)
         self.assertIn("中文机制", markdown)
         self.assertNotIn("English Mechanic", markdown)
+
+    def test_coach_guide_report_assembles_and_renders_a_snapshot(self) -> None:
+        from tests.test_report_documents import raid_guide_document
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = raid_guide_document(root)
+            snapshot_path = document["source_artifacts"][0]["path"]
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main([
+                    "--data-root", str(root / "data"),
+                    "--cache-root", str(root / "cache"),
+                    "coach", "guide-report", snapshot_path,
+                ])
+            result = json.loads(output.getvalue())
+
+        self.assertEqual(status, 0)
+        self.assertEqual(result["action"], "coach_guide_report")
+        self.assertEqual(result["report"]["document_id"], result["document"]["document_id"])
+
+    def test_coach_personal_report_assembles_and_renders_three_artifacts(self) -> None:
+        from tests.test_report_documents import personal_document
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_document = personal_document(root)
+            refs = {item["kind"]: item["path"] for item in source_document["source_artifacts"]}
+            mapping_path = root / "ability-names.zhCN.json"
+            mapping_path.write_text(json.dumps({"1": "本地化技能"}), encoding="utf-8")
+            metadata_path = root / "ability-names.zhCN.meta.json"
+            metadata_path.write_text(json.dumps({
+                "build": "12.1.0.69587", "mapping_sha256": hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
+            }), encoding="utf-8")
+            output = io.StringIO()
+            with (
+                patch("wcl_raid_coach.__main__._ensure_ability_names", return_value={
+                    "mapping_path": str(mapping_path), "metadata_path": str(metadata_path),
+                    "build": "12.1.0.69587",
+                }),
+                redirect_stdout(output),
+            ):
+                status = main([
+                    "--data-root", str(root / "data"), "--cache-root", str(root / "cache"),
+                    "coach", "personal-report", refs["personal_analysis"],
+                    refs["encounter_benchmark"], refs["comparison"], "--locale", "zh-CN",
+                ])
+            result = json.loads(output.getvalue())
+            html_exists = Path(result["report"]["html_path"]).is_file()
+
+        self.assertEqual(status, 0)
+        self.assertEqual(result["action"], "coach_personal_report")
+        self.assertEqual(result["document"]["abilities"][0]["ability_id"], 1)
+        self.assertEqual(result["document"]["abilities"][0]["name"], "本地化技能")
+        self.assertTrue(html_exists)
 
 
 if __name__ == "__main__":

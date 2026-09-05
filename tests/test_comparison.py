@@ -13,7 +13,7 @@ IDENTITY = {"game_version": "retail", "partition_id": 2, "encounter_id": 1007, "
 
 class ComparisonTests(unittest.TestCase):
     def test_compares_casts_but_prohibits_treating_damage_gap_as_improvement(self) -> None:
-        target = {"comparison_identity": IDENTITY, "player": {"actor_id": 10, "name": "Player"}, "evidence": {"manifest_path": "/local/manifest.json", "index_path": "/local/report.json"}, "metrics": {"damage_total": 100, "deaths": 0, "casts": {"1": 2}}}
+        target = {"schema_version": 3, "comparison_identity": IDENTITY, "player": {"actor_id": 10, "name": "Player"}, "evidence": {"manifest_path": "/local/manifest.json", "index_path": "/local/report.json"}, "metrics": {"damage_total": 100, "deaths": 0, "casts": {"1": 2}}}
         benchmark = identify_benchmark({"schema_version": 2, "cohort_id": "c" * 64, "identity": IDENTITY, "sample_count": 3, "confidence": "low", "stable_pattern_claims_allowed": True, "metrics": {"damage_total_median": 200, "casts_median": {"1": 3}}})
         with patch("wcl_raid_coach.comparison.analyze_player", return_value=target):
             result = compare_player(target, benchmark)
@@ -34,6 +34,19 @@ class ComparisonTests(unittest.TestCase):
         benchmark = identify_benchmark({"schema_version": 2, "cohort_id": "c" * 64, "identity": IDENTITY})
         target = {"comparison_identity": IDENTITY, "metrics": {}}
         with self.assertRaises(InputError):
+            compare_player(target, benchmark)
+
+    def test_rejects_persisted_personal_analysis_schema_2(self) -> None:
+        target = {
+            "schema_version": 2,
+            "comparison_identity": IDENTITY,
+            "player": {"actor_id": 10},
+            "evidence": {"manifest_path": "/local/manifest.json", "index_path": "/local/report.json"},
+            "metrics": {},
+        }
+        benchmark = identify_benchmark({"schema_version": 2, "cohort_id": "c" * 64, "identity": IDENTITY})
+
+        with self.assertRaisesRegex(InputError, "unsupported schema version"):
             compare_player(target, benchmark)
 
 

@@ -68,6 +68,41 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review accepts kills and wipes, but only completed Boss Attempts; it rejects `fight=last`.
 
+For a formal Mechanic Review delivery, add `--report` to the same command; select `--locale zh-CN` (the default) or `--locale en`:
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12" --report --locale en
+```
+
+Only after the in-memory Mechanic Review completes pagination and verifies the same Report Revision before and after collection, this path writes a strictly sanitized source to `outputs/mechanic-reviews/<sha256>.json`, assembles and validates its Report Document from that source, and renders into `outputs/reports/`. JSON stdout returns `source.path`, `source.sha256`, the `document`, and content identities and paths under `report`; no mixed output needs scraping. The source retains only WCL Report, Report Revision, Boss Attempt, and Mechanic Ruleset identity and metadata, counts, supported conclusions, phases, participants, and flat minimal evidence excerpts. It omits the complete filtered event range, Raw Pages, Fight Bundles, `raw_event`, `raw_events`, aura application objects, arbitrary WCL payloads, responsibility, and wipe causality. Pagination, revision, collection, sanitization, validation, or initial rendering failure leaves no new source artifact; identical content reuses the existing immutable artifact.
+
+Other already-assembled Report Document types can still be rendered separately according to the [dataset contract](references/data-contract.en.md). This command does not access WCL or require credentials:
+
+```bash
+python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
+```
+
+A Raid Guide does not require the caller to rewrite a Report Document. Pass the single Guide Snapshot JSON path returned by `coach guide` to the first-party assembler, which validates the Snapshot and Markdown identities, derives the complete document chapter by chapter, and renders it immediately:
+
+```bash
+python -m wcl_raid_coach coach guide-report "<DATA_ROOT>/guides/<SNAPSHOT_ID>.json"
+```
+
+A Personal Review likewise requires no retyped metrics or identity. Pass the three JSON artifacts produced by `coach review`, `coach benchmark`, and `coach compare` directly to the first-party assembler:
+
+```bash
+python -m wcl_raid_coach coach personal-report \
+  "<WORK_DIR>/personal-analysis.json" \
+  "<WORK_DIR>/encounter-benchmark.json" \
+  "<WORK_DIR>/comparison.json" \
+  --locale en
+```
+
+This command revalidates Personal Analysis schema `3`, Encounter Benchmark schema `2`, and Comparison schema `2`, recomputes Personal Analysis from its Complete Bundle, then recomputes and exactly checks Comparison from the first two artifacts. Report Revision, Boss Attempt, actor, anonymity, class, specialization, item level, ranking partition, game version, encounter, difficulty, Benchmark ID, sample count, confidence, and every metric are artifact-derived. It accepts no caller title, summary, metric, or advice text. Ability rows retain numeric `ability_id` and the original WCL name. A Chinese name is used and its mapping build recorded only when the ID occurs in both the Report Index and the validated `ability-names.zhCN.json`; a mapping miss falls back to the WCL name with a null mapping build.
+
+The CLI returns the derived `document` and a `report` containing `html_path`, `html_sha256`, `index_path`, `document_id`, and both schema versions. HTML loads no remote fonts, styles, scripts, or images and supports the system theme plus manual Auto/light/dark selection. The assembler preserves the exact Snapshot ID and file SHA-256 and copies encounter, Benchmark, and Profile identities, sample count, confidence, metrics, localized abilities, mechanic anchors, and sources within each Boss chapter; fields from different Bosses are never mixed. The renderer parses and validates every source artifact rather than checking only its path and SHA-256; a Personal Review must provide Personal Analysis, Encounter Benchmark, and Comparison sources. Ruleset and Guide source URLs must be public HTTP(S) URLs with no user information in their authority and no credential or signature parameters in their query string or fragment. Mechanic Review accepts only flat minimal evidence excerpts; Personal Review uses fixed neutral wording and generates no mechanic attribution, death cause, responsibility, advice, or achievable-improvement claim; Raid Guide generates no rotation, talent, gear, phase strategy, recommendation, or achievable target absent from its Snapshot.
+
 Prepare the fight selected in the URL:
 
 ```bash
@@ -91,7 +126,7 @@ python -m wcl_raid_coach query \
 
 The CLI always writes JSON to standard output, including structured domain errors. See `python -m wcl_raid_coach --help` for all arguments and [the Skill instructions](SKILL.md) for the complete workflow.
 
-`coach review`, `coach benchmark`, `coach guide`, and `coach compare` consume only local Artifacts. When required local name mappings already exist, they do not read WCL credentials merely to verify an Artifact. Commands that access the WCL API still require OAuth client credentials.
+`coach review`, `coach benchmark`, `coach guide`, and `coach compare` consume only local Artifacts. When required local name mappings already exist, they do not read WCL credentials merely to verify an Artifact. With `--partition-id`, `coach review` resolves game version from the same Report Index's ranking partition and emits Personal Analysis schema `3`; schema `2` analyses must be regenerated. An older Report Index without partition metadata requires removing that local Report Revision dataset and running `prepare` again. Commands that access the WCL API still require OAuth client credentials.
 
 ## Encounter Designators And Name Mappings
 
@@ -123,7 +158,7 @@ Never ask a user to paste a secret into chat, never overwrite an existing creden
 
 Typical users do not configure storage paths. Global `--data-root` and `--cache-root` options take precedence, followed by the optional `WCL_RAID_COACH_HOME` and `WCL_RAID_COACH_CACHE` variables. Without an override, an existing persistent `/workspace` is a compatibility fallback for cloud Agent sandboxes. Otherwise local Unix/macOS uses `~/.local/share/wcl-raid-coach/` and `~/.cache/wcl-raid-coach/`; Windows uses `%LOCALAPPDATA%/wcl-raid-coach/` and its `Cache/` directory.
 
-The installed Skill directory contains only program files and documentation. Report Indexes, Complete Bundles, Profiles, tasks, and Guide Snapshots go to the data directory; Raw Pages and resumable checkpoints go to the cache directory. Run `doctor` to read the effective `data_root` and `cache_root` from its JSON output.
+The installed Skill directory contains only program files and documentation. Report Indexes, Complete Bundles, Profiles, tasks, Guide Snapshots, and rendered Report Documents go to the data directory; Raw Pages and resumable checkpoints go to the cache directory. Run `doctor` to read the effective `data_root` and `cache_root` from its JSON output.
 
 ```text
 reports/<report-code>/
@@ -137,6 +172,9 @@ ability-names.zhCN.json
 ability-names.zhCN.meta.json
 content-names.zhCN.json
 content-names.zhCN.meta.json
+outputs/reports/
+|-- <html-sha256>.html
+`-- <html-sha256>.json
 ```
 
 Fight Bundles are immutable within a Report Revision. Re-exporting a report creates a new revision directory.

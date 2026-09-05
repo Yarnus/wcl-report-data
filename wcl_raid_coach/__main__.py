@@ -26,6 +26,13 @@ from .models import ReportRef
 from .mechanics import MechanicReviewService
 from .guides import create_guide_snapshot
 from .profiles import ProfileStore
+from .report_documents import (
+    assemble_personal_review_document,
+    assemble_raid_guide_document,
+    create_mechanic_review_report,
+    render_report_document,
+    validate_report_document,
+)
 from .storage import atomic_write_json, read_json
 
 
@@ -109,6 +116,25 @@ def create_parser() -> argparse.ArgumentParser:
     )
     mechanics.add_argument("url")
     mechanics.add_argument("--encounter", help="Optional Encounter Designator used to list matching Boss Attempts.")
+    mechanics.add_argument(
+        "--report", action="store_true",
+        help="Persist a sanitized source and render a Mechanic Review Report Document.",
+    )
+    mechanics.add_argument("--locale", choices=("zh-CN", "en"), default="zh-CN")
+    render = coach_commands.add_parser("render", help="Render a validated Report Document as self-contained HTML.")
+    render.add_argument("document", type=Path)
+    guide_report = coach_commands.add_parser(
+        "guide-report", help="Assemble and render a Raid Guide Report Document from one Guide Snapshot."
+    )
+    guide_report.add_argument("snapshot", type=Path)
+    personal_report = coach_commands.add_parser(
+        "personal-report",
+        help="Assemble and render a Personal Review from Analysis, Benchmark, and Comparison artifacts.",
+    )
+    personal_report.add_argument("analysis", type=Path)
+    personal_report.add_argument("benchmark", type=Path)
+    personal_report.add_argument("comparison", type=Path)
+    personal_report.add_argument("--locale", choices=("zh-CN", "en"), default="zh-CN")
     candidates = coach_commands.add_parser("candidates", help="Discover content-addressed recent ranking candidates.")
     candidates.add_argument("--encounter-id", type=int, required=True)
     candidates.add_argument("--difficulty-id", type=int, required=True)
@@ -156,12 +182,46 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "coach":
         if args.coach_command == "mechanics":
             credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
-            return MechanicReviewService(WclClient(credentials)).review(
+            review = MechanicReviewService(WclClient(credentials)).review(
                 ReportRef.parse(args.url),
                 encounter_designator=(
                     EncounterDesignator.parse(args.encounter) if args.encounter else None
                 ),
             )
+            if not args.report:
+                return review
+            return create_mechanic_review_report(review, store.data_root, locale=args.locale)
+        if args.coach_command == "render":
+            return {
+                "action": "coach_render",
+                "report": render_report_document(
+                    read_json(args.document), store.data_root / "outputs" / "reports"
+                ),
+            }
+        if args.coach_command == "guide-report":
+            document = assemble_raid_guide_document(read_json(args.snapshot), args.snapshot)
+            report = render_report_document(document, store.data_root / "outputs" / "reports")
+            return {
+                "action": "coach_guide_report",
+                "document": validate_report_document(document),
+                "report": report,
+            }
+        if args.coach_command == "personal-report":
+            ability_names_info = _ensure_ability_names(store)
+            document = assemble_personal_review_document(
+                args.analysis,
+                args.benchmark,
+                args.comparison,
+                ability_names_path=Path(ability_names_info["mapping_path"]),
+                ability_names_metadata_path=Path(ability_names_info["metadata_path"]),
+                locale=args.locale,
+            )
+            report = render_report_document(document, store.data_root / "outputs" / "reports")
+            return {
+                "action": "coach_personal_report",
+                "document": validate_report_document(document),
+                "report": report,
+            }
         task_store = CoachTaskStore(args.data_root)
         if args.coach_command == "status":
             return {"action": "coach_status", "tasks": task_store.list_tasks()}

@@ -54,7 +54,7 @@ Agent 不得询问、输出、记录或持久化 client secret/access token，�
 
 ```text
 持久 /workspace：
-  /workspace/wcl-raid-coach/          Report Index、Complete Bundle、Profiles、任务与 Guide Snapshot
+  /workspace/wcl-raid-coach/          Report Index、Complete Bundle、Profiles、任务、Guide Snapshot 与渲染报告
   /workspace/.cache/wcl-raid-coach/   Raw Page 与可续传检查点
 
 本地 Unix/macOS：
@@ -68,4 +68,4 @@ Windows：
 
 `doctor` 的 JSON 输出会报告本次运行实际使用的 `data_root` 和 `cache_root`。高级用户或宿主可以设置 `WCL_RAID_COACH_HOME` 和 `WCL_RAID_COACH_CACHE`，但普通用户只需配置 WCL 凭据。
 
-Skill 安装目录只保存程序和文档。Skill 更新不得影响上述持久数据或缓存。清理缓存会保留规范 Fight Bundle，但会删除未知字段值的本地副本和下载检查点。Mechanic Evidence Set 只存在于当前进程内，不写入以上目录。
+Skill 安装目录只保存程序和文档。Skill 更新不得影响上述持久数据或缓存。渲染后的 Report Document 位于数据目录的 `outputs/reports/`。清理缓存会保留规范 Fight Bundle 和渲染报告，但会删除未知字段值的本地副本和下载检查点。Mechanic Evidence Set 只存在于当前进程内，不写入以上目录；渲染报告只保存其最小证据摘录。

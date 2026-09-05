@@ -37,8 +37,24 @@ class AnalysisTests(unittest.TestCase):
             json.dump({"data": events, "nextPageTimestamp": None}, handle)
         raw_digest = hashlib.sha256(raw_path.read_bytes()).hexdigest()
         index_value = {
-            "report": {"code": "ABC", "revision": 1, "game_version": "retail"},
+            "schema_version": 1,
+            "generated_at": "2026-09-05T00:00:00+00:00",
+            "report": {
+                "code": "ABC",
+                "revision": 1,
+                "game_version": 1,
+                "zone": {
+                    "id": 42,
+                    "name": "Current Raid",
+                    "frozen": False,
+                    "difficulties": [{"id": 4, "name": "Heroic", "sizes": [10, 20]}],
+                    "partitions": [
+                        {"id": 2, "name": "Current Season", "compactName": "12.1", "default": True}
+                    ],
+                },
+            },
             "actors": [{"id": 10, "name": "Player"}, {"id": 11, "name": "Pet", "petOwner": 10}],
+            "abilities": [{"gameID": 1, "name": "Ability", "type": 1, "icon": "spell"}],
             "fights": [{"fight_id": 7, "encounter_id": 1007, "difficulty": 4, "duration_ms": 1000, "participants": [{"actor_id": 10, "name": "Player", "class": "DeathKnight", "spec": "Unholy"}]}],
         }
         index_hash = hashlib.sha256(json.dumps(index_value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -62,6 +78,16 @@ class AnalysisTests(unittest.TestCase):
         index_path.write_text(json.dumps(index_value), encoding="utf-8")
         return manifest_path, index_path
 
+    def replace_partitions(self, manifest: Path, index: Path, partitions: object) -> None:
+        index_value = json.loads(index.read_text(encoding="utf-8"))
+        index_value["report"]["zone"]["partitions"] = partitions
+        index.write_text(json.dumps(index_value), encoding="utf-8")
+        manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+        manifest_value["report_index_sha256"] = hashlib.sha256(
+            json.dumps(index_value, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        manifest.write_text(json.dumps(manifest_value), encoding="utf-8")
+
     def test_analyzes_one_participant_from_complete_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest, index = self.make_bundle(Path(directory))
@@ -74,13 +100,59 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["interrupts"], 1)
         self.assertEqual(result["metrics"]["deaths"], 1)
         self.assertEqual(result["comparison_identity"]["encounter_id"], 1007)
-        self.assertEqual(result["comparison_identity"]["game_version"], "retail")
+        self.assertEqual(result["comparison_identity"]["game_version"], "12.1")
+        self.assertEqual(result["schema_version"], 3)
+
+    def test_ranking_partition_name_is_the_game_version_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, index = self.make_bundle(Path(directory))
+            self.replace_partitions(
+                manifest,
+                index,
+                [{"id": 2, "name": " Current Season ", "compactName": " ", "default": True}],
+            )
+
+            result = analyze_player(manifest, index, 10, partition_id=2)
+
+        self.assertEqual(result["comparison_identity"]["game_version"], "Current Season")
 
     def test_rejects_unknown_participant(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest, index = self.make_bundle(Path(directory))
             with self.assertRaises(InputError):
                 analyze_player(manifest, index, 99)
+
+    def test_rejects_unknown_comparison_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, index = self.make_bundle(Path(directory))
+            with self.assertRaisesRegex(DatasetError, "ranking partition"):
+                analyze_player(manifest, index, 10, partition_id=99)
+
+    def test_rejects_malformed_selected_partition_ids(self) -> None:
+        for partition_id in (True, 0, -1, "2"):
+            with self.subTest(partition_id=partition_id), tempfile.TemporaryDirectory() as directory:
+                manifest, index = self.make_bundle(Path(directory))
+                with self.assertRaisesRegex(DatasetError, "partition ID"):
+                    analyze_player(manifest, index, 10, partition_id=partition_id)
+
+    def test_rejects_malformed_or_duplicate_persisted_ranking_partitions(self) -> None:
+        malformed = (
+            None,
+            [{"id": True, "name": "Current", "compactName": "12.1", "default": True}],
+            [{"id": 2, "name": " ", "compactName": None, "default": True}],
+            [{"id": 2, "name": "Current", "compactName": 12.1, "default": True}],
+            [
+                {"id": 2, "name": "Current", "compactName": "12.1", "default": True},
+                {"id": 2, "name": "Earlier", "compactName": "12.0", "default": False},
+            ],
+        )
+        for partitions in malformed:
+            with self.subTest(partitions=partitions), tempfile.TemporaryDirectory() as directory:
+                manifest, index = self.make_bundle(Path(directory))
+                self.replace_partitions(manifest, index, partitions)
+
+                with self.assertRaisesRegex(DatasetError, "ranking partition"):
+                    analyze_player(manifest, index, 10, partition_id=2)
 
     def test_rejects_incomplete_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

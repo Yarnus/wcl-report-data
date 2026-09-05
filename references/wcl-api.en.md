@@ -17,7 +17,7 @@ Client credentials can read public and unlisted reports when the code is known. 
 
 ## Queries
 
-Report indexing fetches the report revision, archive status, Retail game version, master actors and abilities, fight participation metadata, report difficulty metadata, and WCL zone encounter order. `zone.encounters` is returned only as current `inspect` selection metadata and is not persisted in existing immutable Report Indices.
+Report indexing fetches the report revision, archive status, Retail game version, master actors and abilities, fight participation metadata, report difficulty metadata, ranking partition `id`, `name`, `compactName`, and `default`, and WCL zone encounter order. Strictly validated and normalized `zone.partitions` are persisted in the immutable Report Index for Personal Analysis comparison identity resolution. `zone.encounters` is returned only as current `inspect` selection metadata and is not persisted in existing immutable Report Indices.
 
 General-guide resolution uses `worldData.zones` for the current unfrozen Retail raid zone, original encounter order, difficulties, and default partition. Exactly one current zone, one Heroic difficulty, and one default partition must exist; otherwise resolution stops rather than guessing.
 

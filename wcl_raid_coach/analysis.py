@@ -12,6 +12,9 @@ from .dataset import validate_complete_bundle
 from .storage import read_json, sha256_file
 
 
+ANALYSIS_SCHEMA_VERSION = 3
+
+
 def analyze_player(
     manifest_path: Path,
     index_path: Path,
@@ -101,7 +104,7 @@ def analyze_player(
             if to_player and event_type == "death":
                 deaths += 1
     result = {
-        "schema_version": 2,
+        "schema_version": ANALYSIS_SCHEMA_VERSION,
         "identity": dict(identity),
         "player": dict(player),
         "evidence": {
@@ -125,7 +128,7 @@ def analyze_player(
     }
     if partition_id is not None:
         result["comparison_identity"] = {
-            "game_version": index_identity.get("game_version"),
+            "game_version": _ranking_game_version(index_identity, partition_id),
             "partition_id": partition_id,
             "encounter_id": fight.get("encounter_id"),
             "difficulty_id": fight.get("difficulty"),
@@ -146,3 +149,36 @@ def _object(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise DatasetError(f"{label} must be a JSON object.")
     return value
+
+
+def _ranking_game_version(report: dict[str, Any], partition_id: int) -> str:
+    if type(partition_id) is not int or partition_id <= 0:
+        raise DatasetError("Personal Analysis ranking partition ID is malformed.")
+    zone = report.get("zone")
+    partitions = zone.get("partitions") if isinstance(zone, dict) else None
+    if not isinstance(partitions, list) or not partitions:
+        raise DatasetError("Report Index ranking partitions are malformed.")
+    by_id: dict[int, dict[str, Any]] = {}
+    for partition in partitions:
+        if not isinstance(partition, dict):
+            raise DatasetError("Report Index ranking partitions are malformed.")
+        item_id = partition.get("id")
+        name = partition.get("name")
+        compact_name = partition.get("compactName")
+        default = partition.get("default")
+        if (
+            type(item_id) is not int
+            or item_id <= 0
+            or item_id in by_id
+            or not isinstance(name, str)
+            or not name.strip()
+            or compact_name is not None and not isinstance(compact_name, str)
+            or not isinstance(default, bool)
+        ):
+            raise DatasetError("Report Index ranking partitions are malformed.")
+        by_id[item_id] = partition
+    partition = by_id.get(partition_id)
+    if partition is None:
+        raise DatasetError(f"Report Index has no ranking partition {partition_id}.")
+    compact_name = partition["compactName"]
+    return compact_name.strip() if isinstance(compact_name, str) and compact_name.strip() else partition["name"].strip()

@@ -20,6 +20,7 @@ A Fight Bundle adds one numeric `fight_id`. Files from different Report Revision
 - report actors and abilities
 - every WCL fight classified as `boss` or `trash`
 - team participants with actor ID, name, server, class, specialization, and item level
+- each WCL zone ranking partition's positive integer `id`, non-empty `name`, nullable `compactName`, and boolean `default`
 - `packable` and `unpackable_reason`
 
 A WCL Report with raid Boss Attempts may also contain Mythic+ fights. Those Mythic+ fights remain in the Report Index with `unpackable_reason: "mythic_plus"`, but are omitted from `inspect` `fight_choices` and cannot produce a Fight Bundle. Pure Mythic+ reports are still rejected.
@@ -94,6 +95,97 @@ The Mechanic Evidence Set exists only in the current process and creates no Repo
 
 Per-mechanic counts describe only rule-defined event signals. A success or failure value is `null` when the log cannot establish it objectively. Only a pattern marked `verified` for the current difficulty may emit anomalies; `event_pattern_unverified` and observation rules emit none. An anomaly does not assign responsibility, performance, or wipe causality.
 
+`coach mechanics <URL_WITH_NUMERIC_FIGHT> --report [--locale zh-CN|en]` is the first-party Mechanic Review persistence and rendering path. In the same process that completes collection and the revision recheck, it derives a schema `1` sanitized `mechanic_review` source from the actual result. The source may retain only WCL Report, Report Revision, Boss Attempt, and Mechanic Ruleset identity and metadata, page/event counts, supported conclusions or anomalies, phases, participants, and the flat minimal evidence excerpts allowed below. It cannot retain the complete filtered event range, a Raw Page, a Fight Bundle or Complete Bundle substitute, `raw_event`, `raw_events`, aura application objects, arbitrary WCL payloads, responsibility, or wipe causality.
+
+The SHA-256 of the validated formatted JSON file bytes addresses the source at `outputs/mechanic-reviews/<sha256>.json`; an artifact lock and atomic write coordinate publication. Existing identical content is reused, while an identity mismatch is never overwritten. Persistence is not invoked when pagination does not reach explicit null, the Report Revision changes, or collection fails. Sanitization, source validation, or initial HTML rendering failure removes a newly created source so no misleading partial source remains.
+
+## Report Document
+
+A Report Document is presentation input, not evidence-layer data. Schema `1` accepts `document_type: "mechanic_review"`, `"personal_review"`, or `"raid_guide"`. All three share locale, title, subtitle, source artifacts, and an audit-boundary note; all other fields are strictly type-specific.
+
+The complete input shape follows. `phases`, each mechanic's `events`, and `actions` may be empty arrays:
+
+```json
+{
+  "schema_version": 1,
+  "document_type": "mechanic_review",
+  "locale": "en",
+  "title": "Encounter mechanic review",
+  "subtitle": "Heroic Boss Attempt 17",
+  "source_artifacts": [
+    {"kind": "mechanic_review", "path": "/work/mechanic-review.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+  ],
+  "identity": {
+    "report_code": "AbC123",
+    "report_revision": 7,
+    "fight_id": 17,
+    "encounter_name": "Encounter Name",
+    "difficulty_name": "Heroic",
+    "duration_ms": 342318,
+    "outcome": "wipe",
+    "boss_percentage": 32.7
+  },
+  "ruleset": {
+    "version": "2026.09.1",
+    "selection_policy": "latest",
+    "sources": ["https://example.com/mechanic-source"]
+  },
+  "evidence": {"event_count": 184, "storage": "minimal_excerpts"},
+  "phases": [{"name": "Phase one", "start_ms": 0, "end_ms": 342318}],
+  "mechanics": [
+    {
+      "name": "Mechanic name",
+      "status": "anomaly",
+      "trigger_count": 18,
+      "success_count": 14,
+      "failure_count": 2,
+      "description": "A reviewable conclusion and its limits.",
+      "events": [
+        {
+          "fight_time_ms": 138440,
+          "tone": "danger",
+          "title": "Event title",
+          "description": "The minimal event description supporting the conclusion.",
+          "participants": ["Player 03"],
+          "evidence_excerpt": {"event_type": "damage", "ability_id": 1284941}
+        }
+      ]
+    }
+  ],
+  "actions": [{"title": "Next-attempt check", "description": "Change only one verifiable condition."}],
+  "scope_note": "Anomalies do not assign player responsibility, performance, or wipe causality."
+}
+```
+
+A `personal_review` has exactly the shared fields plus `identity`, `player`, `comparison`, `metrics`, and `abilities`. Its `identity` uses the same Boss Attempt shape as Mechanic Review, and its sources must include a schema `3` `personal_analysis`, schema `2` `encounter_benchmark`, schema `2` `comparison`, and the `ability_names` and `ability_names_metadata` artifacts attached automatically by the assembler. The Comparison must exactly equal the result recomputed from the first two coaching sources; the renderer cannot silently reconstruct it in place of provenance.
+
+- `player`: positive integer `actor_id`, `name`, `class_name`, `spec_name`, nullable `item_level`, and boolean `anonymous`.
+- `comparison`: the complete comparison hard conditions `game_version`, `partition_id`, `encounter_id`, `difficulty_id`, `class_name`, and `spec_name`, the exact `benchmark_id`, plus `sample_count` of at least 3 and `confidence` of `low` or `normal`. IDs are positive, and class/spec must match `player`.
+- `metrics`: non-negative integer `damage_total`, `healing_total`, `interrupts`, `deaths`, and `resource_events`, plus nullable finite `damage_total_delta`.
+- `abilities`: at most 100 entries containing positive integer `ability_id` as the audit identity, display `name`, `wcl_name`, nullable `ability_names_build`, non-negative integer `player_casts`, and nullable non-negative finite `median_casts`, `player_first_cast_ms`, and `median_first_cast_ms`. A Chinese mapping hit uses the validated SpellName and records its build; a miss sets `name` to `wcl_name` and the build to null.
+
+A `raid_guide` has exactly the shared fields plus `identity`, `specialization`, `snapshot_id`, `ability_names_build`, and `chapters`; its sole source kind is `guide_snapshot`. Its `identity` contains `game_version`, positive `partition_id`, `difficulty_name`, `class_name`, and `spec_name`. The `snapshot_id` and both Profile IDs in each chapter must be SHA-256 digests.
+
+- `chapters`: 1 to 20 chapters with unique encounter IDs. Each contains `encounter_id`, `encounter_name`, the exact `benchmark_id`, `sample_count` of at least 3, `confidence`, nullable `damage_total_median`, `abilities`, `target_damage`, `mechanic_anchors`, both Profile IDs, and `sources`.
+- Chapter `abilities` retain only ability name, median casts, and median first-cast time; `target_damage` retains only numeric target ID and median damage; `mechanic_anchors` retain only name and nullable observed time.
+- Chapter `sources` accept only an `encounter` or `specialization` kind, title, public HTTP(S) URL, and quote summary. Ruleset and chapter source URL authorities cannot contain user information. Query-string and fragment parameter names cannot be credential, key, token, authentication, or signature names after case, common separators, and percent encoding are normalized.
+
+Personal Review has no mechanic-attribution or recommendation field. Raid Guide has no rotation, talent, gear, phase-strategy, or prescriptive-advice field. Callers must not use titles, summaries, or `scope_note` to describe a damage delta as achievable improvement or a sample median as a recommendation.
+
+`locale` accepts only `zh-CN` or `en`; `status` accepts only `anomaly`, `review`, `ok`, or `unverified`; `tone` accepts only `danger`, `warn`, `ok`, or `info`. `boss_percentage` may be `null`.
+
+Callers cannot submit HTML, CSS, or JavaScript, and unknown fields are rejected. Each Mechanic Review mechanic stores at most 20 display events. An event `evidence_excerpt` accepts only the flat scalar fields `event_type`, `ability_id`, `source_id`, `target_id`, `amount`, `duration_ms`, `delta_ms`, `episode`, `outcome`, and `note`; text values are limited to 300 characters. It cannot embed a raw event object or complete Mechanic Evidence Set. An `anomaly` status requires a positive failure count and display events; `ok` requires zero failures; `unverified` cannot claim success or failure counts. A Report Document has no `judgment` or `causal_attribution` field.
+
+The renderer trust boundary extends beyond path and file SHA-256 checks. Every source must be valid UTF-8 JSON matching its declared artifact kind and current schema. Encounter Benchmark and Guide Snapshot canonical content IDs are verified, the Guide Snapshot Markdown hash is verified, and Personal Analysis is recomputed from its Complete Bundle and Report Index. The renderer then cross-checks every claimed Report Revision, Boss Attempt, actor/player, comparison hard condition, Benchmark sample count and confidence, Snapshot ID, Profile ID, and chapter isolation. A Mechanic Review source must pass the strict schema above and record terminated pagination plus a Report Revision check before and after collection; the renderer cross-checks its identity, ruleset, counts, conclusions, phases, and minimal excerpts. Persisting the Report Document still cannot persist the complete Mechanic Evidence Set. HTML states that a Complete Bundle or hard-condition match was verified only after those checks establish it. Plain SHA-256 still provides local content identity and corruption detection, not producer authentication.
+
+`coach guide-report` is the first-party Raid Guide assembly path. It accepts exactly one validated Guide Snapshot JSON artifact and no caller-retyped chapters. The derived document preserves the exact Snapshot ID and artifact file SHA-256, then copies encounter identity, `benchmark_id`, Profile IDs, sample count/confidence, metrics, localized abilities, mechanic anchors, and sources within their original chapters. Every chapter is checked against that same Snapshot chapter, preventing equal-valued metrics, abilities, or sources from being exchanged across Bosses.
+
+`coach personal-report <PERSONAL_ANALYSIS> <ENCOUNTER_BENCHMARK> <COMPARISON> [--locale zh-CN|en]` is the first-party Personal Review assembly path. It accepts only the three local artifact paths and no caller-retyped identity, metrics, title, summary, or advice. It revalidates schemas `3`/`2`/`2`, Complete Bundle and Report Index provenance, and the Benchmark content ID, then recomputes Comparison from the first two artifacts and requires exact equality with the third. It derives a fixed-neutral document and renders immediately. Chinese ability display is enriched by ID through the validated ability-name artifact in the data root; an ID missing from that mapping safely falls back to the WCL name from the same Report Index. The renderer again checks Report Revision, Boss Attempt, actor/player, the full hard-condition tuple, Benchmark ID, sample count/confidence, metrics, and ability IDs.
+
+The SHA-256 of validated canonical compact UTF-8 JSON is the `document_id`. Renderer schema `1` produces self-contained HTML with no external resources; the filename is the SHA-256 of the final UTF-8 HTML bytes. HTML and its JSON index are stored as `outputs/reports/<html-sha256>.html` and the matching `.json`. Existing content is reused and never overwritten when its identity or hash differs. The JSON index records the canonical Report Document, source artifacts, renderer schema, and HTML hash.
+
+Persisting a Report Document does not make a Mechanic Evidence Set persistent. Only Agent-selected conclusions, counts, and minimal evidence excerpts may be saved, never the complete filtered event range.
+
 ## Coaching Artifacts
 
 Personal Reviews, Benchmarks, and Guides consume only Complete Bundles that pass the integrity rules above. They cannot rewrite a Report Index, Fight Bundle, or Canonical Event. Mechanic Review is the non-persistent exception and consumes only its process-local Mechanic Evidence Set.
@@ -102,8 +194,10 @@ Personal Reviews, Benchmarks, and Guides consume only Complete Bundles that pass
 - `cohorts/` stores a Ranking Cohort for exactly one encounter, difficulty, class, specialization, and partition. `cohort_id` is the SHA-256 of canonical JSON excluding the ID itself. A Ranking Candidate becomes a Reference Sample only after Complete Bundle, hard-condition, and Encounter Profile eligibility checks pass.
 - An Encounter Benchmark aggregates at least three unique Reference Samples from one Ranking Cohort and records the exact `cohort_id`. `benchmark_id` is the SHA-256 of canonical JSON excluding the ID itself. Different Encounter Designators require different benchmarks.
 - `tasks/` stores Coach Request Manifests. Partial work retains each encounter's blocker and artifact references.
-- `guides/` stores immutable Guide Snapshots. Every chapter records the exact `benchmark_id`; a snapshot may reference multiple Encounter Benchmarks but cannot overwrite an older snapshot.
+- `guides/` stores immutable Guide Snapshots. Every chapter records the exact `benchmark_id` and chapter-local ability metrics localized by ability ID; a snapshot may reference multiple Encounter Benchmarks but cannot overwrite an older snapshot.
 
-A Personal Review analysis records Report Revision, fight ID, actor ID, and comparison hard conditions. Comparison fails unless analysis and benchmark encounter, difficulty, class, specialization, and partition match exactly.
+A Personal Analysis at schema `3` records Report Revision, fight ID, actor ID, and comparison hard conditions. The comparison identity `game_version` uses the selected ranking partition's non-empty `compactName` from the same Report Index, falling back to that partition's non-empty `name` when `compactName` is absent or blank; it never uses the numeric WCL `masterData.gameVersion` product ID. Analysis fails when the partition list is missing, is not a non-empty array, contains a non-object, has a non-positive integer ID (including a boolean), has duplicate IDs, has an invalid name or `compactName` type, or has a non-boolean `default`. An unknown selected ID also fails rather than guessing the default partition. Comparison fails unless analysis and benchmark game version, encounter, difficulty, class, specialization, and partition match exactly.
+
+Personal Analysis schema `2` used the former `game_version` meaning and is explicitly rejected by `coach benchmark` and `coach compare`; run `coach review` again to produce schema `3`. An older immutable Report Index without ranking partition fields, and a Complete Bundle that references it, remain usable for operations that do not need a partition comparison identity but cannot be used for a Personal Review with `--partition-id`. Remove that local Report Revision dataset and run `prepare` again instead of rewriting the Report Index or manifest hash in place.
 
 Coaching Artifacts are supported only when this CLI generates and consumes them in the user's local data or work directory. Plain SHA-256 does not authenticate a producer; externally supplied Artifacts must not be treated as trusted input. Complete Bundles, Ranking Cohorts, Personal Reviews, Encounter Benchmarks, and Guide Snapshots from the former HMAC schemas are incompatible and must be rebuilt.

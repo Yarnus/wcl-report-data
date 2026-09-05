@@ -66,6 +66,41 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review 接受击杀和灭团，但只接受已完成的 Boss Attempt；`fight=last` 会被拒绝。
 
+正式交付 Mechanic Review 时，在同一条命令中加入 `--report`；可用 `--locale zh-CN`（默认）或 `--locale en`：
+
+```bash
+python -m wcl_raid_coach coach mechanics \
+  "https://www.warcraftlogs.com/reports/<code>#fight=12" --report --locale zh-CN
+```
+
+该路径只在内存 Mechanic Review 完整分页且前后 Report Revision 一致后，写入 `outputs/mechanic-reviews/<sha256>.json` 的严格净化来源，再从该来源组装并校验 Report Document，渲染到 `outputs/reports/`。JSON stdout 返回 `source.path`、`source.sha256`、`document` 及 `report` 的内容身份和路径，不需要抓取混合输出。来源只保留 WCL Report、Report Revision、Boss Attempt 和 Mechanic Ruleset 身份及元数据、计数、受支持结论、阶段、参与者和扁平最小证据摘录；不保存完整过滤事件范围、Raw Page、Fight Bundle、`raw_event`、`raw_events`、光环应用对象、任意 WCL payload、责任或灭团因果。分页、revision、采集、净化、校验或首次渲染失败时不留下新的来源 artifact；相同内容复用现有不可变 artifact。
+
+其他类型的已构造 Report Document 仍可按[数据集契约](references/data-contract.md)单独渲染。该命令不访问 WCL，也不需要凭据：
+
+```bash
+python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
+```
+
+Raid Guide 不需要调用方重写 Report Document。把 `coach guide` 返回的一个 Guide Snapshot JSON 路径直接交给第一方 assembler；它会校验 Snapshot 和 Markdown 身份、从每个 Boss 章节派生完整文档并立即渲染：
+
+```bash
+python -m wcl_raid_coach coach guide-report "<DATA_ROOT>/guides/<SNAPSHOT_ID>.json"
+```
+
+Personal Review 同样不需要重抄指标或身份。把 `coach review`、`coach benchmark` 和 `coach compare` 生成的三个 JSON artifact 直接交给第一方 assembler：
+
+```bash
+python -m wcl_raid_coach coach personal-report \
+  "<WORK_DIR>/personal-analysis.json" \
+  "<WORK_DIR>/encounter-benchmark.json" \
+  "<WORK_DIR>/comparison.json" \
+  --locale zh-CN
+```
+
+该命令重新校验 Personal Analysis schema `3`、Encounter Benchmark schema `2` 和 Comparison schema `2`，从 Complete Bundle 重新计算 Personal Analysis，再从前两个 artifact 重新计算并精确核对 Comparison。Report Revision、Boss Attempt、actor、匿名状态、职业、专精、装等、ranking partition、game version、encounter、difficulty、Benchmark ID、样本数、置信度和所有指标都由 artifact 派生。它不接受调用方标题、摘要、指标或建议文本。技能行保留数字 `ability_id` 和 WCL 原名；中文名只有在 ID 同时存在于 Report Index 和已校验 `ability-names.zhCN.json` 时使用并记录 mapping build，mapping 未命中时回退 WCL 原名且 mapping build 为 `null`。
+
+CLI 返回派生的 `document`，以及 `report` 中的 `html_path`、`html_sha256`、`index_path`、`document_id` 和两项 schema version。HTML 不加载远程字体、样式、脚本或图片；页面支持系统主题以及 Auto/亮色/暗色手动选择。assembler 保留精确 Snapshot ID 和文件 SHA-256，并逐 Boss 复制 encounter/Benchmark/Profile 身份、样本数、置信度、指标、本地化技能、机制锚点和来源；不同 Boss 的字段不会混合。renderer 会解析并校验每个来源 artifact，而不只检查路径和 SHA-256；Personal Review 必须提供 Personal Analysis、Encounter Benchmark 和 Comparison 三个来源。规则集和 Guide 来源 URL 必须是公开 HTTP(S) URL，authority 不得包含用户信息，query string 或 fragment 不得包含凭据或签名参数。Mechanic Review 只能携带扁平最小证据摘录；Personal Review 使用固定中性文字，不生成机制归因、死亡原因、责任、建议或可实现提升声明；Raid Guide 不生成 Snapshot 中不存在的 rotation、天赋、装备、阶段策略、建议或可实现目标。
+
 准备 URL 中选中的战斗：
 
 ```bash
@@ -89,7 +124,7 @@ python -m wcl_raid_coach query \
 
 CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。完整参数参见 `python -m wcl_raid_coach --help`，完整工作流参见 [Skill 使用说明](SKILL.md)。
 
-`coach review`、`coach benchmark`、`coach guide` 和 `coach compare` 只消费本地 Artifact；本地名称 mapping 已存在时，它们不会为了校验 Artifact 而读取 WCL 凭据。访问 WCL API 的命令仍需要 OAuth client credentials。
+`coach review`、`coach benchmark`、`coach guide` 和 `coach compare` 只消费本地 Artifact；本地名称 mapping 已存在时，它们不会为了校验 Artifact 而读取 WCL 凭据。带 `--partition-id` 的 `coach review` 从同一 Report Index 的 ranking partition 解析 game version，并生成 Personal Analysis schema `3`；schema `2` 分析必须重新生成。缺少 partition 元数据的旧 Report Index 需要删除对应本地 Report Revision 数据后重新 `prepare`。访问 WCL API 的命令仍需要 OAuth client credentials。
 
 ## Encounter Designator 与名称映射
 
@@ -121,7 +156,7 @@ AI 不应要求用户在对话中提供或粘贴 secret，不应覆盖已有凭�
 
 普通用户无需配置存储路径。全局参数 `--data-root` 和 `--cache-root` 优先，其次是可选的 `WCL_RAID_COACH_HOME` 和 `WCL_RAID_COACH_CACHE`。未覆盖时，存在的持久 `/workspace` 作为云端 Agent 沙盒兼容 fallback；否则本地 Unix/macOS 使用 `~/.local/share/wcl-raid-coach/` 和 `~/.cache/wcl-raid-coach/`，Windows 使用 `%LOCALAPPDATA%/wcl-raid-coach/` 及其 `Cache/` 子目录。
 
-Skill 安装目录只保存程序与文档。Report Index、Complete Bundle、Profiles、任务和 Guide Snapshot 写入数据目录；Raw Page 和可续传检查点写入缓存目录。运行 `doctor` 可从 JSON 中查看实际的 `data_root` 和 `cache_root`。
+Skill 安装目录只保存程序与文档。Report Index、Complete Bundle、Profiles、任务、Guide Snapshot 和渲染后的 Report Document 写入数据目录；Raw Page 和可续传检查点写入缓存目录。运行 `doctor` 可从 JSON 中查看实际的 `data_root` 和 `cache_root`。
 
 ```text
 reports/<report-code>/
@@ -135,6 +170,9 @@ ability-names.zhCN.json
 ability-names.zhCN.meta.json
 content-names.zhCN.json
 content-names.zhCN.meta.json
+outputs/reports/
+├── <html-sha256>.html
+└── <html-sha256>.json
 ```
 
 同一 Report Revision 内的 Fight Bundle 不可变。重新导出报告会创建新的 revision 目录；`latest.json` 只是指针，可复现的消费者应使用 manifest 中记录的 revision。原始页单独压缩保存，以便中断下载继续并审计字段规范化过程。

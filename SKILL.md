@@ -90,13 +90,35 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_REPORT_URL>"
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>"
 ```
 
+用户要求正式报告或 HTML 时，不要从 stdout 重抄字段，也不要先保存完整 Mechanic Review 结果；必须在同一采集进程直接运行：
+
+```bash
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>" --report --locale zh-CN
+```
+
+英文交付使用 `--locale en`。向用户交付 JSON stdout 中的短摘要和 `report.html_path` 链接，并保留 `source.path`、`source.sha256`、`report.document_id`、`report.html_sha256` 与 `report.index_path` 供复核。
+
 击杀和灭团均可分析，但 Boss Attempt 必须已完成；`fight=last` 不够明确，必须拒绝。`--encounter` 与 URL 数字 fight 同时存在时，两者必须匹配。
 
 该命令用当前 Mechanic Ruleset 的 ability ID 和 `death`、`interrupt`、`dispel` 建立服务端过滤表达式，固定 Boss Attempt 起止时间，完整分页到 `nextPageTimestamp: null`，并在结束后再次校验 Report Revision。Mechanic Evidence Set 只驻留进程内，不得创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点，也不得称为 Complete Bundle 或 Canonical Event 集。
 
 输出必须保留规则集版本、来源和 `selection_policy: latest`。`latest` 指当前安装包随附规则，不按报告发生时间回放历史热修规则，也不会运行时在线更新。机制名称使用规则集内版本化的中英文名称，不触发本地 Wago mapping 初始化。
 
-每条机制展示规则定义的触发、成功和失败事件计数；无法客观判断时值为 `null`。只有当前难度标记为 `verified` 的事件模式才能产生异常；`event_pattern_unverified` 和 observation 规则只列观察事实。没有匹配事件不等于机制处理正确。异常展开时间、玩家和原始 WCL 事件证据，但只表示事件模式命中，不表示玩家责任、表现评价或灭团因果；最终裁决交给人。
+每条机制展示规则定义的触发、成功和失败事件计数；无法客观判断时值为 `null`。只有当前难度标记为 `verified` 的事件模式才能产生异常；`event_pattern_unverified` 和 observation 规则只列观察事实。没有匹配事件不等于机制处理正确。普通内存输出可以展开用于当前分析的原始 WCL 事件证据；`--report` 来源只能保留参与者和扁平最小证据摘录，必须删除完整事件范围、`raw_event`、`raw_events`、光环应用对象和任意 WCL payload。异常只表示事件模式命中，不表示玩家责任、表现评价或灭团因果；最终裁决交给人。
+
+### 正式 HTML 交付
+
+Mechanic Review 的正式交付必须使用上面的 `coach mechanics ... --report`，由同一进程完成采集、净化来源持久化、Report Document 组装、来源校验和 HTML 渲染。只有分页明确结束且 Report Revision 前后一致后才允许写入；净化、校验或首次渲染失败时不留下新来源，重复内容复用 content-addressed 不可变来源。不得用下面的通用 renderer 绕过该边界。
+
+其他已构造的 Report Document 可调用：
+
+```bash
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
+```
+
+候选选择、澄清、进度、错误、数据查询和局部追问仍直接使用文本。用户说“直接回答”或“不要报告”时不生成 HTML；用户明确说“生成报告”或“导出 HTML”时必须生成。对话中交付短摘要和 `html_path` 的可点击链接。
+
+Report Document 只能包含对应类型允许的结构化字段，不得包含调用方 HTML、CSS 或 JavaScript；`source_artifacts` 必须记录来源 artifact 路径和 SHA-256。Mechanic Review 只保留结论、计数和扁平最小证据摘录，不得复制完整 Mechanic Evidence Set；Personal Review 不得补写机制归因或建议；Raid Guide 不得补写 Snapshot 中不存在的 rotation、天赋、装备、阶段策略或具体建议。只有玩家、Boss Attempt、Benchmark 或正式结论范围变化时才生成新报告；不改变正式结论的局部追问直接文本回答。
 
 ## 5. 个人复盘
 
@@ -109,6 +131,16 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach review "<MANIFEST_PATH>" --i
 ```
 
 `coach review` 只产生结构化日志事实。要评价表现，必须再建立同 encounter、difficulty、class、spec 和 partition 的 Encounter Benchmark。不得把总排名差距写成可实现提升。
+
+运行 `coach benchmark` 建立 Encounter Benchmark，再运行 `coach compare` 保存精确 Comparison 后，正式交付不得手工重写身份、指标或正文。直接把三个 artifact 组装为 Personal Review Report Document 并渲染自包含 HTML：
+
+```text
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-report "<PERSONAL_ANALYSIS_PATH>" "<ENCOUNTER_BENCHMARK_PATH>" "<COMPARISON_PATH>" --locale zh-CN
+```
+
+英文交付使用 `--locale en`。命令会重新校验 schema `3`/`2`/`2`，从 Complete Bundle 重算 Personal Analysis，从 Analysis 与 Benchmark 重算并精确核对 Comparison，再派生完整文档。向用户交付短摘要和 `report.html_path`，并保留 `report.document_id`、`report.html_sha256` 与 `report.index_path` 供复核。
+
+Personal Review 必须保留精确 Report Revision、Boss Attempt、actor、匿名状态、职业/专精、可用装等、完整比较硬条件、Benchmark ID、样本数、置信度和指标。技能以数字 `ability_id` 作为审计身份；中文展示仅使用已校验 `ability-names.zhCN.json` 的 ID mapping，未命中时回退同一 Report Index 的 WCL 原名并把 mapping build 记录为 `null`。不得根据文本名称反查技能。assembler 不接受自定义标题、摘要、指标或建议参数，并使用固定中性文字；不得补写机制归因、死亡原因、责任、建议、推荐或可实现提升。
 
 ## 6. 通用攻略
 
@@ -177,6 +209,14 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach benchmark "<WORK_DIR>/analys
 ```text
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach guide "<WORK_DIR>/h7-benchmark.json" "<WORK_DIR>/h8-benchmark.json" --spec-display-name "邪恶死亡骑士"
 ```
+
+正式交付时，不要手工重写 Boss 章节。把上一步返回的唯一 Guide Snapshot JSON 直接组装为 `raid_guide` Report Document 并渲染自包含 HTML：
+
+```text
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach guide-report "<GUIDE_SNAPSHOT_JSON_PATH>"
+```
+
+该命令重新校验 Snapshot 内容 ID 和 Markdown hash，保留精确 Snapshot ID 与来源文件 SHA-256，并只从各自章节派生 encounter/Benchmark/Profile 身份、样本数、置信度、指标、本地化技能、机制锚点和来源。不得跨 Boss 移动或合并字段；不得补写 Snapshot 中没有的 rotation、天赋、装备、阶段策略、建议或可实现目标。向用户交付短摘要和返回的 `report.html_path` 链接。
 
 输出包括与用户语言一致的 Markdown 和 JSON 索引。当前 bundled Guide Snapshot renderer 只生成中文 Markdown；英文请求生成最终 Guide Snapshot 前必须明确告知这一限制，不得把中文 artifact 伪装成英文结果。报告必须区分：
 

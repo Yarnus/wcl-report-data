@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .analysis import analyze_player
+from .analysis import ANALYSIS_SCHEMA_VERSION, analyze_player
 from .cohort import verify_benchmark
 from .errors import InputError
 
@@ -53,6 +53,8 @@ def compare_player(
 
 
 def _verify_analysis_evidence(analysis: dict[str, Any]) -> None:
+    if type(analysis.get("schema_version")) is not int or analysis["schema_version"] != ANALYSIS_SCHEMA_VERSION:
+        raise InputError("Personal Analysis uses an unsupported schema version; run coach review again.")
     evidence = analysis.get("evidence")
     player = analysis.get("player")
     identity = analysis.get("comparison_identity")

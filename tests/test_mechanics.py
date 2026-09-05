@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import copy
+import tempfile
 import unittest
+from pathlib import Path
 
 from wcl_raid_coach.errors import ApiError, RevisionChangedError
 from wcl_raid_coach.mechanic_rules import RAID_ENCOUNTERS, RULES, build_filter_expression, rules_for
 from wcl_raid_coach.mechanics import MechanicReviewService, evaluate_rules
 from wcl_raid_coach.models import ReportRef
+from wcl_raid_coach.report_documents import create_mechanic_review_report
 
 
 def report_fixture() -> dict:
@@ -156,6 +159,22 @@ class MechanicReviewServiceTests(unittest.TestCase):
             MechanicReviewService(client).review(
                 ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
             )
+
+    def test_incomplete_pagination_and_revision_change_publish_no_report_artifacts(self) -> None:
+        clients = [
+            FakeClient({2_000: {"data": []}}),
+            FakeClient(),
+        ]
+        clients[1].revision = 8
+        for client in clients:
+            with self.subTest(client=client), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with self.assertRaises((ApiError, RevisionChangedError)):
+                    review = MechanicReviewService(client).review(
+                        ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+                    )
+                    create_mechanic_review_report(review, root, locale="en")
+                self.assertFalse((root / "outputs").exists())
 
     def test_rules_use_the_report_difficulty_mapping_instead_of_global_ids(self) -> None:
         client = FakeClient()

@@ -54,7 +54,7 @@ It chooses the cache directory in this order:
 
 ```text
 Persistent /workspace:
-  /workspace/wcl-raid-coach/          Report Indexes, Complete Bundles, Profiles, tasks, and Guide Snapshots
+  /workspace/wcl-raid-coach/          Report Indexes, Complete Bundles, Profiles, tasks, Guide Snapshots, and rendered reports
   /workspace/.cache/wcl-raid-coach/   Raw Pages and resumable checkpoints
 
 Local Unix/macOS:
@@ -68,4 +68,4 @@ Windows:
 
 The `doctor` JSON output reports the effective `data_root` and `cache_root`. Advanced users and hosts may set `WCL_RAID_COACH_HOME` and `WCL_RAID_COACH_CACHE`, but typical users only configure the WCL credentials.
 
-The installed Skill directory contains only program files and documentation. Skill updates must not affect persistent data or cache directories. Clearing the cache preserves canonical Fight Bundles but removes local copies of unknown field values and download checkpoints. A Mechanic Evidence Set exists only in the current process and is not written to either directory.
+The installed Skill directory contains only program files and documentation. Skill updates must not affect persistent data or cache directories. Rendered Report Documents live under `outputs/reports/` in the data directory. Clearing the cache preserves canonical Fight Bundles and rendered reports but removes local copies of unknown field values and download checkpoints. A Mechanic Evidence Set exists only in the current process and is not written to either directory; a rendered report stores only its minimal evidence excerpts.

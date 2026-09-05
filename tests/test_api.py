@@ -116,6 +116,9 @@ class WclClientTests(unittest.TestCase):
     def test_report_query_fetches_zone_encounter_order(self) -> None:
         self.assertIn("encounters { id name }", REPORT_QUERY)
 
+    def test_report_query_fetches_ranking_partition_identity(self) -> None:
+        self.assertIn("partitions { id name compactName default }", REPORT_QUERY)
+
     def test_rankings_query_uses_exact_raid_hard_conditions(self) -> None:
         for field in ("encounterID", "difficulty", "partition", "className", "specName"):
             self.assertIn(field, RANKINGS_QUERY)
