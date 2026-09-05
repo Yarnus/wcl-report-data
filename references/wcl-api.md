@@ -21,7 +21,7 @@ CN 报告链接可直接作为输入，并会规范化为全球站报告链接�
 
 通用攻略解析通过 `worldData.zones` 获取当前未冻结的 Retail raid zone、原始 encounter 顺序、difficulty 和默认 partition。必须恰好得到一个当前 zone、一个 Heroic difficulty 和一个默认 partition；否则停止，不能猜测。
 
-排名候选通过官方 `Encounter.characterRankings` 查询，并传入精确 encounter、difficulty、partition、class 和 spec，使用 `externalBuffs: Exclude` 排除 major external buffs。返回的排名 JSON 仍是不可信输入。WCL 排名通常不返回 source ID；CLI 必须通过候选报告的 actor/fight metadata 唯一补全后，候选才能进入签名近期 cohort。
+排名候选通过官方 `Encounter.characterRankings` 查询，并传入精确 encounter、difficulty、partition、class 和 spec，使用 `externalBuffs: Exclude` 排除 major external buffs。返回的排名 JSON 仍是不可信输入。WCL 排名通常不返回 source ID；CLI 必须通过候选报告的 actor/fight metadata 唯一补全后，候选才能进入内容寻址的近期 Ranking Cohort。
 
 战斗难度 ID 只能通过该报告返回的 `zone.difficulties { id name }` 解释。不同 WCL 上下文中的 ID 可能不同，因此不能使用硬编码的全局枚举。
 
@@ -46,7 +46,7 @@ Mechanic Review 使用独立的 `Report.events` 查询：单一数字 `fightID`�
 
 执行 WCL 数据查询前，客户端至少保留 15% 或 50 个 API 点数，取两者中较大值。Report Index 查询的成本会随报告元数据增长，因此预留 500 点。事件和 revision 请求为完整重试预算预留点数，并在同一 GraphQL 响应中刷新限流快照。持久化采集因安全预留而停止后会保留 Raw Page 和检查点；Mechanic Review 不落盘，必须从头重试。
 
-Ranking Cohort 使用进程的本地 client secret 做 HMAC 完整性签名；secret 本身不写入 cohort、日志或标准输出。修改已签名 cohort 后，benchmark 必须拒绝。
+WCL client secret 只用于 OAuth，不参与本地 Artifact 身份。Ranking Cohort 和 Encounter Benchmark 使用规范 JSON 的 SHA-256 内容 ID；Complete Bundle 使用 Report Index、Raw Page、压缩事件文件和 Canonical Event 内容 hash。它们只支持本地生成和消费，hash 不认证来源。
 
 ## Revision 与归档
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from statistics import median
 from pathlib import Path
@@ -70,43 +70,40 @@ def extract_ranking_candidates(payload: Any, *, now: datetime | None = None) -> 
     }
 
 
-def sign_cohort(cohort: dict[str, Any], key: str) -> dict[str, Any]:
-    if not key:
-        raise InputError("A non-empty cohort signing key is required.")
-    unsigned = dict(cohort)
-    unsigned.pop("signature", None)
-    message = json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    signature = hmac.new(key.encode(), message, hashlib.sha256).hexdigest()
-    return unsigned | {"signature": signature}
+def identify_cohort(cohort: dict[str, Any]) -> dict[str, Any]:
+    identified = dict(cohort)
+    identified.pop("cohort_id", None)
+    identified.pop("signature", None)
+    return identified | {"cohort_id": _content_id(identified)}
 
 
-def verify_cohort(cohort: dict[str, Any], key: str) -> None:
-    signature = cohort.get("signature")
-    if not isinstance(signature, str):
-        raise InputError("Ranking Cohort is unsigned.")
-    expected = sign_cohort(cohort, key)["signature"]
-    if not hmac.compare_digest(signature, expected):
-        raise InputError("Ranking Cohort signature is invalid.")
+def verify_cohort(cohort: dict[str, Any]) -> None:
+    if type(cohort.get("schema_version")) is not int or cohort["schema_version"] != 2 or "signature" in cohort:
+        raise InputError("Ranking Cohort uses an unsupported schema version; discover candidates again.")
+    cohort_id = cohort.get("cohort_id")
+    if not isinstance(cohort_id, str) or cohort_id != identify_cohort(cohort)["cohort_id"]:
+        raise InputError("Ranking Cohort content ID is missing or invalid.")
 
 
-def sign_benchmark(benchmark: dict[str, Any], key: str) -> dict[str, Any]:
-    if not key:
-        raise InputError("A non-empty benchmark signing key is required.")
-    unsigned = dict(benchmark)
-    unsigned.pop("signature", None)
-    message = json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    return unsigned | {"signature": hmac.new(key.encode(), message, hashlib.sha256).hexdigest()}
+def identify_benchmark(benchmark: dict[str, Any]) -> dict[str, Any]:
+    identified = dict(benchmark)
+    identified.pop("benchmark_id", None)
+    identified.pop("signature", None)
+    return identified | {"benchmark_id": _content_id(identified)}
 
 
-def verify_benchmark(benchmark: dict[str, Any], key: str) -> None:
-    signature = benchmark.get("signature")
-    expected = sign_benchmark(benchmark, key)["signature"]
-    if not isinstance(signature, str) or not hmac.compare_digest(signature, expected):
-        raise InputError("Encounter Benchmark signature is missing or invalid.")
+def verify_benchmark(benchmark: dict[str, Any]) -> None:
+    if type(benchmark.get("schema_version")) is not int or benchmark["schema_version"] != 2 or "signature" in benchmark:
+        raise InputError("Encounter Benchmark uses an unsupported schema version; build it again.")
+    if not _sha256_id(benchmark.get("cohort_id")):
+        raise InputError("Encounter Benchmark Ranking Cohort content ID is missing or invalid.")
+    benchmark_id = benchmark.get("benchmark_id")
+    if not isinstance(benchmark_id, str) or benchmark_id != identify_benchmark(benchmark)["benchmark_id"]:
+        raise InputError("Encounter Benchmark content ID is missing or invalid.")
 
 
-def validate_analysis_membership(analyses: list[dict[str, Any]], cohort: dict[str, Any], key: str) -> None:
-    verify_cohort(cohort, key)
+def validate_analysis_membership(analyses: list[dict[str, Any]], cohort: dict[str, Any]) -> None:
+    verify_cohort(cohort)
     candidates = cohort.get("eligible_recent_candidates")
     if not isinstance(candidates, list):
         raise InputError("Ranking Cohort has no eligible recent candidates.")
@@ -125,7 +122,7 @@ def validate_analysis_membership(analyses: list[dict[str, Any]], cohort: dict[st
             player.get("actor_id") if isinstance(player, dict) else None,
         )
         if key_value not in allowed:
-            raise InputError("Analysis is absent from the signed Ranking Cohort.")
+            raise InputError("Analysis is absent from the content-addressed Ranking Cohort.")
         if key_value in seen:
             raise InputError("Duplicate Reference Sample analysis.")
         seen.add(key_value)
@@ -143,9 +140,7 @@ def validate_analysis_membership(analyses: list[dict[str, Any]], cohort: dict[st
         if not isinstance(comparison_identity, dict):
             raise InputError("Reference Sample comparison identity is malformed.")
         partition_id = comparison_identity.get("partition_id")
-        recomputed = analyze_player(
-            manifest_path, index_path, key_value[2], partition_id=partition_id, signing_key=key
-        )
+        recomputed = analyze_player(manifest_path, index_path, key_value[2], partition_id=partition_id)
         if recomputed != analysis:
             raise InputError("Reference Sample analysis does not match its Complete Bundle evidence.")
 
@@ -155,6 +150,8 @@ def build_benchmark(
     encounter_profile: dict[str, Any],
     specialization_profile: dict[str, Any],
     expected: dict[str, Any],
+    *,
+    cohort_id: str,
 ) -> dict[str, Any]:
     profile = validate_profile(encounter_profile, "encounter")
     spec_profile = validate_profile(specialization_profile, "specialization")
@@ -207,7 +204,8 @@ def build_benchmark(
                 raise InputError("Reference Sample target damage is malformed.")
             target_damage.setdefault(target, []).append(amount)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "cohort_id": cohort_id,
         "identity": dict(expected),
         "encounter_profile_id": profile["profile_id"],
         "specialization_profile_id": spec_profile["profile_id"],
@@ -229,6 +227,15 @@ def build_benchmark(
         },
         "rejected_samples": rejected,
     }
+
+
+def _content_id(value: dict[str, Any]) -> str:
+    message = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(message).hexdigest()
+
+
+def _sha256_id(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
 def _analysis_rejection(

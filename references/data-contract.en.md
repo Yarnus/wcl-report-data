@@ -46,7 +46,7 @@ The manifest must contain `product: "wcl-raid-coach"`; Bundles produced by anoth
 
 All pages use the same inclusive fight start and end timestamps. Bundles created by an older collection protocol are rejected and must be prepared again.
 
-The manifest records event counts by type, raw-page hashes, the canonical stream hash, collection options, and unknown field counts.
+The manifest records event counts by type, Raw Page hashes, the compressed event-file hash, the uncompressed Canonical Event JSONL content hash, collection options, and unknown field counts. Hashes provide local content identity and corruption detection; they do not authenticate artifact origin.
 
 ## Canonical Events
 
@@ -180,9 +180,11 @@ Persisting a Report Document does not make a Mechanic Evidence Set persistent. O
 Personal Reviews, Benchmarks, and Guides consume only Complete Bundles that pass the integrity rules above. They cannot rewrite a Report Index, Fight Bundle, or Canonical Event. Mechanic Review is the non-persistent exception and consumes only its process-local Mechanic Evidence Set.
 
 - `profiles/` stores declarative Specialization Profiles and Encounter Profiles. Profile identity includes game version and ranking partition; an Encounter Profile also includes encounter and difficulty. The Profile ID is the SHA-256 of validated canonical JSON.
-- `cohorts/` stores a Ranking Cohort for exactly one encounter, difficulty, class, specialization, and partition. A Ranking Candidate becomes a Reference Sample only after Complete Bundle, hard-condition, and Encounter Profile eligibility checks pass.
-- An Encounter Benchmark aggregates at least three unique Reference Samples from one Ranking Cohort. Different Encounter Designators require different benchmarks.
+- `cohorts/` stores a Ranking Cohort for exactly one encounter, difficulty, class, specialization, and partition. `cohort_id` is the SHA-256 of canonical JSON excluding the ID itself. A Ranking Candidate becomes a Reference Sample only after Complete Bundle, hard-condition, and Encounter Profile eligibility checks pass.
+- An Encounter Benchmark aggregates at least three unique Reference Samples from one Ranking Cohort and records the exact `cohort_id`. `benchmark_id` is the SHA-256 of canonical JSON excluding the ID itself. Different Encounter Designators require different benchmarks.
 - `tasks/` stores Coach Request Manifests. Partial work retains each encounter's blocker and artifact references.
-- `guides/` stores immutable Guide Snapshots. A snapshot may reference multiple Encounter Benchmarks but cannot overwrite an older snapshot.
+- `guides/` stores immutable Guide Snapshots. Every chapter records the exact `benchmark_id`; a snapshot may reference multiple Encounter Benchmarks but cannot overwrite an older snapshot.
 
 A Personal Review analysis records Report Revision, fight ID, actor ID, and comparison hard conditions. The comparison identity `game_version` uses the selected ranking partition's `compactName` from the same Report Index, falling back to that partition's `name`; it never uses the numeric WCL `masterData.gameVersion` product ID. Comparison fails unless analysis and benchmark game version, encounter, difficulty, class, specialization, and partition match exactly.
+
+Coaching Artifacts are supported only when this CLI generates and consumes them in the user's local data or work directory. Plain SHA-256 does not authenticate a producer; externally supplied Artifacts must not be treated as trusted input. Complete Bundles, Ranking Cohorts, Personal Reviews, Encounter Benchmarks, and Guide Snapshots from the former HMAC schemas are incompatible and must be rebuilt.

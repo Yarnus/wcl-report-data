@@ -6,11 +6,10 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from wcl_raid_coach.__main__ import create_parser, main, run
-from wcl_raid_coach.cohort import sign_benchmark
+from wcl_raid_coach.cohort import identify_benchmark
 
 
 class CliTests(unittest.TestCase):
@@ -159,6 +158,18 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result["evidence_class"], "log_fact")
         self.assertEqual(result["analysis"]["metrics"]["deaths"], 0)
 
+    def test_coach_review_does_not_resolve_wcl_credentials(self) -> None:
+        args = create_parser().parse_args(
+            ["coach", "review", "/tmp/manifest.json", "--index", "/tmp/report.json", "--source-id", "10"]
+        )
+        with (
+            patch("wcl_raid_coach.__main__.resolve_credentials") as resolve,
+            patch("wcl_raid_coach.__main__.analyze_player", return_value={"metrics": {}}),
+        ):
+            run(args)
+
+        resolve.assert_not_called()
+
     def test_coach_mechanics_uses_the_in_memory_review_service(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_root = Path(temporary) / "data"
@@ -235,7 +246,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertTrue(result["ok"])
         self.assertEqual(result["action"], "coach_render")
-        self.assertIn("outputs/reports", result["report"]["html_path"])
+        self.assertIn(str(Path("outputs") / "reports"), result["report"]["html_path"])
 
     def test_coach_render_returns_structured_schema_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -260,8 +271,10 @@ class CliTests(unittest.TestCase):
             benchmark_path = root / "benchmark.json"
             benchmark_path.write_text(
                 json.dumps(
-                    sign_benchmark(
+                    identify_benchmark(
                         {
+                            "schema_version": 2,
+                            "cohort_id": "c" * 64,
                             "identity": {
                                 "game_version": "retail",
                                 "partition_id": 2,
@@ -275,15 +288,13 @@ class CliTests(unittest.TestCase):
                             "stable_pattern_claims_allowed": True,
                             "mechanic_anchors": [{"ability_id": 2, "name": "English Mechanic", "observed_anchor_ms": 10000}],
                             "metrics": {"casts_median": {"1": 2}},
-                        },
-                        "secret",
+                        }
                     )
                 ),
                 encoding="utf-8",
             )
             output = io.StringIO()
             with (
-                patch("wcl_raid_coach.__main__.resolve_credentials", return_value=SimpleNamespace(client_secret="secret")),
                 patch(
                     "wcl_raid_coach.__main__._ensure_ability_names",
                     return_value={"mapping_path": str(mapping_path), "build": "12.1.0.69587"},

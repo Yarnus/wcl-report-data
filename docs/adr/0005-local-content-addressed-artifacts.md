@@ -1,0 +1,3 @@
+# Use content-addressed local coaching artifacts
+
+Complete Bundles, Ranking Cohorts, Encounter Benchmarks, Personal Reviews, and Guide Snapshots are generated and consumed only within the user's local trust domain. Their integrity therefore uses schema validation, Report Revision identity, provenance checks, and SHA-256 content or file hashes rather than HMAC authentication. The WCL client secret is reserved for OAuth and never acts as an artifact key. Hashes detect corruption and establish content identity but do not authenticate origin, so externally supplied coaching artifacts remain unsupported. Artifacts from the former HMAC schemas must be rebuilt rather than migrated or read through a compatibility path.

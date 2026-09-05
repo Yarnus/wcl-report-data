@@ -773,6 +773,66 @@ class DatasetTests(unittest.TestCase):
             with self.assertRaises(DatasetError):
                 service.prepare(ref)
 
+    def test_cache_hit_validates_the_canonical_event_content_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(event_pages()))
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            result = service.prepare(ref)
+            manifest_path = Path(result["bundles"][0]["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["canonical_events_sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(DatasetError, "content hash"):
+                service.prepare(ref)
+
+    def test_cache_hit_validates_the_report_index_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(event_pages()))
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            result = service.prepare(ref)
+            manifest_path = Path(result["bundles"][0]["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["report_index_sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(DatasetError, "Report Index"):
+                service.prepare(ref)
+
+    def test_complete_bundle_rejects_a_report_index_from_another_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(event_pages()))
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            result = service.prepare(ref)
+            manifest_path = Path(result["bundles"][0]["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            index_path = Path(result["index_path"])
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index["report"]["revision"] = 999
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+            manifest["report_index_sha256"] = hashlib.sha256(
+                json.dumps(index, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(DatasetError, "Report Revision"):
+                query_bundle(manifest_path)
+
+    def test_invalid_canonical_event_gzip_is_a_dataset_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            service = self.make_service(temporary, FakeClient(event_pages()))
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            result = service.prepare(ref)
+            manifest_path = Path(result["bundles"][0]["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            events_path = manifest_path.parent / manifest["events_file"]
+            events_path.write_bytes(b"not gzip")
+            manifest["events_file_sha256"] = hashlib.sha256(events_path.read_bytes()).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(DatasetError, "compressed event stream"):
+                query_bundle(manifest_path)
+
     def test_cache_hit_rejects_manifest_identity_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             service = self.make_service(temporary, FakeClient(event_pages()))
