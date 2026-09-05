@@ -74,7 +74,7 @@ A formal Mechanic Review, Personal Review, or Raid Guide can be expressed as its
 python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
 ```
 
-The CLI returns `html_path`, `html_sha256`, `index_path`, `document_id`, and both schema versions. HTML loads no remote fonts, styles, scripts, or images and supports the system theme plus manual Auto/light/dark selection. A caller submits only the structured fields allowed for that document type, never raw HTML. Mechanic Review accepts only flat minimal evidence excerpts; Personal Review accepts no mechanic attribution or recommendations; Raid Guide accepts no rotation, talent, gear, or prescriptive advice absent from its Snapshot.
+The CLI returns `html_path`, `html_sha256`, `index_path`, `document_id`, and both schema versions. HTML loads no remote fonts, styles, scripts, or images and supports the system theme plus manual Auto/light/dark selection. A caller submits only the structured fields allowed for that document type, never raw HTML. Ruleset and Guide source URLs must be public HTTP(S) URLs with no user information in their authority and no credential or signature parameters in their query string or fragment. Mechanic Review accepts only flat minimal evidence excerpts; Personal Review accepts no mechanic attribution or recommendations; Raid Guide accepts no rotation, talent, gear, or prescriptive advice absent from its Snapshot.
 
 Prepare the fight selected in the URL:
 

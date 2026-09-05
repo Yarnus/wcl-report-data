@@ -163,7 +163,7 @@ A `raid_guide` has exactly the shared fields plus `identity`, `specialization`, 
 
 - `chapters`: 1 to 20 chapters with unique encounter IDs. Each contains `encounter_id`, `encounter_name`, `sample_count` of at least 3, `confidence`, nullable `damage_total_median`, `abilities`, `target_damage`, `mechanic_anchors`, both Profile IDs, and `sources`.
 - Chapter `abilities` retain only ability name, median casts, and median first-cast time; `target_damage` retains only numeric target ID and median damage; `mechanic_anchors` retain only name and nullable observed time.
-- Chapter `sources` accept only an `encounter` or `specialization` kind, title, public HTTP(S) URL, and quote summary. URLs cannot contain credentials.
+- Chapter `sources` accept only an `encounter` or `specialization` kind, title, public HTTP(S) URL, and quote summary. Ruleset and chapter source URL authorities cannot contain user information. Query-string and fragment parameter names cannot be credential, key, token, authentication, or signature names after case, common separators, and percent encoding are normalized.
 
 Personal Review has no mechanic-attribution or recommendation field. Raid Guide has no rotation, talent, gear, phase-strategy, or prescriptive-advice field. Callers must not use titles, summaries, or `scope_note` to describe a damage delta as achievable improvement or a sample median as a recommendation.
 

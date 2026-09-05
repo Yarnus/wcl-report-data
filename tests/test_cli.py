@@ -260,6 +260,26 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(result["error"], "invalid_input")
 
+    def test_coach_render_returns_structured_error_without_echoing_url_secret(self) -> None:
+        from tests.test_report_documents import mechanic_document
+
+        secret = "must-not-appear-in-stdout"
+        with tempfile.TemporaryDirectory() as temporary:
+            document = mechanic_document()
+            document["ruleset"]["sources"] = [
+                f"https://example.com/source?X-Amz-Signature={secret}"
+            ]
+            document_path = Path(temporary) / "document.json"
+            document_path.write_text(json.dumps(document), encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(["coach", "render", str(document_path)])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "invalid_input")
+        self.assertNotIn(secret, output.getvalue())
+
     def test_coach_guide_uses_zhcn_spell_names(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
