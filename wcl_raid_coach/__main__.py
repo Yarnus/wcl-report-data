@@ -27,6 +27,7 @@ from .mechanics import MechanicReviewService
 from .guides import create_guide_snapshot
 from .profiles import ProfileStore
 from .report_documents import (
+    assemble_personal_review_document,
     assemble_raid_guide_document,
     create_mechanic_review_report,
     render_report_document,
@@ -126,6 +127,14 @@ def create_parser() -> argparse.ArgumentParser:
         "guide-report", help="Assemble and render a Raid Guide Report Document from one Guide Snapshot."
     )
     guide_report.add_argument("snapshot", type=Path)
+    personal_report = coach_commands.add_parser(
+        "personal-report",
+        help="Assemble and render a Personal Review from Analysis, Benchmark, and Comparison artifacts.",
+    )
+    personal_report.add_argument("analysis", type=Path)
+    personal_report.add_argument("benchmark", type=Path)
+    personal_report.add_argument("comparison", type=Path)
+    personal_report.add_argument("--locale", choices=("zh-CN", "en"), default="zh-CN")
     candidates = coach_commands.add_parser("candidates", help="Discover content-addressed recent ranking candidates.")
     candidates.add_argument("--encounter-id", type=int, required=True)
     candidates.add_argument("--difficulty-id", type=int, required=True)
@@ -194,6 +203,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report = render_report_document(document, store.data_root / "outputs" / "reports")
             return {
                 "action": "coach_guide_report",
+                "document": validate_report_document(document),
+                "report": report,
+            }
+        if args.coach_command == "personal-report":
+            ability_names_info = _ensure_ability_names(store)
+            document = assemble_personal_review_document(
+                args.analysis,
+                args.benchmark,
+                args.comparison,
+                ability_names_path=Path(ability_names_info["mapping_path"]),
+                ability_names_metadata_path=Path(ability_names_info["metadata_path"]),
+                locale=args.locale,
+            )
+            report = render_report_document(document, store.data_root / "outputs" / "reports")
+            return {
+                "action": "coach_personal_report",
                 "document": validate_report_document(document),
                 "report": report,
             }

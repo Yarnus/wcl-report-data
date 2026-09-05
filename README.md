@@ -87,7 +87,19 @@ Raid Guide 不需要调用方重写 Report Document。把 `coach guide` 返回�
 python -m wcl_raid_coach coach guide-report "<DATA_ROOT>/guides/<SNAPSHOT_ID>.json"
 ```
 
-CLI 返回派生的 `document`，以及 `report` 中的 `html_path`、`html_sha256`、`index_path`、`document_id` 和两项 schema version。HTML 不加载远程字体、样式、脚本或图片；页面支持系统主题以及 Auto/亮色/暗色手动选择。assembler 保留精确 Snapshot ID 和文件 SHA-256，并逐 Boss 复制 encounter/Benchmark/Profile 身份、样本数、置信度、指标、本地化技能、机制锚点和来源；不同 Boss 的字段不会混合。renderer 会解析并校验每个来源 artifact，而不只检查路径和 SHA-256；Personal Review 必须提供 Personal Analysis、Encounter Benchmark 和 Comparison 三个来源。规则集和 Guide 来源 URL 必须是公开 HTTP(S) URL，authority 不得包含用户信息，query string 或 fragment 不得包含凭据或签名参数。Mechanic Review 只能携带扁平最小证据摘录；Personal Review 不接受机制归因或建议；Raid Guide 不生成 Snapshot 中不存在的 rotation、天赋、装备、阶段策略、建议或可实现目标。
+Personal Review 同样不需要重抄指标或身份。把 `coach review`、`coach benchmark` 和 `coach compare` 生成的三个 JSON artifact 直接交给第一方 assembler：
+
+```bash
+python -m wcl_raid_coach coach personal-report \
+  "<WORK_DIR>/personal-analysis.json" \
+  "<WORK_DIR>/encounter-benchmark.json" \
+  "<WORK_DIR>/comparison.json" \
+  --locale zh-CN
+```
+
+该命令重新校验 Personal Analysis schema `3`、Encounter Benchmark schema `2` 和 Comparison schema `2`，从 Complete Bundle 重新计算 Personal Analysis，再从前两个 artifact 重新计算并精确核对 Comparison。Report Revision、Boss Attempt、actor、匿名状态、职业、专精、装等、ranking partition、game version、encounter、difficulty、Benchmark ID、样本数、置信度和所有指标都由 artifact 派生。它不接受调用方标题、摘要、指标或建议文本。技能行保留数字 `ability_id` 和 WCL 原名；中文名只有在 ID 同时存在于 Report Index 和已校验 `ability-names.zhCN.json` 时使用并记录 mapping build，mapping 未命中时回退 WCL 原名且 mapping build 为 `null`。
+
+CLI 返回派生的 `document`，以及 `report` 中的 `html_path`、`html_sha256`、`index_path`、`document_id` 和两项 schema version。HTML 不加载远程字体、样式、脚本或图片；页面支持系统主题以及 Auto/亮色/暗色手动选择。assembler 保留精确 Snapshot ID 和文件 SHA-256，并逐 Boss 复制 encounter/Benchmark/Profile 身份、样本数、置信度、指标、本地化技能、机制锚点和来源；不同 Boss 的字段不会混合。renderer 会解析并校验每个来源 artifact，而不只检查路径和 SHA-256；Personal Review 必须提供 Personal Analysis、Encounter Benchmark 和 Comparison 三个来源。规则集和 Guide 来源 URL 必须是公开 HTTP(S) URL，authority 不得包含用户信息，query string 或 fragment 不得包含凭据或签名参数。Mechanic Review 只能携带扁平最小证据摘录；Personal Review 使用固定中性文字，不生成机制归因、死亡原因、责任、建议或可实现提升声明；Raid Guide 不生成 Snapshot 中不存在的 rotation、天赋、装备、阶段策略、建议或可实现目标。
 
 准备 URL 中选中的战斗：
 
