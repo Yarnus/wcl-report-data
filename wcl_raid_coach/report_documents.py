@@ -25,6 +25,85 @@ EVIDENCE_EXCERPT_FIELDS = {
 }
 
 
+def assemble_raid_guide_document(snapshot: Any, snapshot_path: Path) -> dict[str, Any]:
+    try:
+        return _assemble_raid_guide_document(snapshot, snapshot_path)
+    except InputError:
+        raise
+    except (OSError, KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise InputError("Guide Snapshot could not be assembled as a Raid Guide Report Document.") from exc
+
+
+def _assemble_raid_guide_document(snapshot: Any, snapshot_path: Path) -> dict[str, Any]:
+    snapshot = verify_guide_snapshot(snapshot)
+    snapshot_path = snapshot_path.expanduser().resolve()
+    if not snapshot_path.is_file():
+        raise InputError("Guide Snapshot artifact is missing.")
+    chapters = []
+    for source in snapshot["chapters"]:
+        identity = source["identity"]
+        metrics = source.get("metrics") if isinstance(source.get("metrics"), dict) else {}
+        chapters.append({
+            "encounter_id": identity.get("encounter_id"),
+            "encounter_name": source.get("encounter_name_zh"),
+            "benchmark_id": source.get("benchmark_id"),
+            "sample_count": source.get("sample_count"),
+            "confidence": source.get("confidence"),
+            "damage_total_median": metrics.get("damage_total_median"),
+            "abilities": [
+                {
+                    "name": ability.get("name_zh"),
+                    "median_casts": ability.get("median_casts"),
+                    "median_first_cast_ms": ability.get("median_first_cast_ms"),
+                }
+                for ability in source.get("abilities", []) if isinstance(ability, dict)
+            ],
+            "target_damage": [
+                {"target_id": int(target_id), "median_amount": amount}
+                for target_id, amount in sorted(
+                    (metrics.get("damage_by_target_median") or {}).items(), key=lambda item: int(item[0])
+                )
+            ],
+            "mechanic_anchors": [
+                {"name": anchor.get("name_zh"), "observed_anchor_ms": anchor.get("observed_anchor_ms")}
+                for anchor in source.get("mechanic_anchors", []) if isinstance(anchor, dict)
+            ],
+            "encounter_profile_id": source.get("encounter_profile_id"),
+            "specialization_profile_id": source.get("specialization_profile_id"),
+            "sources": [
+                {"kind": kind, **{field: item.get(field) for field in ("title", "url", "quote_summary")}}
+                for kind in ("encounter", "specialization")
+                for item in (source.get("sources") or {}).get(kind, [])
+                if isinstance(item, dict)
+            ],
+        })
+    first_identity = snapshot["chapters"][0]["identity"]
+    difficulty_name = {3: "Normal", 4: "Heroic", 5: "Mythic"}.get(first_identity.get("difficulty_id"))
+    specialization = snapshot.get("specialization")
+    return {
+        "schema_version": DOCUMENT_SCHEMA_VERSION,
+        "document_type": "raid_guide",
+        "locale": "zh-CN",
+        "title": f"{specialization}高分日志攻略",
+        "subtitle": "按 Boss 隔离的 Encounter Benchmark 与来源审计",
+        "source_artifacts": [{
+            "kind": "guide_snapshot", "path": str(snapshot_path), "sha256": sha256_file(snapshot_path),
+        }],
+        "identity": {
+            "game_version": first_identity.get("game_version"),
+            "partition_id": first_identity.get("partition_id"),
+            "difficulty_name": difficulty_name,
+            "class_name": first_identity.get("class_name"),
+            "spec_name": first_identity.get("spec_name"),
+        },
+        "specialization": specialization,
+        "snapshot_id": snapshot.get("snapshot_id"),
+        "ability_names_build": snapshot.get("ability_names_build"),
+        "chapters": chapters,
+        "scope_note": "只展示 Guide Snapshot 中的日志事实、机制锚点和来源；样本中位数不是推荐或可实现目标。",
+    }
+
+
 def validate_report_document(value: Any) -> dict[str, Any]:
     document = _object(value, "Report Document")
     if document.get("schema_version") != DOCUMENT_SCHEMA_VERSION:
@@ -384,7 +463,7 @@ def _verify_guide_source(document: dict[str, Any], snapshot: dict[str, Any]) -> 
         source_name = source.get("encounter_name_zh") if document["locale"] == "zh-CN" else source.get("encounter_name_en")
         if chapter["encounter_name"] != source_name:
             raise InputError("Report Document guide chapter encounter identity does not match.")
-        for field in ("sample_count", "confidence", "encounter_profile_id", "specialization_profile_id"):
+        for field in ("benchmark_id", "sample_count", "confidence", "encounter_profile_id", "specialization_profile_id"):
             if chapter[field] != source.get(field):
                 label = "Profile" if "profile" in field else "chapter"
                 raise InputError(f"Report Document guide chapter {label} identity does not match.")
@@ -412,12 +491,16 @@ def _verify_guide_source(document: dict[str, Any], snapshot: dict[str, Any]) -> 
         ]
         if chapter["sources"] != expected_sources:
             raise InputError("Report Document guide Profile sources do not match.")
-        casts = metrics.get("casts_median") if isinstance(metrics.get("casts_median"), dict) else {}
-        first_casts = metrics.get("first_cast_ms_median") if isinstance(metrics.get("first_cast_ms_median"), dict) else {}
-        if sorted(item["median_casts"] for item in chapter["abilities"]) != sorted(float(value) for value in casts.values()):
-            raise InputError("Report Document guide ability metrics do not match.")
-        if sorted(item["median_first_cast_ms"] for item in chapter["abilities"] if item["median_first_cast_ms"] is not None) != sorted(float(value) for value in first_casts.values()):
-            raise InputError("Report Document guide ability timing metrics do not match.")
+        expected_abilities = [
+            {
+                "name": item.get("name_zh"),
+                "median_casts": None if item.get("median_casts") is None else float(item["median_casts"]),
+                "median_first_cast_ms": None if item.get("median_first_cast_ms") is None else float(item["median_first_cast_ms"]),
+            }
+            for item in source.get("abilities", []) if isinstance(item, dict)
+        ]
+        if chapter["abilities"] != expected_abilities:
+            raise InputError("Report Document guide ability names or metrics do not match.")
         if any(ability["name"] not in markdown for ability in chapter["abilities"]):
             raise InputError("Report Document guide ability names do not match the Guide Snapshot.")
 
@@ -619,7 +702,7 @@ def _validate_guide_chapters(value: Any) -> list[dict[str, Any]]:
             "Report Document guide chapter",
             {
                 "encounter_id", "encounter_name", "sample_count", "confidence",
-                "damage_total_median", "abilities", "target_damage", "mechanic_anchors",
+                "benchmark_id", "damage_total_median", "abilities", "target_damage", "mechanic_anchors",
                 "encounter_profile_id", "specialization_profile_id", "sources",
             },
         )
@@ -631,6 +714,7 @@ def _validate_guide_chapters(value: Any) -> list[dict[str, Any]]:
         result.append({
             "encounter_id": _integer(chapter["encounter_id"], "Report Document guide chapter encounter_id", positive=True),
             "encounter_name": _text(chapter["encounter_name"], "Report Document guide chapter encounter_name", 200),
+            "benchmark_id": _digest(chapter["benchmark_id"], "Report Document guide chapter benchmark_id"),
             "sample_count": sample_count,
             "confidence": chapter["confidence"],
             "damage_total_median": _optional_nonnegative_number(
@@ -963,7 +1047,7 @@ def _render_guide_chapter(chapter: dict[str, Any], labels: dict[str, str]) -> st
         f'<article><b>{escape(source["title"])}</b><small>{escape(labels[source["kind"]])}</small><p>{escape(source["quote_summary"])}</p><a href="{escape(source["url"], quote=True)}" rel="noreferrer">{escape(source["url"])}</a></article>'
         for source in chapter["sources"]
     ) or f'<p class="empty">{escape(labels["no_sources"])}</p>'
-    return f'<article class="chapter" id="boss-{chapter["encounter_id"]}"><header class="chapter-lede"><div><span class="kicker">Encounter Benchmark</span><h2>{escape(chapter["encounter_name"])}</h2><p>Encounter {chapter["encounter_id"]}</p></div><div class="confidence"><span>{escape(labels["confidence"])}</span><strong>{escape(labels[chapter["confidence"]]).upper()}</strong><small>{chapter["sample_count"]} {escape(labels["samples"])}</small></div></header><section class="pattern-block"><h3>{escape(labels["anchors"])} <span>ENCOUNTER PROFILE</span></h3><ol class="anchor-list">{anchors}</ol></section><section class="pattern-block"><h3>{escape(labels["patterns"])} <span>{escape(labels["not_recommendations"])}</span></h3><div class="table-wrap"><table><thead><tr><th>{escape(labels["ability"])}</th><th>{escape(labels["median_casts"])}</th><th>{escape(labels["median_first_cast"])}</th><th>{escape(labels["interpretation"])}</th></tr></thead><tbody>{abilities}</tbody></table></div></section><section class="pattern-block"><h3>{escape(labels["facts"])} <span>{chapter["sample_count"]} REFERENCE SAMPLES</span></h3><div class="table-wrap"><table><tbody><tr><td>{escape(labels["damage_median"])}</td><td>{_format_optional_amount(chapter["damage_total_median"], labels)}</td><td>{escape(labels["damage_limit"])}</td></tr>{targets}</tbody></table></div></section><section class="pattern-block sources"><h3>{escape(labels["sources"])}</h3>{sources}<div class="audit"><code>Encounter Profile {escape(chapter["encounter_profile_id"][:12])}<br>Specialization Profile {escape(chapter["specialization_profile_id"][:12])}</code></div></section></article>'
+    return f'<article class="chapter" id="boss-{chapter["encounter_id"]}"><header class="chapter-lede"><div><span class="kicker">Encounter Benchmark</span><h2>{escape(chapter["encounter_name"])}</h2><p>Encounter {chapter["encounter_id"]} · {escape(chapter["benchmark_id"][:12])}</p></div><div class="confidence"><span>{escape(labels["confidence"])}</span><strong>{escape(labels[chapter["confidence"]]).upper()}</strong><small>{chapter["sample_count"]} {escape(labels["samples"])}</small></div></header><section class="pattern-block"><h3>{escape(labels["anchors"])} <span>ENCOUNTER PROFILE</span></h3><ol class="anchor-list">{anchors}</ol></section><section class="pattern-block"><h3>{escape(labels["patterns"])} <span>{escape(labels["not_recommendations"])}</span></h3><div class="table-wrap"><table><thead><tr><th>{escape(labels["ability"])}</th><th>{escape(labels["median_casts"])}</th><th>{escape(labels["median_first_cast"])}</th><th>{escape(labels["interpretation"])}</th></tr></thead><tbody>{abilities}</tbody></table></div></section><section class="pattern-block"><h3>{escape(labels["facts"])} <span>{chapter["sample_count"]} REFERENCE SAMPLES</span></h3><div class="table-wrap"><table><tbody><tr><td>{escape(labels["damage_median"])}</td><td>{_format_optional_amount(chapter["damage_total_median"], labels)}</td><td>{escape(labels["damage_limit"])}</td></tr>{targets}</tbody></table></div></section><section class="pattern-block sources"><h3>{escape(labels["sources"])}</h3>{sources}<div class="audit"><code>Encounter Benchmark {escape(chapter["benchmark_id"][:12])}<br>Encounter Profile {escape(chapter["encounter_profile_id"][:12])}<br>Specialization Profile {escape(chapter["specialization_profile_id"][:12])}</code></div></section></article>'
 
 
 def _render_phases(phases: list[dict[str, Any]], duration: int) -> str:

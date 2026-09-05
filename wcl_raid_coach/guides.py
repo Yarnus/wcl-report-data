@@ -47,6 +47,7 @@ def create_guide_snapshot(
         if benchmark.get("sample_count", 0) < 3 or benchmark.get("stable_pattern_claims_allowed") is not True:
             raise InputError("Encounter Benchmark does not permit stable high-ranked pattern claims.")
         mechanic_anchors = _localize_mechanic_anchors(benchmark.get("mechanic_anchors", []), ability_names)
+        abilities = _localize_ability_metrics(benchmark.get("metrics", {}), ability_names)
         encounter_id = identity.get("encounter_id")
         encounter_name = encounter_names.get(str(encounter_id))
         if (
@@ -67,6 +68,7 @@ def create_guide_snapshot(
                 "sample_count": benchmark["sample_count"],
                 "confidence": benchmark.get("confidence"),
                 "metrics": benchmark.get("metrics", {}),
+                "abilities": abilities,
                 "mechanic_anchors": mechanic_anchors,
                 "encounter_profile_id": benchmark.get("encounter_profile_id"),
                 "specialization_profile_id": benchmark.get("specialization_profile_id"),
@@ -179,6 +181,8 @@ def verify_guide_snapshot(value: Any) -> dict[str, Any]:
                 raise InputError(f"Guide Snapshot chapter {field} is malformed.")
         if type(chapter.get("sample_count")) is not int or chapter["sample_count"] < 3:
             raise InputError("Guide Snapshot chapter sample count is malformed.")
+        if not isinstance(chapter.get("abilities"), list):
+            raise InputError("Guide Snapshot chapter localized abilities are malformed.")
     return value
 
 
@@ -241,6 +245,27 @@ def _localize_mechanic_anchors(value: Any, ability_names: dict[str, str]) -> lis
         if not isinstance(name, str) or not name.strip():
             raise InputError(f"Spell ID {ability_id} has no zhCN SpellName mapping.")
         result.append(dict(anchor) | {"name_zh": name})
+    return result
+
+
+def _localize_ability_metrics(value: Any, ability_names: dict[str, str]) -> list[dict[str, Any]]:
+    if not isinstance(value, dict):
+        raise InputError("Encounter Benchmark metrics are malformed.")
+    casts = value.get("casts_median", {})
+    first_casts = value.get("first_cast_ms_median", {})
+    if not isinstance(casts, dict) or not isinstance(first_casts, dict):
+        raise InputError("Encounter Benchmark ability metrics are malformed.")
+    result = []
+    for ability_id in sorted(set(casts) | set(first_casts), key=lambda item: (0, int(item)) if str(item).isdigit() else (1, str(item))):
+        name = ability_names.get(str(ability_id))
+        if not isinstance(name, str) or not name.strip():
+            raise InputError(f"Spell ID {ability_id} has no zhCN SpellName mapping.")
+        result.append({
+            "ability_id": int(ability_id),
+            "name_zh": name,
+            "median_casts": casts.get(ability_id),
+            "median_first_cast_ms": first_casts.get(ability_id),
+        })
     return result
 
 

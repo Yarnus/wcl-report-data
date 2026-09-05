@@ -68,13 +68,19 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review accepts kills and wipes, but only completed Boss Attempts; it rejects `fight=last`.
 
-A formal Mechanic Review, Personal Review, or Raid Guide can be expressed as its corresponding structured Report Document defined by the [dataset contract](references/data-contract.en.md), then rendered as self-contained HTML. This command does not access WCL or require credentials:
+A formal Mechanic Review or Personal Review can be expressed as its corresponding structured Report Document defined by the [dataset contract](references/data-contract.en.md), then rendered as self-contained HTML. This command does not access WCL or require credentials:
 
 ```bash
 python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
 ```
 
-The CLI returns `html_path`, `html_sha256`, `index_path`, `document_id`, and both schema versions. HTML loads no remote fonts, styles, scripts, or images and supports the system theme plus manual Auto/light/dark selection. A caller submits only the structured fields allowed for that document type, never raw HTML. The renderer parses and validates every source artifact rather than checking only its path and SHA-256; a Personal Review must provide Personal Analysis, Encounter Benchmark, and Comparison sources. Ruleset and Guide source URLs must be public HTTP(S) URLs with no user information in their authority and no credential or signature parameters in their query string or fragment. Mechanic Review accepts only flat minimal evidence excerpts; Personal Review accepts no mechanic attribution or recommendations; Raid Guide accepts no rotation, talent, gear, or prescriptive advice absent from its Snapshot.
+A Raid Guide does not require the caller to rewrite a Report Document. Pass the single Guide Snapshot JSON path returned by `coach guide` to the first-party assembler, which validates the Snapshot and Markdown identities, derives the complete document chapter by chapter, and renders it immediately:
+
+```bash
+python -m wcl_raid_coach coach guide-report "<DATA_ROOT>/guides/<SNAPSHOT_ID>.json"
+```
+
+The CLI returns the derived `document` and a `report` containing `html_path`, `html_sha256`, `index_path`, `document_id`, and both schema versions. HTML loads no remote fonts, styles, scripts, or images and supports the system theme plus manual Auto/light/dark selection. The assembler preserves the exact Snapshot ID and file SHA-256 and copies encounter, Benchmark, and Profile identities, sample count, confidence, metrics, localized abilities, mechanic anchors, and sources within each Boss chapter; fields from different Bosses are never mixed. The renderer parses and validates every source artifact rather than checking only its path and SHA-256; a Personal Review must provide Personal Analysis, Encounter Benchmark, and Comparison sources. Ruleset and Guide source URLs must be public HTTP(S) URLs with no user information in their authority and no credential or signature parameters in their query string or fragment. Mechanic Review accepts only flat minimal evidence excerpts; Personal Review accepts no mechanic attribution or recommendations; Raid Guide generates no rotation, talent, gear, phase strategy, recommendation, or achievable target absent from its Snapshot.
 
 Prepare the fight selected in the URL:
 

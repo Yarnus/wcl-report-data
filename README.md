@@ -66,13 +66,19 @@ python -m wcl_raid_coach coach mechanics \
 
 Mechanic Review 接受击杀和灭团，但只接受已完成的 Boss Attempt；`fight=last` 会被拒绝。
 
-正式 Mechanic Review、Personal Review 和 Raid Guide 可以先按[数据集契约](references/data-contract.md)生成对应类型的结构化 Report Document，再渲染为自包含 HTML。该命令不访问 WCL，也不需要凭据：
+正式 Mechanic Review 和 Personal Review 可以先按[数据集契约](references/data-contract.md)生成对应类型的结构化 Report Document，再渲染为自包含 HTML。该命令不访问 WCL，也不需要凭据：
 
 ```bash
 python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
 ```
 
-CLI 返回 `html_path`、`html_sha256`、`index_path`、`document_id` 和两项 schema version。HTML 不加载远程字体、样式、脚本或图片；页面支持系统主题以及 Auto/亮色/暗色手动选择。调用方只能提交对应文档类型允许的结构化字段，不能提交原始 HTML。renderer 会解析并校验每个来源 artifact，而不只检查路径和 SHA-256；Personal Review 必须提供 Personal Analysis、Encounter Benchmark 和 Comparison 三个来源。规则集和 Guide 来源 URL 必须是公开 HTTP(S) URL，authority 不得包含用户信息，query string 或 fragment 不得包含凭据或签名参数。Mechanic Review 只能携带扁平最小证据摘录；Personal Review 不接受机制归因或建议；Raid Guide 不接受 Snapshot 中不存在的 rotation、天赋、装备或具体建议。
+Raid Guide 不需要调用方重写 Report Document。把 `coach guide` 返回的一个 Guide Snapshot JSON 路径直接交给第一方 assembler；它会校验 Snapshot 和 Markdown 身份、从每个 Boss 章节派生完整文档并立即渲染：
+
+```bash
+python -m wcl_raid_coach coach guide-report "<DATA_ROOT>/guides/<SNAPSHOT_ID>.json"
+```
+
+CLI 返回派生的 `document`，以及 `report` 中的 `html_path`、`html_sha256`、`index_path`、`document_id` 和两项 schema version。HTML 不加载远程字体、样式、脚本或图片；页面支持系统主题以及 Auto/亮色/暗色手动选择。assembler 保留精确 Snapshot ID 和文件 SHA-256，并逐 Boss 复制 encounter/Benchmark/Profile 身份、样本数、置信度、指标、本地化技能、机制锚点和来源；不同 Boss 的字段不会混合。renderer 会解析并校验每个来源 artifact，而不只检查路径和 SHA-256；Personal Review 必须提供 Personal Analysis、Encounter Benchmark 和 Comparison 三个来源。规则集和 Guide 来源 URL 必须是公开 HTTP(S) URL，authority 不得包含用户信息，query string 或 fragment 不得包含凭据或签名参数。Mechanic Review 只能携带扁平最小证据摘录；Personal Review 不接受机制归因或建议；Raid Guide 不生成 Snapshot 中不存在的 rotation、天赋、装备、阶段策略、建议或可实现目标。
 
 准备 URL 中选中的战斗：
 
