@@ -14,7 +14,11 @@ from wcl_raid_coach.cohort import identify_benchmark
 from wcl_raid_coach.comparison import compare_player
 from wcl_raid_coach.errors import InputError
 from wcl_raid_coach.guides import create_guide_snapshot
-from wcl_raid_coach.report_documents import render_report_document, validate_report_document
+from wcl_raid_coach.report_documents import (
+    assemble_raid_guide_document,
+    render_report_document,
+    validate_report_document,
+)
 from wcl_raid_coach.storage import sha256_file
 
 
@@ -282,6 +286,7 @@ def raid_guide_document(source_root: Path | None = None) -> dict:
             {
                 "encounter_id": 1007,
                 "encounter_name": "中文首领七",
+                "benchmark_id": benchmark["benchmark_id"] if source_root is not None else "b" * 64,
                 "sample_count": 3,
                 "confidence": "low",
                 "damage_total_median": 266800000.0,
@@ -473,6 +478,7 @@ class ReportDocumentTests(unittest.TestCase):
         mutations = (
             (lambda document: document.__setitem__("snapshot_id", "0" * 64), "Snapshot"),
             (lambda document: document["identity"].__setitem__("partition_id", 3), "hard conditions"),
+            (lambda document: document["chapters"][0].__setitem__("benchmark_id", "0" * 64), "chapter"),
             (lambda document: document["chapters"][0].__setitem__("encounter_profile_id", "0" * 64), "Profile"),
             (lambda document: document["chapters"][0].__setitem__("sample_count", 4), "chapter"),
             (lambda document: document["chapters"][0]["abilities"][0].__setitem__("name", "Invented"), "ability names"),
@@ -611,6 +617,102 @@ class ReportDocumentTests(unittest.TestCase):
         document["chapters"][0]["rotation"] = "Invented rotation"
         with self.assertRaisesRegex(InputError, "unexpected field"):
             validate_report_document(document)
+
+    def test_assembles_multi_boss_raid_guide_without_cross_chapter_leakage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            benchmarks = []
+            for encounter_id, ability_id, target_id, amount, source_name, cohort_id in (
+                (1007, 1, 70, 7000, "Boss Seven source", "c" * 64),
+                (1008, 2, 80, 8000, "Boss Eight source", "d" * 64),
+            ):
+                benchmarks.append(identify_benchmark({
+                    "schema_version": 2,
+                    "cohort_id": cohort_id,
+                    "identity": EXPECTED | {"game_version": "12.1", "encounter_id": encounter_id},
+                    "encounter_profile_id": f"{encounter_id:064x}",
+                    "specialization_profile_id": "a" * 64,
+                    "sources": {
+                        "encounter": [{
+                            "title": source_name,
+                            "url": f"https://example.com/{encounter_id}",
+                            "quote_summary": f"Encounter {encounter_id} evidence.",
+                        }],
+                        "specialization": [],
+                    },
+                    "sample_count": 3,
+                    "confidence": "low",
+                    "stable_pattern_claims_allowed": True,
+                    "mechanic_anchors": [{
+                        "ability_id": ability_id,
+                        "name": f"Mechanic {ability_id}",
+                        "observed_anchor_ms": encounter_id,
+                    }],
+                    "metrics": {
+                        "damage_total_median": amount,
+                        "casts_median": {str(ability_id): ability_id},
+                        "first_cast_ms_median": {str(ability_id): ability_id * 100},
+                        "damage_by_target_median": {str(target_id): amount - 1},
+                    },
+                }))
+            snapshot = create_guide_snapshot(
+                benchmarks,
+                specialization_name="邪恶死亡骑士",
+                output_dir=root / "guides",
+                ability_names={"1": "技能一", "2": "技能二"},
+                ability_names_build="12.1.0.69587",
+                encounter_names={
+                    "1007": {"map_id": 3004, "name_en": "Boss Seven", "name_zh": "首领七"},
+                    "1008": {"map_id": 3004, "name_en": "Boss Eight", "name_zh": "首领八"},
+                },
+                content_names_build="12.1.0.69587",
+                content_names_sha256="d" * 64,
+            )
+            snapshot_path = Path(snapshot["index_path"])
+            document = assemble_raid_guide_document(snapshot, snapshot_path)
+            result = render_report_document(document, root / "outputs" / "reports")
+            index = json.loads(Path(result["index_path"]).read_text(encoding="utf-8"))
+            html = Path(result["html_path"]).read_text(encoding="utf-8")
+
+            chapters = index["document"]["chapters"]
+            self.assertEqual(index["document"]["snapshot_id"], snapshot["snapshot_id"])
+            self.assertEqual(index["document"]["source_artifacts"][0]["sha256"], sha256_file(snapshot_path))
+            self.assertEqual(index["document"]["identity"], {
+                "game_version": "12.1",
+                "partition_id": 2,
+                "difficulty_name": "Heroic",
+                "class_name": "DeathKnight",
+                "spec_name": "Unholy",
+            })
+            self.assertEqual([chapter["encounter_id"] for chapter in chapters], [1007, 1008])
+            self.assertEqual(chapters[0]["benchmark_id"], benchmarks[0]["benchmark_id"])
+            self.assertEqual(chapters[1]["benchmark_id"], benchmarks[1]["benchmark_id"])
+            self.assertEqual(chapters[0]["encounter_profile_id"], f"{1007:064x}")
+            self.assertEqual(chapters[1]["encounter_profile_id"], f"{1008:064x}")
+            self.assertEqual(chapters[0]["specialization_profile_id"], "a" * 64)
+            self.assertEqual((chapters[0]["sample_count"], chapters[0]["confidence"]), (3, "low"))
+            self.assertEqual(chapters[0]["damage_total_median"], 7000.0)
+            self.assertEqual(chapters[1]["target_damage"], [{"target_id": 80, "median_amount": 7999.0}])
+            self.assertEqual(chapters[0]["abilities"], [{"name": "技能一", "median_casts": 1.0, "median_first_cast_ms": 100.0}])
+            self.assertEqual(chapters[1]["abilities"], [{"name": "技能二", "median_casts": 2.0, "median_first_cast_ms": 200.0}])
+            self.assertEqual(chapters[0]["mechanic_anchors"], [{"name": "技能一", "observed_anchor_ms": 1007.0}])
+            self.assertEqual(chapters[0]["sources"][0]["title"], "Boss Seven source")
+            self.assertEqual(chapters[1]["sources"][0]["title"], "Boss Eight source")
+            self.assertEqual(chapters[1]["sources"][0]["url"], "https://example.com/1008")
+            self.assertIn("技能一", html)
+            self.assertIn("技能二", html)
+            self.assertFalse({"rotation", "talents", "gear", "phase_strategy", "recommendations", "achievable_target"} & index["document"].keys())
+            self.assertEqual(result, render_report_document(document, root / "outputs" / "reports"))
+
+            leaked = json.loads(json.dumps(document))
+            leaked["chapters"][0]["abilities"] = leaked["chapters"][1]["abilities"]
+            with self.assertRaisesRegex(InputError, "ability names or metrics"):
+                render_report_document(leaked, root / "other-reports")
+
+            leaked = json.loads(json.dumps(document))
+            leaked["chapters"][0]["sources"] = leaked["chapters"][1]["sources"]
+            with self.assertRaisesRegex(InputError, "Profile sources"):
+                render_report_document(leaked, root / "other-reports")
 
 
 if __name__ == "__main__":

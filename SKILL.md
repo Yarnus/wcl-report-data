@@ -190,6 +190,14 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach benchmark "<WORK_DIR>/analys
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach guide "<WORK_DIR>/h7-benchmark.json" "<WORK_DIR>/h8-benchmark.json" --spec-display-name "邪恶死亡骑士"
 ```
 
+正式交付时，不要手工重写 Boss 章节。把上一步返回的唯一 Guide Snapshot JSON 直接组装为 `raid_guide` Report Document 并渲染自包含 HTML：
+
+```text
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach guide-report "<GUIDE_SNAPSHOT_JSON_PATH>"
+```
+
+该命令重新校验 Snapshot 内容 ID 和 Markdown hash，保留精确 Snapshot ID 与来源文件 SHA-256，并只从各自章节派生 encounter/Benchmark/Profile 身份、样本数、置信度、指标、本地化技能、机制锚点和来源。不得跨 Boss 移动或合并字段；不得补写 Snapshot 中没有的 rotation、天赋、装备、阶段策略、建议或可实现目标。向用户交付短摘要和返回的 `report.html_path` 链接。
+
 输出包括与用户语言一致的 Markdown 和 JSON 索引。当前 bundled Guide Snapshot renderer 只生成中文 Markdown；英文请求生成最终 Guide Snapshot 前必须明确告知这一限制，不得把中文 artifact 伪装成英文结果。报告必须区分：
 
 - **日志事实**：Complete Bundle 直接计算的事实。

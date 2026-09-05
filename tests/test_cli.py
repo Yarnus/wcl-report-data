@@ -451,6 +451,26 @@ class CliTests(unittest.TestCase):
         self.assertIn("中文机制", markdown)
         self.assertNotIn("English Mechanic", markdown)
 
+    def test_coach_guide_report_assembles_and_renders_a_snapshot(self) -> None:
+        from tests.test_report_documents import raid_guide_document
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = raid_guide_document(root)
+            snapshot_path = document["source_artifacts"][0]["path"]
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main([
+                    "--data-root", str(root / "data"),
+                    "--cache-root", str(root / "cache"),
+                    "coach", "guide-report", snapshot_path,
+                ])
+            result = json.loads(output.getvalue())
+
+        self.assertEqual(status, 0)
+        self.assertEqual(result["action"], "coach_guide_report")
+        self.assertEqual(result["report"]["document_id"], result["document"]["document_id"])
+
 
 if __name__ == "__main__":
     unittest.main()
