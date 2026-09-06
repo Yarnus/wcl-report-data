@@ -37,8 +37,9 @@ class SkillHubPackageTests(unittest.TestCase):
         self.assertIn("how to use", frontmatter)
 
         usage_help = skill.split("### 使用帮助", 1)[1].split("## 2.", 1)[0]
-        for workflow in ("报告数据", "机制复盘", "个人复盘", "通用攻略"):
+        for workflow in ("报告数据", "机制复盘", "优先复核候选", "个人复盘", "通用攻略"):
             self.assertIn(workflow, usage_help)
+        self.assertIn("谁是战犯", frontmatter)
 
     def test_runtime_document_links_resolve(self) -> None:
         root = Path(__file__).parents[1]

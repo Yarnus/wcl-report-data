@@ -91,13 +91,13 @@ Mechanic Evidence Set 仅存在于当前进程内，不创建 Report Index、Raw
 
 每条机制的计数只描述规则定义的事件信号；日志无法客观判定成功或失败时，相应值为 `null`。只有当前难度标记为 `verified` 的事件模式才可产生异常；`event_pattern_unverified` 和 observation 规则不得产生异常。异常不是责任、表现评价或灭团因果。
 
-`coach mechanics ... --compact` 只派生当前 stdout 视图，不改变或持久化 Mechanic Evidence Set。该视图删除 `raw_event` 和 `raw_events`，只展开涉及玩家的异常，团队异常中的参与者只保留玩家，每条机制最多展开 20 条玩家异常，并统计被抑制的宠物/NPC 记录与事件数量。机制原始计数保持不变，因此抑制记录不表示这些事件不存在。
+`coach mechanics ... --compact` 只派生当前 stdout 视图，不改变或持久化 Mechanic Evidence Set。该视图通过字段白名单排除任意原始 WCL payload，只展开涉及玩家的异常，团队异常中的参与者只保留玩家，每条机制最多展开 20 条玩家异常，并统计被抑制的宠物/NPC 记录与事件数量。`player_anomaly_summary` 按玩家提供完整的异常记录数、事件数和首末时间，不受展示上限影响。每条机制显式输出 `scope`；只有 `target` scope 可用于个人候选排序，`team` scope 只能作为并列团队事实。混合团队异常会分别声明玩家事件数和被抑制的非玩家事件数。机制原始计数保持不变，因此抑制记录不表示这些事件不存在。
 
 ## Focused Evidence Window
 
-`coach evidence <URL_WITH_NUMERIC_FIGHT> --at-ms <TIME> --player-id <ID> [--window-ms <RADIUS>]` 为快速局部追问建立进程内 Focused Evidence Window。锚点和半径使用 fight-relative 毫秒；半径默认 10,000 且最多 30,000，范围截断在 Boss Attempt 起止边界。所有 player ID 必须是该 Boss Attempt 的明确参与者且不得重复。
+`coach evidence <URL_WITH_NUMERIC_FIGHT> --at-ms <TIME> --player-id <ID> --expected-identity <TOKEN> [--window-ms <RADIUS>]` 为快速局部追问建立进程内 Focused Evidence Window。token 来自紧凑 Mechanic Review 的 `evidence_identity`，绑定 WCL Report、Report Revision 和 Boss Attempt。锚点和半径使用 fight-relative 毫秒；半径默认 10,000 且最多 30,000，范围截断在 Boss Attempt 起止边界。预期身份必须在采集前匹配，Report Revision 在全部分页后再次匹配。最多接受 3 个互不重复且共享该锚点的 player ID，每个 ID 都必须解析为该 Boss Attempt 的 Player 参与者。
 
-每个参与者使用相同短时间范围独立完整分页；所有页必须有序、位于当前查询范围、无重复游标并到达显式 `nextPageTimestamp: null`。全部参与者采集完成后必须确认 Report Revision 未变化。输出按时间合并，只保留目标 actor ID 匹配指定参与者的事件，以及 `fight_time_ms`、事件类型、source/target/ability/extra ability ID、amount、absorbed、overheal、overkill、当前/最大生命值、killer/killing ability ID 和 stack 这些存在且有效的扁平字段。
+每个参与者使用相同短时间范围独立完整分页；所有页必须有序、位于当前查询范围、无重复游标并到达显式 `nextPageTimestamp: null`。每个查询只保留目标 actor ID 等于该参与者的允许事件，避免多参与者合并时重复。完整匹配集合按时间排序；stdout 最多返回 200 条，先选择死亡和战复，再选择距锚点最近的事件，并声明 `matched_event_count`、`returned_event_count`、`truncated` 和选择策略。事件只含 `fight_time_ms`、事件类型、source/target/ability/extra ability ID、amount、absorbed、overheal、overkill、当前/最大生命值、killer/killing ability ID 和 stack 这些存在且有效的扁平字段；`actors` 和 `abilities` 只解释返回事件引用的 ID。
 
 Focused Evidence Window 不请求资源，不创建 Report Index、Raw Page、Fight Bundle、Complete Bundle、Canonical Event、manifest、哈希或检查点，不得持久化，也不得作为个人 Benchmark 或 Guide 输入。它只能支持窗口内的伤害、治疗、光环、死亡和战复事实；顶层 `judgment` 和 `causal_attribution` 始终为 `null`，不能证明玩家责任、治疗责任、站位责任或灭团因果。
 

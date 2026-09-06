@@ -133,6 +133,7 @@ def create_parser() -> argparse.ArgumentParser:
     evidence.add_argument("--at-ms", type=float, required=True, help="Fight-relative evidence anchor in milliseconds.")
     evidence.add_argument("--window-ms", type=float, default=10_000, help="Milliseconds before and after the anchor.")
     evidence.add_argument("--player-id", dest="player_ids", type=int, action="append", required=True)
+    evidence.add_argument("--expected-identity", required=True, help="Identity token from compact mechanics.")
     render = coach_commands.add_parser("render", help="Render a validated Report Document as self-contained HTML.")
     render.add_argument("document", type=Path)
     guide_report = coach_commands.add_parser(
@@ -210,6 +211,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 at_ms=args.at_ms,
                 window_ms=args.window_ms,
                 player_ids=args.player_ids,
+                expected_identity=args.expected_identity,
             )
         if args.coach_command == "render":
             return {

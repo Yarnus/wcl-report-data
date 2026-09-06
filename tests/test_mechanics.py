@@ -43,8 +43,13 @@ def report_fixture() -> dict:
                 {"id": 13, "name": "Delta", "type": "Player"},
                 {"id": 14, "name": "Echo", "type": "Player"},
                 {"id": 15, "name": "Foxtrot", "type": "Player"},
+                {"id": 99, "name": "Boss", "type": "NPC"},
             ],
-            "abilities": [],
+            "abilities": [
+                {"gameID": 1284941, "name": "Cultivated Burst", "type": 1, "icon": "spell"},
+                {"gameID": 2, "name": "Test Heal", "type": 1, "icon": "spell"},
+                {"gameID": 1, "name": "Test Damage", "type": 1, "icon": "spell"},
+            ],
         },
         "fights": [
             {
@@ -143,10 +148,12 @@ class MechanicReviewServiceTests(unittest.TestCase):
             "action": "coach_mechanics",
             "selection_required": False,
             "evidence": {"event_count": 20},
+            "unexpected_raw_payload": {"secret": "top-level"},
             "mechanics": [{
                 "rule_id": "TEST",
                 "name_zh": "测试机制",
                 "summary": {"failure_count": 3},
+                "unexpected_raw_payload": {"secret": "mechanic"},
                 "anomalies": [
                     {
                         "time_ms": 1_000.0,
@@ -154,6 +161,7 @@ class MechanicReviewServiceTests(unittest.TestCase):
                         "event_count": 1,
                         "actor": {"actor_id": 10, "name": "Alpha", "type": "Player"},
                         "raw_event": {"amount": 100},
+                        "aura_application_raw_event": {"secret": "payload"},
                     },
                     {
                         "time_ms": 1_000.0,
@@ -177,7 +185,45 @@ class MechanicReviewServiceTests(unittest.TestCase):
             "actor": {"actor_id": 10, "name": "Alpha", "type": "Player"},
         }])
         self.assertEqual(mechanic["suppressed_anomalies"], {"pet_or_npc_records": 1, "event_count": 2})
-        self.assertNotIn("raw_event", str(compact))
+        self.assertEqual(mechanic["player_anomaly_summary"], [{
+            "actor_id": 10,
+            "name": "Alpha",
+            "record_count": 1,
+            "event_count": 1,
+            "first_time_ms": 1_000.0,
+            "last_time_ms": 1_000.0,
+        }])
+        self.assertNotIn("payload", str(compact))
+
+    def test_compact_review_separates_team_player_counts_from_pet_events(self) -> None:
+        review = {
+            "action": "coach_mechanics",
+            "selection_required": False,
+            "mechanics": [{
+                "rule_id": "TEAM",
+                "scope": "team",
+                "anomalies": [{
+                    "time_ms": 1_000.0,
+                    "event_type": "damage",
+                    "event_count": 3,
+                    "actors": [
+                        {"actor_id": 10, "name": "Alpha", "type": "Player"},
+                        {"actor_id": 20, "name": "Pet", "type": "Pet"},
+                    ],
+                    "raw_events": [
+                        {"targetID": 10}, {"targetID": 20}, {"targetID": 20},
+                    ],
+                }],
+            }],
+        }
+
+        mechanic = compact_mechanic_review(review)["mechanics"][0]
+
+        self.assertEqual(mechanic["scope"], "team")
+        self.assertEqual(mechanic["anomalies"][0]["event_count"], 1)
+        self.assertEqual(mechanic["anomalies"][0]["suppressed_non_player_event_count"], 2)
+        self.assertEqual(mechanic["player_anomaly_summary"][0]["event_count"], 1)
+        self.assertNotIn("raw_events", str(mechanic))
 
     def test_bare_report_lists_only_supported_boss_attempts(self) -> None:
         result = MechanicReviewService(FakeClient()).review(ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123"))
@@ -194,6 +240,7 @@ class MechanicReviewServiceTests(unittest.TestCase):
 
         self.assertFalse(result["selection_required"])
         self.assertEqual(result["identity"]["report_revision"], 7)
+        self.assertEqual(result["evidence_identity"], "AbC123:7:1")
         self.assertEqual(result["evidence"]["storage"], "process_memory")
         self.assertEqual(client.requests[0][2:4], (2_000.0, 5_000.0))
         self.assertIn("ability.id = 1284590", client.requests[0][4])
@@ -305,6 +352,7 @@ class MechanicReviewServiceTests(unittest.TestCase):
             at_ms=1_000,
             window_ms=500,
             player_ids=[10],
+            expected_identity="AbC123:7:1",
         )
 
         self.assertEqual(client.requests[0][2:4], (2_500.0, 3_500.0))
@@ -324,6 +372,8 @@ class MechanicReviewServiceTests(unittest.TestCase):
             "amount": 123,
             "hit_points": 456,
         }])
+        self.assertEqual(result["actors"]["10"], {"name": "Alpha", "type": "Player"})
+        self.assertEqual(result["abilities"]["1284941"], {"name": "Cultivated Burst"})
 
     def test_focused_evidence_discards_window_events_unrelated_to_the_player(self) -> None:
         client = FakeClient(
@@ -343,10 +393,12 @@ class MechanicReviewServiceTests(unittest.TestCase):
             at_ms=1_000,
             window_ms=500,
             player_ids=[10],
+            expected_identity="AbC123:7:1",
         )
 
         self.assertEqual(result["evidence"]["fetched_event_count"], 2)
-        self.assertEqual(result["evidence"]["event_count"], 1)
+        self.assertEqual(result["evidence"]["matched_event_count"], 1)
+        self.assertEqual(result["evidence"]["returned_event_count"], 1)
         self.assertEqual(result["events"][0]["type"], "heal")
 
     def test_focused_evidence_rejects_non_participants(self) -> None:
@@ -356,6 +408,7 @@ class MechanicReviewServiceTests(unittest.TestCase):
                 at_ms=1_000,
                 window_ms=500,
                 player_ids=[99],
+                expected_identity="AbC123:7:1",
             )
 
     def test_focused_evidence_rejects_a_non_focused_window(self) -> None:
@@ -365,7 +418,82 @@ class MechanicReviewServiceTests(unittest.TestCase):
                 at_ms=1_000,
                 window_ms=30_001,
                 player_ids=[10],
+                expected_identity="AbC123:7:1",
             )
+
+    def test_focused_evidence_rejects_a_mismatched_expected_identity(self) -> None:
+        with self.assertRaises(RevisionChangedError):
+            MechanicReviewService(FakeClient()).focused_evidence(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"),
+                at_ms=1_000,
+                window_ms=500,
+                player_ids=[10],
+                expected_identity="Other:7:1",
+            )
+
+    def test_focused_evidence_rejects_malformed_participants_as_an_api_error(self) -> None:
+        client = FakeClient()
+        client.report["fights"][0]["friendlyPlayers"] = 10
+        with self.assertRaises(ApiError):
+            MechanicReviewService(client).focused_evidence(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"),
+                at_ms=1_000,
+                window_ms=500,
+                player_ids=[10],
+                expected_identity="AbC123:7:1",
+            )
+
+    def test_focused_evidence_rejects_malformed_ability_metadata_as_an_api_error(self) -> None:
+        client = FakeClient({2_500: {"data": [], "nextPageTimestamp": None}})
+        client.report["masterData"]["abilities"] = 1
+        with self.assertRaises(ApiError):
+            MechanicReviewService(client).focused_evidence(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"),
+                at_ms=1_000,
+                window_ms=500,
+                player_ids=[10],
+                expected_identity="AbC123:7:1",
+            )
+
+    def test_focused_evidence_rejects_malformed_event_amount_as_an_api_error(self) -> None:
+        client = FakeClient({
+            2_500: {
+                "data": [{
+                    "timestamp": 3_000, "type": "damage", "sourceID": 99,
+                    "targetID": 10, "abilityGameID": 1, "amount": True,
+                }],
+                "nextPageTimestamp": None,
+            }
+        })
+        with self.assertRaises(ApiError):
+            MechanicReviewService(client).focused_evidence(
+                ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"),
+                at_ms=1_000,
+                window_ms=500,
+                player_ids=[10],
+                expected_identity="AbC123:7:1",
+            )
+
+    def test_focused_evidence_filters_each_player_before_merging(self) -> None:
+        client = FakeClient({
+            2_500: {
+                "data": [
+                    {"timestamp": 3_000, "type": "damage", "sourceID": 99, "targetID": 10, "abilityGameID": 1},
+                    {"timestamp": 3_001, "type": "damage", "sourceID": 99, "targetID": 11, "abilityGameID": 1},
+                ],
+                "nextPageTimestamp": None,
+            }
+        })
+        result = MechanicReviewService(client).focused_evidence(
+            ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1"),
+            at_ms=1_000,
+            window_ms=500,
+            player_ids=[10, 11],
+            expected_identity="AbC123:7:1",
+        )
+
+        self.assertEqual(result["evidence"]["matched_event_count"], 2)
+        self.assertEqual([event["target_id"] for event in result["events"]], [10, 11])
 
     def test_bare_report_rejects_a_malformed_boss_attempt(self) -> None:
         client = FakeClient()

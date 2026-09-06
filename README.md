@@ -78,10 +78,11 @@ python -m wcl_raid_coach coach mechanics \
 ```bash
 python -m wcl_raid_coach coach evidence \
   "https://www.warcraftlogs.com/reports/<code>#fight=12" \
-  --at-ms 210472 --window-ms 10000 --player-id 17
+  --at-ms 210472 --window-ms 10000 --player-id 17 \
+  --expected-identity JKy1tpWXjw2rBYZm:17:22
 ```
 
-Focused Evidence Window 对每个指定参与者完整分页，只返回扁平的伤害、治疗、吸收、光环、死亡和战复事件，并在采集后复查 Report Revision。它只驻留进程内，不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点，也不构成责任或灭团因果判断。
+`--expected-identity` 必须原样取自紧凑机制结果的 `evidence_identity`，同时防止两阶段跨 WCL Report、Report Revision 或 Boss Attempt。Focused Evidence Window 最多接受 3 名共享同一异常时间的参与者；不同时间必须分别调用。它对每人完整分页，并返回引用到的 actor/ability 名称；stdout 最多包含 200 条事件，死亡和战复优先，其余按靠近锚点排序，截断和完整匹配计数在 `evidence` 中说明。它只驻留进程内，不创建 Report Index、Raw Page、Fight Bundle、Complete Bundle、Canonical Event、manifest 或检查点，也不构成责任或灭团因果判断。
 
 正式交付 Mechanic Review 时，在同一条命令中加入 `--report`；可用 `--locale zh-CN`（默认）或 `--locale en`：
 

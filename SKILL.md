@@ -1,6 +1,6 @@
 ---
 name: wcl-report-data
-description: 分析正式服 Warcraft Logs 团队副本。用户提供 WCL 报告链接、要求机制或个人复盘、需要团队事件数据、询问当前团本指定 Boss 和专精的高分日志攻略，或询问“如何使用”“能做什么”、how to use、what can this skill do 时使用。
+description: 分析正式服 Warcraft Logs 团队副本。用户提供 WCL 报告链接、要求机制或个人复盘、询问“谁是战犯”或优先复核谁、需要团队事件数据、询问当前团本指定 Boss 和专精的高分日志攻略，或询问“如何使用”“能做什么”、how to use、what can this skill do 时使用。
 slug: wcl-report-data
 displayName: WCL 团队副本教练
 version: 3.1.0
@@ -24,7 +24,7 @@ metadata:
 
 - **报告数据**：用户要求下载、准备或查询一份 WCL Report 的团队事实。
 - **机制复盘**：用户要求检查一份 WCL Report 中单个 Boss Attempt 的首领机制处理结果，但不要求个人表现评价。
-- **快速责任候选**：用户问“谁是战犯”、谁失误最大或要求快速归因时，先做紧凑机制复盘，再对少量候选建立 Focused Evidence Window；这不是完整个人复盘。
+- **优先复核候选**：用户问“谁是战犯”、谁失误最大或要求快速归因时，先做紧凑机制复盘，再对最多 3 名候选建立 Focused Evidence Window；只能给出优先复核顺序，不能裁决责任，也不是完整个人复盘。
 - **个人复盘**：用户提供 WCL URL，并要求评价一个玩家在一个 Boss Attempt 中的表现。
 - **通用攻略**：用户没有提供个人日志，要求当前 Retail 团本中某专精打一个或多个 Boss 的攻略。
 - **混合请求**：先完成个人复盘；用户明确要求通用打法时，再附同一 Boss 的通用原则。个人结论和群体结论必须分开。
@@ -38,6 +38,7 @@ metadata:
 
 - **报告数据**：“帮我看看这份 WCL 报告里有哪些 Boss Attempt 和参与者：<WCL_URL>”
 - **机制复盘**：“复核这场 Boss Attempt 的机制处理：<WCL_URL_WITH_NUMERIC_FIGHT>”
+- **优先复核候选**：“快速看看这场谁最值得优先复核：<WCL_URL_WITH_NUMERIC_FIGHT>”
 - **个人复盘**：“复盘我在这场 Boss Attempt 的表现，角色是 <角色名>：<WCL_URL_WITH_NUMERIC_FIGHT>”
 - **通用攻略**：“给我一份邪恶死亡骑士打当前团本 H7 和 H8 的攻略。”
 
@@ -97,17 +98,21 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUM
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>" --compact
 ```
 
-紧凑输出保留机制计数、玩家异常和团队异常中的玩家，删除 `raw_event`、`raw_events`，汇总被抑制的宠物/NPC 异常记录，并把每条机制的玩家异常展示限制为 20 条。它不改变底层 Mechanic Evidence Set，也不能把异常提升为责任或灭团因果。
+紧凑输出保留机制计数、玩家异常和团队异常中的玩家，通过字段白名单排除任意原始 WCL payload，汇总被抑制的宠物/NPC 异常记录，并把每条机制的玩家异常展示限制为 20 条。完整候选统计在 `mechanics[].player_anomaly_summary[]`；样本中的时间和玩家分别位于 `mechanics[].anomalies[].time_ms` 以及 `.actor.actor_id` 或 `.actors[].actor_id`。它不改变底层 Mechanic Evidence Set，也不能把异常提升为责任或灭团因果。
 
 若紧凑结果提供了候选玩家和异常时间，按 fight-relative 毫秒建立该玩家前后默认 10 秒的 Focused Evidence Window：
 
 ```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach evidence "<WCL_URL_WITH_NUMERIC_FIGHT>" --at-ms <TIME_MS> --player-id <ACTOR_ID>
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach evidence "<WCL_URL_WITH_NUMERIC_FIGHT>" --at-ms <TIME_MS> --player-id <ACTOR_ID> --expected-identity <EVIDENCE_IDENTITY>
 ```
 
-可用 `--window-ms` 调整前后窗口，并可重复 `--player-id`。该命令只接受 Boss Attempt 参与者；每个玩家单独完整分页，使用 WCL `targetID` 请求参数并在本地再次按报告 actor ID 过滤。结果只保留扁平伤害、治疗、吸收、光环、死亡和战复字段，前后复查 Report Revision，不请求资源、不落盘，也不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点。
+`<EVIDENCE_IDENTITY>` 必须原样取自紧凑结果的 `evidence_identity`，它同时绑定 WCL Report、Report Revision 和数字 fight ID；不匹配时丢弃旧候选并重新执行紧凑阶段。可用 `--window-ms` 调整前后窗口，并可重复 `--player-id`，但最多 3 名且必须共享同一异常时间；不同时间的候选必须分别调用，不能共用一个 `--at-ms`。该命令只接受 Boss Attempt 参与者；每个玩家单独完整分页，使用 WCL `targetID` 请求参数并在本地再次按报告 actor ID 过滤。结果用 `actors` 和 `abilities` 解释事件中的 ID；`events` 最多返回 200 条，死亡/战复优先，其余按距锚点由近到远选择，完整计数见 `evidence.matched_event_count`，截断见 `evidence.truncated`。它不请求资源、不落盘，也不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点。
 
-快速责任候选必须先陈述 Boss Attempt 是击杀还是灭团，再分别列出机制命中、死亡链和团队影响。Focused Evidence Window 只支持当前窗口内的事实，不能证明站位责任、治疗责任或灭团因果；证据仍不足时明确保留不确定性。只有用户要求完整个人表现评价、Benchmark、Guide，或确实需要全场 Canonical Event 时才运行 `prepare`，不得为了快速责任候选默认下载 Complete Bundle。
+候选策略必须确定且可复核：只考虑 `validation_status: verified`、`anomaly_detection: enabled` 且 `scope: target` 的玩家异常；跨机制按 actor 汇总 `player_anomaly_summary[].record_count` 和 `event_count`，依次降序排序，再按 `actor_id` 升序，最多选择 3 名。对选中玩家，按其异常的 `time_ms` 升序逐个取证；达到 3 个不同异常时间后停止。只有同一条异常 `actors[]` 中共享相同 `time_ms` 的并列玩家才能合并到一次命令。`scope: team` 只能报告为团队事实，其中玩家保持并列，不参与个人候选排名，也不得从同一事件强行选一人。异常本身的 `outcome: death` 使用其 `time_ms`；否则先以异常 `time_ms` 取证，若窗口内发现死亡且需补充死亡前事件，再以该死亡 `fight_time_ms` 重跑一次窄窗口。若没有已验证的 target-scope 玩家异常，明确回答“快速路径未找到规则集确认的优先复核候选”，不得把无异常解释为处理正确，也不得任意选择玩家。
+
+最终回答依次给出：Report Revision 与数字 fight ID、击杀或灭团；已验证的机制命中与时间；Focused Evidence Window 中按时间排序的事实；已观察到的团队同时事件；未建立的因果边界。使用“优先复核候选”“并列”或“无受支持候选”，不得使用“责任已确认”。`evidence.truncated: true` 时必须披露输出为有界样本。Focused Evidence Window 只支持当前目标收到的事件，团队影响只能复述 Mechanic Review 已直接观察到的团队异常，否则写“未建立”。
+
+只有用户要求完整个人表现评价、Benchmark、Guide，或确实需要全场 Canonical Event 时才进入第 3 节 `prepare` 建立 Complete Bundle，再按第 5 节使用返回的 manifest 和 Report Index；不得为了优先复核候选默认下载 Complete Bundle。
 
 用户要求正式报告或 HTML 时，不要从 stdout 重抄字段，也不要先保存完整 Mechanic Review 结果；必须在同一采集进程直接运行：
 

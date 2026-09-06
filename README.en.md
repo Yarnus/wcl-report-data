@@ -80,10 +80,11 @@ To inspect one or more participants' death chain around an anomaly without first
 ```bash
 python -m wcl_raid_coach coach evidence \
   "https://www.warcraftlogs.com/reports/<code>#fight=12" \
-  --at-ms 210472 --window-ms 10000 --player-id 17
+  --at-ms 210472 --window-ms 10000 --player-id 17 \
+  --expected-identity JKy1tpWXjw2rBYZm:17:22
 ```
 
-A Focused Evidence Window fully paginates each selected participant, returns only flat damage, healing, absorb, aura, death, and resurrection events, and rechecks the Report Revision. It remains process-local, creates no Report Index, Raw Page, Fight Bundle, manifest, or checkpoint, and does not establish responsibility or wipe causality.
+`--expected-identity` must be copied verbatim from the compact Mechanic Review's `evidence_identity`, preventing the stages from crossing a WCL Report, Report Revision, or Boss Attempt. A Focused Evidence Window accepts at most three participants sharing one anomaly time; different times require separate calls. It fully paginates each participant and returns referenced actor and ability names. Stdout contains at most 200 events, prioritizing deaths and resurrections before facts nearest the anchor; `evidence` reports truncation and the complete matched count. It remains process-local, creates no Report Index, Raw Page, Fight Bundle, Complete Bundle, Canonical Event, manifest, or checkpoint, and does not establish responsibility or wipe causality.
 
 For a formal Mechanic Review delivery, add `--report` to the same command; select `--locale zh-CN` (the default) or `--locale en`:
 
