@@ -31,6 +31,15 @@ class MechanicClient(Protocol):
         filter_expression: str,
     ) -> dict[str, Any]: ...
 
+    def fetch_focused_events_page(
+        self,
+        code: str,
+        fight_id: int,
+        start_time: float,
+        end_time: float,
+        target_id: int,
+    ) -> dict[str, Any]: ...
+
     def fetch_report_revision(self, code: str) -> int: ...
 
 
@@ -94,7 +103,7 @@ class MechanicReviewService:
         actors = (report.get("masterData") or {}).get("actors") or []
         names = encounter_name(encounter_id)
         difficulty_name = _difficulty_names(report).get(difficulty_id)
-        return {
+        result = {
             "action": "coach_mechanics",
             "selection_required": False,
             "identity": {
@@ -134,6 +143,176 @@ class MechanicReviewService:
                 float(fight["startTime"]),
                 float(fight["endTime"]),
             ),
+            "judgment": None,
+            "causal_attribution": None,
+        }
+        result["evidence_identity"] = _evidence_identity(result["identity"])
+        return result
+
+    def focused_evidence(
+        self,
+        ref: ReportRef,
+        *,
+        at_ms: float,
+        window_ms: float,
+        player_ids: list[int],
+        expected_identity: str,
+    ) -> dict[str, Any]:
+        report, rate_limit = self.client.fetch_report(ref.code)
+        self._validate_report(report, ref.code)
+        if ref.fight is None or ref.fight == "last":
+            raise InputError("Focused evidence requires an explicit numeric fight ID.")
+        current_identity = {
+            "report_code": ref.code,
+            "report_revision": report["revision"],
+            "fight_id": ref.fight,
+        }
+        if not isinstance(expected_identity, str) or expected_identity != _evidence_identity(current_identity):
+            raise RevisionChangedError(
+                "Focused evidence identity does not match the compact Mechanic Review."
+            )
+        fight = next((item for item in report["fights"] if item.get("id") == ref.fight), None)
+        if fight is None:
+            raise InputError(f"Fight {ref.fight} is not present in report {ref.code}.")
+        self._validate_fight(fight, report)
+        if not _is_finite_number(at_ms) or at_ms < 0:
+            raise InputError("--at-ms must be a finite non-negative number.")
+        if not _is_finite_number(window_ms) or window_ms <= 0:
+            raise InputError("--window-ms must be a finite positive number.")
+        if window_ms > 30_000:
+            raise InputError("--window-ms cannot exceed 30000 milliseconds.")
+        if not player_ids or any(type(player_id) is not int or player_id <= 0 for player_id in player_ids):
+            raise InputError("Focused evidence requires one or more positive --player-id values.")
+        if len(set(player_ids)) != len(player_ids):
+            raise InputError("Focused evidence player IDs must be unique.")
+        if len(player_ids) > 3:
+            raise InputError("Focused evidence accepts at most three players.")
+
+        actors = (report["masterData"] or {}).get("actors") or []
+        actors_by_id = {
+            actor.get("id"): actor
+            for actor in actors
+            if isinstance(actor, dict) and type(actor.get("id")) is int
+        }
+        friendly_players = fight.get("friendlyPlayers")
+        if (
+            not isinstance(friendly_players, list)
+            or any(type(player_id) is not int or player_id <= 0 for player_id in friendly_players)
+        ):
+            raise ApiError("WCL returned malformed Boss Attempt participants.")
+        participants = set(friendly_players)
+        if any(player_id not in participants for player_id in player_ids):
+            raise InputError("Every focused evidence player must be a Boss Attempt participant.")
+        for player_id in player_ids:
+            actor = actors_by_id.get(player_id)
+            if not isinstance(actor, dict) or actor.get("type") != "Player" or not isinstance(actor.get("name"), str):
+                raise ApiError("A focused evidence participant has invalid actor metadata.")
+
+        duration = float(fight["endTime"]) - float(fight["startTime"])
+        from_ms = max(0.0, float(at_ms) - float(window_ms))
+        to_ms = min(duration, float(at_ms) + float(window_ms))
+        if float(at_ms) > duration:
+            raise InputError("--at-ms is outside the Boss Attempt range.")
+        fetched_events: list[dict[str, Any]] = []
+        matched_events: list[dict[str, Any]] = []
+        page_count = 0
+        for player_id in player_ids:
+            player_events, player_pages = self._collect_focused_events(
+                ref.code,
+                int(fight["id"]),
+                float(fight["startTime"]) + from_ms,
+                float(fight["startTime"]) + to_ms,
+                player_id,
+            )
+            fetched_events.extend(player_events)
+            matched_events.extend(
+                event for event in player_events
+                if event.get("targetID") == player_id and event.get("type") in _FOCUSED_EVENT_TYPES
+            )
+            page_count += player_pages
+        matched_events.sort(key=lambda event: float(event["timestamp"]))
+        events = _focused_event_sample(matched_events, float(fight["startTime"]) + float(at_ms))
+        revision = self.client.fetch_report_revision(ref.code)
+        if type(revision) is not int:
+            raise ApiError("WCL did not return a numeric report revision.")
+        if revision != report["revision"]:
+            raise RevisionChangedError(
+                f"Report {ref.code} changed from revision {report['revision']} to {revision} during focused evidence collection."
+            )
+        names = encounter_name(int(fight["encounterID"]))
+        actor_ids = {
+            value
+            for event in events
+            for value in (event.get("sourceID"), event.get("targetID"), event.get("killerID"))
+            if type(value) is int and value > 0
+        }
+        if any(actor_id not in actors_by_id for actor_id in actor_ids):
+            raise ApiError("Focused evidence references unknown actor metadata.")
+        abilities = (report["masterData"] or {}).get("abilities") or []
+        if not isinstance(abilities, list) or any(not isinstance(ability, dict) for ability in abilities):
+            raise ApiError("WCL returned malformed ability metadata for focused evidence.")
+        abilities_by_id = {
+            ability.get("gameID"): ability
+            for ability in abilities
+            if isinstance(ability, dict) and type(ability.get("gameID")) is int
+        }
+        ability_ids = {
+            value
+            for event in events
+            for value in (
+                event.get("abilityGameID"), event.get("extraAbilityGameID"),
+                event.get("killingAbilityGameID"),
+            )
+            if type(value) is int and value > 0
+        }
+        if any(ability_id not in abilities_by_id for ability_id in ability_ids):
+            raise ApiError("Focused evidence references unknown ability metadata.")
+        return {
+            "action": "coach_evidence",
+            "identity": {
+                "report_code": ref.code,
+                "report_revision": revision,
+                "fight_id": fight["id"],
+                "encounter_id": fight["encounterID"],
+                "difficulty_id": fight["difficulty"],
+            },
+            "boss_attempt": {
+                "name_en": names[0] if names else fight.get("name"),
+                "name_zh": names[1] if names else None,
+                "kill": fight["kill"],
+            },
+            "window": {"at_ms": float(at_ms), "from_ms": from_ms, "to_ms": to_ms},
+            "players": [
+                {"actor_id": player_id, "name": actors_by_id.get(player_id, {}).get("name")}
+                for player_id in player_ids
+            ],
+            "evidence": {
+                "class": "focused_event_window",
+                "storage": "process_memory",
+                "server_filter": "target_id",
+                "event_types": list(_FOCUSED_EVENT_TYPES),
+                "fetched_event_count": len(fetched_events),
+                "matched_event_count": len(matched_events),
+                "returned_event_count": len(events),
+                "truncated": len(events) < len(matched_events),
+                "selection_policy": "deaths_and_resurrections_first_then_nearest_to_anchor",
+                "page_count": page_count,
+                "pagination_terminated": True,
+                "report_revision_checked_before_and_after": True,
+            },
+            "events": [_focused_event(event, float(fight["startTime"])) for event in events],
+            "actors": {
+                str(actor_id): {
+                    "name": actors_by_id.get(actor_id, {}).get("name"),
+                    "type": actors_by_id.get(actor_id, {}).get("type"),
+                }
+                for actor_id in sorted(actor_ids)
+            },
+            "abilities": {
+                str(ability_id): {"name": abilities_by_id.get(ability_id, {}).get("name")}
+                for ability_id in sorted(ability_ids)
+            },
+            "rate_limit": rate_limit,
             "judgment": None,
             "causal_attribution": None,
         }
@@ -306,6 +485,66 @@ class MechanicReviewService:
                 or float(next_cursor) in seen_cursors
             ):
                 raise ApiError("WCL returned an invalid Mechanic Evidence Set pagination cursor.")
+            seen_cursors.add(float(next_cursor))
+            cursor = float(next_cursor)
+
+    def _collect_focused_events(
+        self,
+        code: str,
+        fight_id: int,
+        start_time: float,
+        end_time: float,
+        target_id: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        cursor = start_time
+        seen_cursors: set[float] = set()
+        events: list[dict[str, Any]] = []
+        previous_timestamp: float | None = None
+        page_count = 0
+        while True:
+            page = self.client.fetch_focused_events_page(code, fight_id, cursor, end_time, target_id)
+            page_count += 1
+            page_events = page.get("data") if isinstance(page, dict) else None
+            if not isinstance(page_events, list) or any(not isinstance(item, dict) for item in page_events):
+                raise ApiError("WCL returned an invalid Focused Evidence Window page.")
+            if "nextPageTimestamp" not in page:
+                raise ApiError("Focused Evidence Window page omitted nextPageTimestamp.")
+            for event in page_events:
+                timestamp = event.get("timestamp")
+                if (
+                    isinstance(timestamp, bool)
+                    or not isinstance(timestamp, (int, float))
+                    or not _is_finite_number(timestamp)
+                ):
+                    raise ApiError("A Focused Evidence Window event has an invalid timestamp.")
+                if timestamp < cursor or timestamp > end_time:
+                    raise ApiError("A Focused Evidence Window event is outside the requested range.")
+                if not isinstance(event.get("type"), str) or not event["type"]:
+                    raise ApiError("A Focused Evidence Window event has an invalid type.")
+                for field in ("sourceID", "targetID", "abilityGameID", "extraAbilityGameID", "killerID", "killingAbilityGameID"):
+                    value = event.get(field)
+                    if value is not None and type(value) is not int:
+                        raise ApiError(f"A Focused Evidence Window event has an invalid {field}.")
+                for field in ("amount", "absorbed", "overheal", "overkill", "hitPoints", "maxHitPoints", "stack"):
+                    value = event.get(field)
+                    if value is not None and not _is_finite_number(value):
+                        raise ApiError(f"A Focused Evidence Window event has an invalid {field}.")
+                if previous_timestamp is not None and timestamp < previous_timestamp:
+                    raise ApiError("Focused Evidence Window events are not ordered by timestamp.")
+                previous_timestamp = float(timestamp)
+                events.append(event)
+            next_cursor = page["nextPageTimestamp"]
+            if next_cursor is None:
+                return events, page_count
+            if (
+                isinstance(next_cursor, bool)
+                or not isinstance(next_cursor, (int, float))
+                or not _is_finite_number(next_cursor)
+                or next_cursor <= cursor
+                or next_cursor > end_time
+                or float(next_cursor) in seen_cursors
+            ):
+                raise ApiError("WCL returned an invalid Focused Evidence Window pagination cursor.")
             seen_cursors.add(float(next_cursor))
             cursor = float(next_cursor)
 
@@ -551,6 +790,7 @@ def _base_rule(rule: MechanicRule, difficulty_id: int) -> dict[str, Any]:
             "verified" if difficulty_id in rule.verified_difficulties else "event_pattern_unverified"
         ),
         "expectation": rule.expectation,
+        "scope": rule.scope,
         "ability_ids": list(rule.ability_ids),
     }
 
@@ -665,6 +905,186 @@ def _actor(actor_id: Any, actors: dict[int, dict[str, Any]]) -> dict[str, Any] |
         return None
     value = actors.get(actor_id) or {}
     return {"actor_id": actor_id, "name": value.get("name"), "type": value.get("type")}
+
+
+def compact_mechanic_review(review: dict[str, Any]) -> dict[str, Any]:
+    if review.get("selection_required") is True:
+        return {
+            key: review[key]
+            for key in (
+                "action", "selection_required", "report_code", "report_revision",
+                "encounter_designator", "fight_choices", "rate_limit",
+            )
+            if key in review
+        } | {"output_mode": "compact"}
+    compact = {
+        key: review[key]
+        for key in (
+            "action", "selection_required", "identity", "evidence_identity", "boss_attempt", "ruleset",
+            "evidence", "judgment", "causal_attribution",
+        )
+        if key in review
+    }
+    compact["output_mode"] = "compact"
+    compact["mechanics"] = []
+    for mechanic in review.get("mechanics") or []:
+        if not isinstance(mechanic, dict):
+            continue
+        item = {
+            key: mechanic[key]
+            for key in (
+                "rule_id", "name_en", "name_zh", "validation_status", "expectation",
+                "scope", "ability_ids", "anomaly_detection", "summary",
+            )
+            if key in mechanic
+        }
+        anomalies = mechanic.get("anomalies") or []
+        player_anomalies = []
+        player_summary: dict[int, dict[str, Any]] = {}
+        suppressed_records = 0
+        suppressed_events = 0
+        for anomaly in anomalies:
+            if not isinstance(anomaly, dict):
+                continue
+            actor = anomaly.get("actor")
+            actors = anomaly.get("actors")
+            has_player = (
+                isinstance(actor, dict) and actor.get("type") == "Player"
+            ) or (
+                isinstance(actors, list)
+                and any(isinstance(value, dict) and value.get("type") == "Player" for value in actors)
+            )
+            if not has_player:
+                suppressed_records += 1
+                count = anomaly.get("event_count", 1)
+                suppressed_events += count if type(count) is int and count >= 0 else 1
+                continue
+            sanitized = {
+                key: anomaly[key]
+                for key in (
+                    "time_ms", "end_time_ms", "event_type", "ability_id", "actor", "actors",
+                    "event_count", "outcome", "episode", "aura_duration_ms",
+                )
+                if key in anomaly
+            }
+            if isinstance(actors, list):
+                player_actors = [
+                    value for value in actors
+                    if isinstance(value, dict) and value.get("type") == "Player"
+                ]
+                sanitized["actors"] = player_actors
+                raw_events = anomaly.get("raw_events")
+                player_event_counts: dict[int, int] = {}
+                if isinstance(raw_events, list):
+                    player_ids = {
+                        value.get("actor_id") for value in player_actors
+                        if type(value.get("actor_id")) is int
+                    }
+                    player_event_count = sum(
+                        1 for event in raw_events
+                        if isinstance(event, dict) and event.get("targetID") in player_ids
+                    )
+                    player_event_counts = {
+                        actor_id: sum(
+                            1 for event in raw_events
+                            if isinstance(event, dict) and event.get("targetID") == actor_id
+                        )
+                        for actor_id in player_ids
+                    }
+                    original_count = anomaly.get("event_count", len(raw_events))
+                    sanitized["event_count"] = player_event_count
+                    if type(original_count) is int and original_count > player_event_count:
+                        sanitized["suppressed_non_player_event_count"] = original_count - player_event_count
+            involved = [actor] if isinstance(actor, dict) else sanitized.get("actors", [])
+            for value in involved:
+                if not isinstance(value, dict) or value.get("type") != "Player" or type(value.get("actor_id")) is not int:
+                    continue
+                actor_id = value["actor_id"]
+                summary = player_summary.setdefault(actor_id, {
+                    "actor_id": actor_id,
+                    "name": value.get("name"),
+                    "record_count": 0,
+                    "event_count": 0,
+                    "first_time_ms": sanitized.get("time_ms"),
+                    "last_time_ms": sanitized.get("time_ms"),
+                })
+                summary["record_count"] += 1
+                count = (
+                    player_event_counts.get(actor_id, 1)
+                    if isinstance(actors, list)
+                    else sanitized.get("event_count", 1)
+                )
+                summary["event_count"] += count if type(count) is int and count >= 0 else 1
+                summary["last_time_ms"] = sanitized.get("end_time_ms", sanitized.get("time_ms"))
+            player_anomalies.append(sanitized)
+        item["anomalies"] = player_anomalies[:20]
+        item["player_anomaly_summary"] = sorted(
+            player_summary.values(), key=lambda value: (-value["record_count"], value["actor_id"])
+        )
+        if suppressed_records:
+            item["suppressed_anomalies"] = {
+                "pet_or_npc_records": suppressed_records,
+                "event_count": suppressed_events,
+            }
+        if len(player_anomalies) > 20:
+            item["suppressed_player_anomalies"] = len(player_anomalies) - 20
+        compact["mechanics"].append(item)
+    return compact
+
+
+_FOCUSED_EVENT_TYPES = (
+    "damage", "heal", "absorbed", "applybuff", "removebuff",
+    "applydebuff", "removedebuff", "death", "resurrect",
+)
+
+
+def _focused_event_sample(events: list[dict[str, Any]], anchor: float, limit: int = 200) -> list[dict[str, Any]]:
+    if len(events) <= limit:
+        return events
+    required = [event for event in events if event.get("type") in {"death", "resurrect"}][:limit]
+    required_ids = {id(event) for event in required}
+    remaining = sorted(
+        (event for event in events if id(event) not in required_ids),
+        key=lambda event: abs(float(event["timestamp"]) - anchor),
+    )
+    selected = required + remaining[:max(0, limit - len(required))]
+    return sorted(selected, key=lambda event: float(event["timestamp"]))
+
+
+def _evidence_identity(identity: dict[str, Any]) -> str:
+    code = identity.get("report_code")
+    revision = identity.get("report_revision")
+    fight_id = identity.get("fight_id")
+    if not isinstance(code, str) or type(revision) is not int or type(fight_id) is not int:
+        raise ApiError("Mechanic evidence identity is malformed.")
+    return f"{code}:{revision}:{fight_id}"
+
+
+def _focused_event(event: dict[str, Any], fight_start: float) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "fight_time_ms": float(event["timestamp"]) - fight_start,
+        "type": event["type"],
+    }
+    fields = {
+        "sourceID": "source_id",
+        "targetID": "target_id",
+        "abilityGameID": "ability_id",
+        "extraAbilityGameID": "extra_ability_id",
+        "amount": "amount",
+        "absorbed": "absorbed",
+        "overheal": "overheal",
+        "overkill": "overkill",
+        "hitPoints": "hit_points",
+        "maxHitPoints": "max_hit_points",
+        "killerID": "killer_id",
+        "killingAbilityGameID": "killing_ability_id",
+        "stack": "stack",
+    }
+    for source, target in fields.items():
+        value = event.get(source)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and _is_finite_number(value):
+            result[target] = value
+    return result
 
 
 def _ability_id(event: dict[str, Any]) -> int | None:
