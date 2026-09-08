@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import math
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from .dataset import validate_complete_bundle
 from .storage import read_json, sha256_file
 
 
-ANALYSIS_SCHEMA_VERSION = 3
+ANALYSIS_SCHEMA_VERSION = 4
 
 
 def analyze_player(
@@ -63,9 +64,21 @@ def analyze_player(
             if isinstance(actor, dict) and actor.get("petOwner") == actor_id and isinstance(actor.get("id"), int)
         )
     casts: Counter[str] = Counter()
+    # Direct casts may still be automatic; sourced Profiles select meaningful key actions.
+    player_casts: Counter[str] = Counter()
+    owned_actor_casts: Counter[str] = Counter()
+    synthetic_casts: Counter[str] = Counter()
+    player_first_cast_ms: dict[str, float] = {}
     first_cast_ms: dict[str, float] = {}
     damage_by_ability: Counter[str] = Counter()
     damage_by_target: Counter[str] = Counter()
+    damage_by_npc: Counter[str] = Counter()
+    npc_ids = {
+        actor["id"]: str(actor["gameID"])
+        for actor in actors if isinstance(actor, dict)
+        and type(actor.get("id")) is int and actor.get("type") == "NPC"
+        and type(actor.get("gameID")) is int and actor["gameID"] > 0
+    } if isinstance(actors, list) else {}
     healing_by_ability: Counter[str] = Counter()
     resource_events = 0
     interrupts = 0
@@ -91,10 +104,21 @@ def analyze_player(
                 timestamp = event.get("fight_time_ms")
                 if ability not in first_cast_ms and isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
                     first_cast_ms[ability] = float(timestamp)
+                if source["actor_id"] != actor_id:
+                    owned_actor_casts[ability] += 1
+                elif type(event.get("ability_id")) is not int or event["ability_id"] <= 1:
+                    # WCL 1 is Melee, not client Spell 1; nonpositive IDs are not client spells.
+                    synthetic_casts[ability] += 1
+                else:
+                    player_casts[ability] += 1
+                    if ability not in player_first_cast_ms and is_finite_number(timestamp):
+                        player_first_cast_ms[ability] = float(timestamp)
             elif from_player and event_type == "damage":
                 damage_by_ability[ability] += amount
                 if isinstance(target, dict) and isinstance(target.get("actor_id"), int):
                     damage_by_target[str(target["actor_id"])] += amount
+                    if target["actor_id"] in npc_ids:
+                        damage_by_npc[npc_ids[target["actor_id"]]] += amount
             elif from_player and event_type == "heal":
                 healing_by_ability[ability] += amount
             elif from_player and event_type in {"resourcechange", "energize"}:
@@ -103,6 +127,10 @@ def analyze_player(
                 interrupts += 1
             if to_player and event_type == "death":
                 deaths += 1
+    duration = valid_duration_ms(fight.get("duration_ms"))
+    collection = manifest["collection"]
+    if duration != collection["end_time"] - collection["start_time"]:
+        duration = None
     result = {
         "schema_version": ANALYSIS_SCHEMA_VERSION,
         "identity": dict(identity),
@@ -114,11 +142,22 @@ def analyze_player(
             "index_sha256": sha256_file(index_path),
         },
         "metrics": {
+            "duration_ms": duration,
+            "damage_per_minute": per_minute(sum(damage_by_ability.values()), duration),
+            "healing_per_minute": per_minute(sum(healing_by_ability.values()), duration),
             "casts": dict(sorted(casts.items())),
+            "player_casts": dict(sorted(player_casts.items())),
+            "owned_actor_casts": dict(sorted(owned_actor_casts.items())),
+            "synthetic_casts": dict(sorted(synthetic_casts.items())),
+            "player_first_cast_ms": dict(sorted(player_first_cast_ms.items())),
+            "player_casts_per_minute": {
+                ability: per_minute(count, duration) for ability, count in sorted(player_casts.items())
+            },
             "first_cast_ms": dict(sorted(first_cast_ms.items())),
             "damage_by_ability": dict(sorted(damage_by_ability.items())),
             "damage_total": sum(damage_by_ability.values()),
             "damage_by_target": dict(sorted(damage_by_target.items())),
+            "damage_by_npc": dict(sorted(damage_by_npc.items())),
             "healing_by_ability": dict(sorted(healing_by_ability.items())),
             "healing_total": sum(healing_by_ability.values()),
             "resource_events": resource_events,
@@ -136,6 +175,25 @@ def analyze_player(
             "spec_name": player.get("spec"),
         }
     return result
+
+
+def is_finite_number(value: Any) -> bool:
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def valid_duration_ms(value: Any) -> int | float | None:
+    return value if is_finite_number(value) and value > 0 else None
+
+
+def per_minute(value: Any, duration_ms: Any) -> float | None:
+    duration = valid_duration_ms(duration_ms)
+    if duration is None or not is_finite_number(value) or value < 0:
+        return None
+    rate = value / duration * 60000
+    return rate if math.isfinite(rate) else None
 
 
 def _amount(fields: dict[str, Any]) -> int:

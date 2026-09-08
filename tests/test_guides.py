@@ -5,11 +5,11 @@ import unittest
 from pathlib import Path
 
 from wcl_raid_coach.errors import InputError
-from wcl_raid_coach.guides import create_guide_snapshot
+from wcl_raid_coach.guides import create_guide_snapshot, verify_guide_snapshot
 from wcl_raid_coach.cohort import identify_benchmark
 
 
-ABILITY_NAMES = {"1": "中文技能"}
+ABILITY_NAMES = {"123": "中文技能", "1": "错误的客户端名称"}
 CONTENT_NAMES = {
     "1007": {"map_id": 3004, "name_en": "Boss 7", "name_zh": "中文首领七"},
     "1008": {"map_id": 3004, "name_en": "Boss 8", "name_zh": "中文首领八"},
@@ -23,17 +23,19 @@ CONTENT_ARGS = {
 
 def benchmark(encounter_id: int) -> dict:
     return identify_benchmark({
-        "schema_version": 2,
+        "schema_version": 3,
         "cohort_id": "c" * 64,
         "identity": {"game_version": "retail", "encounter_id": encounter_id, "difficulty_id": 4, "partition_id": 2, "class_name": "DeathKnight", "spec_name": "Unholy"},
-        "encounter_profile_id": f"profile-{encounter_id}",
-        "specialization_profile_id": "spec-profile",
+        "encounter_profile_id": "a" * 64,
+        "specialization_profile_id": "b" * 64,
         "sources": {"encounter": [], "specialization": []},
         "sample_count": 3,
         "confidence": "low",
         "stable_pattern_claims_allowed": True,
-        "mechanic_anchors": [{"ability_id": 1, "name": "Mechanic", "observed_anchor_ms": 10000}],
-        "metrics": {"damage_total_median": 200, "casts_median": {"1": 2}},
+        "mechanic_anchors": [{"ability_id": 123, "name": "Mechanic", "observed_anchor_ms": 10000}],
+        "metrics": {"damage_total_median": 200, "casts_median": {"1": 2, "999": 5},
+                    "key_action_casts_median": {"123": 2}, "key_action_first_cast_ms_median": {"123": 1000},
+                    "damage_by_npc_median": {"900": 150}},
     })
 
 
@@ -49,6 +51,7 @@ class GuideTests(unittest.TestCase):
                 **CONTENT_ARGS,
             )
             markdown = Path(snapshot["markdown_path"]).read_text(encoding="utf-8")
+            verify_guide_snapshot(snapshot)
         self.assertEqual(len(snapshot["chapters"]), 2)
         self.assertIn("中文首领七", markdown)
         self.assertIn("中文首领八", markdown)
@@ -62,7 +65,32 @@ class GuideTests(unittest.TestCase):
         self.assertEqual(snapshot["chapters"][0]["benchmark_id"], benchmark(1007)["benchmark_id"])
         self.assertEqual(snapshot["content_names_build"], "12.1.0.69587")
         self.assertEqual(snapshot["content_names_sha256"], "a" * 64)
-        self.assertEqual(snapshot["render_schema_version"], 2)
+        self.assertEqual(snapshot["render_schema_version"], 3)
+        self.assertEqual(snapshot["schema_version"], 2)
+        self.assertEqual([item["ability_id"] for item in snapshot["chapters"][0]["abilities"]], [123])
+        self.assertIn('NPC gameID', markdown)
+        self.assertIn('"900": 150', markdown)
+        self.assertNotIn("错误的客户端名称", markdown)
+        self.assertNotIn("999", markdown)
+
+    def test_guide_does_not_fall_back_to_unclassified_casts(self) -> None:
+        value = benchmark(1007)
+        value["metrics"].pop("key_action_casts_median")
+        value["metrics"].pop("key_action_first_cast_ms_median")
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = create_guide_snapshot([identify_benchmark(value)], specialization_name="邪恶死亡骑士",
+                                             output_dir=Path(directory), ability_names=ABILITY_NAMES, **CONTENT_ARGS)
+            self.assertEqual(snapshot["chapters"][0]["abilities"], [])
+            self.assertNotIn("错误的客户端名称", Path(snapshot["markdown_path"]).read_text(encoding="utf-8"))
+
+    def test_rejects_synthetic_ids_in_localized_key_actions_or_mechanic_anchors(self) -> None:
+        for replacement in ({"metrics": {"key_action_casts_median": {"1": 2}}},
+                            {"mechanic_anchors": [{"ability_id": 1, "name": "Melee"}]}):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(InputError, "synthetic"):
+                    create_guide_snapshot([identify_benchmark(benchmark(1007) | replacement)],
+                                          specialization_name="邪恶死亡骑士", output_dir=Path(directory),
+                                          ability_names=ABILITY_NAMES, **CONTENT_ARGS)
 
     def test_refuses_case_study_as_stable_guide(self) -> None:
         value = benchmark(1007) | {"sample_count": 2, "stable_pattern_claims_allowed": False}

@@ -11,10 +11,211 @@ from unittest.mock import patch
 
 from wcl_raid_coach.__main__ import create_parser, main, run
 from wcl_raid_coach.cohort import identify_benchmark
-from wcl_raid_coach.errors import RevisionChangedError
+from wcl_raid_coach.errors import InputError, RevisionChangedError
+
+
+def comparison_ready_workflow(root: Path, analysis: Path, benchmark: Path) -> Path:
+    from wcl_raid_coach.personal_workflow import _persist_result
+
+    root = root.resolve()
+
+    def ref(path: Path) -> dict[str, str]:
+        path = path.resolve()
+        return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    result = _persist_result(root / "data" / "outputs", {
+        "schema_version": 2,
+        "artifact_type": "personal_review_workflow",
+        "workflow_started_monotonic_seconds": 0.0,
+        "clock": {
+            "wall_minus_monotonic_seconds": 0.0,
+            "session_marker": "0" * 16,
+            "baseline_tolerance_seconds": 1.0,
+            "continuity_available": True,
+        },
+        "completion_state": "comparison_ready",
+        "report_available": True,
+        "player_evidence_complete": True,
+        "comparison_available": True,
+        "reference_sample_target": 3,
+        "qualified_reference_samples": 3,
+        "candidate_progress": [],
+        "next_ranking_candidate": None,
+        "blockers": [],
+        "budget": {
+            "target_seconds": 180.0,
+            "elapsed_seconds": 1.0,
+            "validation_render_reserve_seconds": 20.0,
+            "optional_acquisition_open": True,
+            "kind": "measured_soft_target",
+        },
+        "stage_timings_seconds": {"selection": 0.1, "player_evidence": 0.1, "benchmark_build": 0.1},
+        "stage_progress": {
+            "retrieval": "completed", "agent_synthesis": "pending",
+            "validation": "pending", "rendering": "pending",
+        },
+        "artifacts": {
+            "requested_personal_analysis_path": str(analysis.resolve()),
+            "personal_analysis": ref(analysis),
+            "ranking_cohort": None,
+            "encounter_profile": None,
+            "specialization_profile": None,
+            "reference_analyses": [],
+            "benchmark_reference_evidence": [],
+            "encounter_benchmark": ref(benchmark),
+            "previous_workflow": None,
+            "progress": [],
+        },
+        "benchmark_reused": False,
+    })
+    return Path(result["workflow_path"])
 
 
 class CliTests(unittest.TestCase):
+    def test_personal_workflow_rejects_caller_supplied_timing_flags(self) -> None:
+        with self.assertRaisesRegex(InputError, "unrecognized arguments"):
+            create_parser().parse_args([
+                "coach", "personal-workflow", "analysis.json",
+                "--cohort", "cohort.json", "--encounter-profile", "encounter.json",
+                "--specialization-profile", "specialization.json",
+                "--elapsed-seconds", "1", "--stage-timing", "selection=1",
+            ])
+
+    def test_candidates_records_proven_terminal_pagination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = create_parser().parse_args([
+                "--data-root", str(Path(temporary) / "data"),
+                "--cache-root", str(Path(temporary) / "cache"),
+                "coach", "candidates", "--encounter-id", "1", "--difficulty-id", "2",
+                "--partition-id", "3", "--game-version", "retail",
+                "--class-name", "Mage", "--spec-name", "Arcane",
+            ])
+            with (
+                patch("wcl_raid_coach.__main__.resolve_credentials", return_value=object()),
+                patch("wcl_raid_coach.__main__.WclClient") as client_type,
+            ):
+                client_type.return_value.fetch_rankings.return_value = {
+                    "rankings": [], "hasMorePages": False,
+                }
+                result = run(args)
+        self.assertEqual(result["cohort"]["pagination"], {
+            "first_page": 1, "last_page": 1, "has_more_pages": False,
+            "truncated": False, "target_reached": False, "exhausted": True,
+        })
+
+    def test_candidates_preserves_complete_deduplicated_page_after_goal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = create_parser().parse_args([
+                "--data-root", str(Path(temporary) / "data"),
+                "--cache-root", str(Path(temporary) / "cache"),
+                "coach", "candidates", "--encounter-id", "1", "--difficulty-id", "2",
+                "--partition-id", "3", "--game-version", "retail", "--sample-goal", "2", "--page", "4",
+                "--class-name", "Mage", "--spec-name", "Arcane",
+            ])
+            candidates = [
+                {"reportCode": code, "fightID": index, "sourceID": 10 + index,
+                 "startTime": "2026-09-01T00:00:00Z"}
+                for index, code in enumerate(("ABC", "DEF", "GHI", "JKL"), 1)
+            ]
+            with (
+                patch("wcl_raid_coach.__main__.resolve_credentials", return_value=object()),
+                patch("wcl_raid_coach.__main__.WclClient") as client_type,
+            ):
+                client_type.return_value.fetch_rankings.return_value = {
+                    "rankings": candidates, "hasMorePages": True,
+                }
+                result = run(args)
+        self.assertEqual(
+            [item["report_code"] for item in result["cohort"]["eligible_recent_candidates"]],
+            ["ABC", "DEF", "GHI", "JKL"],
+        )
+        self.assertEqual(result["cohort"]["pagination"], {
+            "first_page": 4, "last_page": 4, "has_more_pages": True,
+            "truncated": False, "target_reached": True, "exhausted": False,
+        })
+
+    def test_candidates_deduplicates_overlapping_ranking_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = create_parser().parse_args([
+                "--data-root", str(Path(temporary) / "data"),
+                "--cache-root", str(Path(temporary) / "cache"),
+                "coach", "candidates", "--encounter-id", "1", "--difficulty-id", "2",
+                "--partition-id", "3", "--game-version", "retail", "--sample-goal", "3",
+                "--class-name", "Mage", "--spec-name", "Arcane",
+            ])
+            candidates = [
+                {"reportCode": code, "fightID": index, "name": f"Player {index}",
+                 "startTime": "2026-09-01T00:00:00Z"}
+                for index, code in enumerate(("ABC", "DEF", "GHI"), 1)
+            ]
+            with (
+                patch("wcl_raid_coach.__main__.resolve_credentials", return_value=object()),
+                patch("wcl_raid_coach.__main__.WclClient") as client_type,
+            ):
+                client_type.return_value.fetch_rankings.side_effect = [
+                    {"rankings": candidates[:2], "hasMorePages": True},
+                    {"rankings": candidates[1:], "hasMorePages": False},
+                ]
+                client_type.return_value.resolve_candidate_source.side_effect = [11, 12, 13]
+                result = run(args)
+
+        self.assertEqual(
+            [item["report_code"] for item in result["cohort"]["eligible_recent_candidates"]],
+            ["ABC", "DEF", "GHI"],
+        )
+        self.assertEqual(result["cohort"]["pagination"]["last_page"], 2)
+        self.assertTrue(result["cohort"]["pagination"]["exhausted"])
+        self.assertEqual(client_type.return_value.resolve_candidate_source.call_count, 3)
+
+    def test_personal_report_requires_workflow_before_loading_artifacts(self) -> None:
+        with self.assertRaisesRegex(InputError, "required: --workflow"):
+            create_parser().parse_args([
+                "coach", "personal-report", "analysis.json", "benchmark.json", "comparison.json",
+            ])
+
+    def test_partial_personal_report_returns_finalized_delivery_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = create_parser().parse_args([
+                "--data-root", str(root / "data"), "--cache-root", str(root / "cache"),
+                "coach", "personal-report", "analysis.json", "--workflow", "workflow.json",
+                "--encounter-profile", "encounter.json", "--specialization-profile", "spec.json",
+            ])
+            report = {
+                "document_id": "a" * 64, "html_path": "report.html",
+                "html_sha256": "b" * 64, "index_path": "report.json",
+            }
+            delivery = {"elapsed_seconds": 12.5, "target_met": True}
+            with (
+                patch("wcl_raid_coach.__main__._ensure_ability_names", return_value={"mapping_path": "names.json", "metadata_path": "metadata.json"}),
+                patch("wcl_raid_coach.__main__.assemble_partial_personal_review_document", return_value={"document": True}),
+                patch("wcl_raid_coach.__main__.validate_report_document", return_value={"document": True}),
+                patch("wcl_raid_coach.__main__.render_report_document", return_value=report),
+                patch("wcl_raid_coach.__main__.finalize_personal_review_delivery", return_value=delivery),
+            ):
+                result = run(args)
+        self.assertEqual(result["delivery"], delivery)
+
+    def test_comparison_ready_personal_report_returns_finalized_delivery_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = create_parser().parse_args([
+                "--data-root", str(root / "data"), "--cache-root", str(root / "cache"),
+                "coach", "personal-report", "analysis.json", "benchmark.json", "comparison.json",
+                "--workflow", "workflow.json",
+            ])
+            delivery = {"artifact": {"status": "delivered"}, "elapsed_seconds": 12.5, "target_met": True}
+            with (
+                patch("wcl_raid_coach.__main__._ensure_ability_names", return_value={"mapping_path": "names.json", "metadata_path": "metadata.json"}),
+                patch("wcl_raid_coach.__main__.assemble_personal_review_document", return_value={"document": True}) as assemble,
+                patch("wcl_raid_coach.__main__.validate_report_document", return_value={"document": True}),
+                patch("wcl_raid_coach.__main__.render_report_document", return_value={"document_id": "a" * 64, "html_path": "report.html", "html_sha256": "b" * 64, "index_path": "report.json"}),
+                patch("wcl_raid_coach.__main__.finalize_personal_review_delivery", return_value=delivery),
+            ):
+                result = run(args)
+        self.assertEqual(result["delivery"], delivery)
+        self.assertEqual(assemble.call_args.kwargs["workflow_path"], Path("workflow.json"))
+
     def test_parser_accepts_explicit_env_file(self) -> None:
         args = create_parser().parse_args(["--env-file", "/actual/workspace/.env", "doctor"])
 
@@ -147,6 +348,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result["task"]["status"], "pending_confirmation")
         self.assertEqual(result["task"]["context"]["encounters"][1]["encounter_name"], "中文首领八")
         self.assertEqual(result["task"]["context"]["encounters"][1]["encounter_name_en"], "Boss 8")
+
+    def test_personal_review_defaults_to_three_without_changing_candidate_default(self) -> None:
+        personal = create_parser().parse_args([
+            "coach", "resolve", "--mode", "personal_review",
+            "--report-url", "https://www.warcraftlogs.com/reports/AbC123#fight=7&source=10",
+        ])
+        candidates = create_parser().parse_args([
+            "coach", "candidates", "--game-version", "12.1", "--encounter-id", "1",
+            "--difficulty-id", "4", "--partition-id", "2", "--class-name", "Mage",
+            "--spec-name", "Fire",
+        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            personal.data_root = Path(temporary) / "data"
+            result = run(personal)
+
+        self.assertEqual(result["task"]["request"]["sample_goal"], 3)
+        self.assertEqual(candidates.sample_goal, 10)
 
     def test_coach_review_labels_complete_bundle_analysis_as_log_fact(self) -> None:
         args = create_parser().parse_args(
@@ -465,13 +683,13 @@ class CliTests(unittest.TestCase):
             cache_root = root / "cache"
             mapping_path = data_root / "ability-names.zhCN.json"
             mapping_path.parent.mkdir(parents=True)
-            mapping_path.write_text(json.dumps({"1": "中文技能", "2": "中文机制"}), encoding="utf-8")
+            mapping_path.write_text(json.dumps({"2": "中文机制", "3": "中文技能"}), encoding="utf-8")
             benchmark_path = root / "benchmark.json"
             benchmark_path.write_text(
                 json.dumps(
                     identify_benchmark(
                         {
-                            "schema_version": 2,
+                            "schema_version": 3,
                             "cohort_id": "c" * 64,
                             "identity": {
                                 "game_version": "retail",
@@ -485,7 +703,7 @@ class CliTests(unittest.TestCase):
                             "confidence": "low",
                             "stable_pattern_claims_allowed": True,
                             "mechanic_anchors": [{"ability_id": 2, "name": "English Mechanic", "observed_anchor_ms": 10000}],
-                            "metrics": {"casts_median": {"1": 2}},
+                            "metrics": {"key_action_casts_median": {"3": 2}},
                         }
                     )
                 ),
@@ -564,8 +782,11 @@ class CliTests(unittest.TestCase):
             root = Path(temporary)
             source_document = personal_document(root)
             refs = {item["kind"]: item["path"] for item in source_document["source_artifacts"]}
+            workflow = comparison_ready_workflow(
+                root, Path(refs["personal_analysis"]), Path(refs["encounter_benchmark"])
+            )
             mapping_path = root / "ability-names.zhCN.json"
-            mapping_path.write_text(json.dumps({"1": "本地化技能"}), encoding="utf-8")
+            mapping_path.write_text(json.dumps({"2": "本地化技能"}), encoding="utf-8")
             metadata_path = root / "ability-names.zhCN.meta.json"
             metadata_path.write_text(json.dumps({
                 "build": "12.1.0.69587", "mapping_sha256": hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
@@ -576,21 +797,122 @@ class CliTests(unittest.TestCase):
                     "mapping_path": str(mapping_path), "metadata_path": str(metadata_path),
                     "build": "12.1.0.69587",
                 }),
+                patch("wcl_raid_coach.report_documents.validate_comparison_workflow"),
+                patch("wcl_raid_coach.personal_workflow.validate_comparison_workflow"),
                 redirect_stdout(output),
             ):
                 status = main([
                     "--data-root", str(root / "data"), "--cache-root", str(root / "cache"),
                     "coach", "personal-report", refs["personal_analysis"],
-                    refs["encounter_benchmark"], refs["comparison"], "--locale", "zh-CN",
+                    refs["encounter_benchmark"], refs["comparison"],
+                    "--workflow", str(workflow), "--locale", "zh-CN",
                 ])
             result = json.loads(output.getvalue())
             html_exists = Path(result["report"]["html_path"]).is_file()
 
         self.assertEqual(status, 0)
         self.assertEqual(result["action"], "coach_personal_report")
-        self.assertEqual(result["document"]["abilities"][0]["ability_id"], 1)
+        self.assertEqual(result["document"]["abilities"][0]["ability_id"], 2)
         self.assertEqual(result["document"]["abilities"][0]["name"], "本地化技能")
         self.assertTrue(html_exists)
+
+    def test_coach_personal_report_validates_persists_and_renders_advice(self) -> None:
+        from tests.test_advice import advice_setup
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            refs, mapping, metadata, draft, encounter_profile, specialization_profile = advice_setup(root)
+            workflow = comparison_ready_workflow(
+                root, refs["personal_analysis"], refs["encounter_benchmark"]
+            )
+            output = io.StringIO()
+            with (
+                patch("wcl_raid_coach.__main__._ensure_ability_names", return_value={
+                    "mapping_path": str(mapping), "metadata_path": str(metadata),
+                    "build": "12.1.0.69587",
+                }),
+                patch("wcl_raid_coach.report_documents.validate_comparison_workflow"),
+                patch("wcl_raid_coach.personal_workflow.validate_comparison_workflow"),
+                redirect_stdout(output),
+            ):
+                status = main([
+                    "--data-root", str(root / "data"), "--cache-root", str(root / "cache"),
+                    "coach", "personal-report", str(refs["personal_analysis"]),
+                    str(refs["encounter_benchmark"]), str(refs["comparison"]),
+                    "--workflow", str(workflow),
+                    "--advice", str(draft), "--encounter-profile", str(encounter_profile),
+                    "--specialization-profile", str(specialization_profile), "--locale", "zh-CN",
+                ])
+            result = json.loads(output.getvalue())
+            advice_exists = Path(result["advice"]["path"]).is_file()
+            html = Path(result["report"]["html_path"]).read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(result["action"], "coach_personal_report")
+        self.assertTrue(advice_exists)
+        self.assertEqual(len(result["document"]["advice"]), 1)
+        self.assertIn("本地化技能", html)
+
+    def test_coach_personal_report_rejects_malformed_advice_as_input_error(self) -> None:
+        from tests.test_advice import advice_setup
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            refs, mapping, metadata, draft, encounter_profile, specialization_profile = advice_setup(root)
+            draft.write_text("{", encoding="utf-8")
+            output = io.StringIO()
+            with (
+                patch("wcl_raid_coach.__main__._ensure_ability_names", return_value={
+                    "mapping_path": str(mapping), "metadata_path": str(metadata),
+                    "build": "12.1.0.69587",
+                }),
+                redirect_stdout(output),
+            ):
+                status = main([
+                    "--data-root", str(root / "data"), "--cache-root", str(root / "cache"),
+                    "coach", "personal-report", str(refs["personal_analysis"]),
+                    str(refs["encounter_benchmark"]), str(refs["comparison"]),
+                    "--workflow", str(root / "missing-workflow.json"),
+                    "--advice", str(draft), "--encounter-profile", str(encounter_profile),
+                    "--specialization-profile", str(specialization_profile), "--locale", "zh-CN",
+                ])
+            result = json.loads(output.getvalue())
+
+        self.assertEqual(status, 1)
+        self.assertEqual(result["error"], "invalid_input")
+        self.assertIn("valid UTF-8 JSON", result["message"])
+
+    def test_personal_report_retains_immutable_advice_when_render_fails(self) -> None:
+        from tests.test_advice import advice_setup
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            refs, mapping, metadata, draft, encounter_profile, specialization_profile = advice_setup(root)
+            workflow = comparison_ready_workflow(
+                root, refs["personal_analysis"], refs["encounter_benchmark"]
+            )
+            output = io.StringIO()
+            with (
+                patch("wcl_raid_coach.__main__._ensure_ability_names", return_value={
+                    "mapping_path": str(mapping), "metadata_path": str(metadata), "build": "12.1.0.69587",
+                }),
+                patch("wcl_raid_coach.__main__.render_report_document", side_effect=InputError("render failed")),
+                patch("wcl_raid_coach.report_documents.validate_comparison_workflow"),
+                redirect_stdout(output),
+            ):
+                status = main([
+                    "--data-root", str(root / "data"), "--cache-root", str(root / "cache"),
+                    "coach", "personal-report", str(refs["personal_analysis"]), str(refs["encounter_benchmark"]),
+                    str(refs["comparison"]), "--workflow", str(workflow), "--advice", str(draft),
+                    "--encounter-profile", str(encounter_profile), "--specialization-profile", str(specialization_profile),
+                ])
+            result = json.loads(output.getvalue())
+            advice_dir = root / "data" / "outputs" / "advice"
+            self.assertEqual(status, 1)
+            self.assertEqual(result["message"], "render failed")
+            artifacts = list(advice_dir.glob("*.json"))
+            self.assertEqual(len(artifacts), 1)
+            self.assertEqual(json.loads(artifacts[0].read_text(encoding="utf-8"))["artifact_type"], "coaching_advice")
 
 
 if __name__ == "__main__":

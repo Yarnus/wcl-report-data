@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from wcl_raid_coach.analysis import analyze_player
+from wcl_raid_coach.analysis import analyze_player, per_minute
 from wcl_raid_coach.dataset import query_bundle
 from wcl_raid_coach.errors import DatasetError, InputError
 
 
 class AnalysisTests(unittest.TestCase):
-    def make_bundle(self, root: Path) -> tuple[Path, Path]:
+    def make_bundle(self, root: Path, extra_events: list | None = None, duration_ms: object = 1000) -> tuple[Path, Path]:
         revision_root = root / "reports" / "ABC" / "revisions" / "1"
         bundle_root = revision_root / "fights" / "7"
         bundle_root.mkdir(parents=True)
@@ -24,6 +24,7 @@ class AnalysisTests(unittest.TestCase):
             {"sequence": 3, "fight_time_ms": 400, "type": "damage", "source": {"actor_id": 11}, "target": {"actor_id": 20}, "ability_id": 3, "fields": {"amount": 50}},
             {"sequence": 4, "fight_time_ms": 500, "type": "death", "source": None, "target": {"actor_id": 10}, "ability_id": None, "fields": {}},
         ]
+        events.extend(extra_events or [])
         events_path = bundle_root / "events.jsonl.gz"
         canonical_bytes = "".join(
             json.dumps(event, separators=(",", ":")) + "\n" for event in events
@@ -53,9 +54,9 @@ class AnalysisTests(unittest.TestCase):
                     ],
                 },
             },
-            "actors": [{"id": 10, "name": "Player"}, {"id": 11, "name": "Pet", "petOwner": 10}],
+            "actors": [{"id": 10, "name": "Player"}, {"id": 11, "name": "Pet", "petOwner": 10}, {"id": 20, "name": "Boss", "type": "NPC", "gameID": 900}],
             "abilities": [{"gameID": 1, "name": "Ability", "type": 1, "icon": "spell"}],
-            "fights": [{"fight_id": 7, "encounter_id": 1007, "difficulty": 4, "duration_ms": 1000, "participants": [{"actor_id": 10, "name": "Player", "class": "DeathKnight", "spec": "Unholy"}]}],
+            "fights": [{"fight_id": 7, "encounter_id": 1007, "difficulty": 4, "duration_ms": duration_ms, "participants": [{"actor_id": 10, "name": "Player", "class": "DeathKnight", "spec": "Unholy"}]}],
         }
         index_hash = hashlib.sha256(json.dumps(index_value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         manifest_path = bundle_root / "manifest.json"
@@ -101,7 +102,36 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["deaths"], 1)
         self.assertEqual(result["comparison_identity"]["encounter_id"], 1007)
         self.assertEqual(result["comparison_identity"]["game_version"], "12.1")
-        self.assertEqual(result["schema_version"], 3)
+        self.assertEqual(result["schema_version"], 4)
+
+    def test_duration_and_player_casts_preserve_owned_actor_audit(self) -> None:
+        extra = [
+            {"sequence": 5, "fight_time_ms": 600, "type": "cast", "source": {"actor_id": 11}, "ability_id": 123, "fields": {}},
+            {"sequence": 6, "fight_time_ms": 700, "type": "cast", "source": {"actor_id": 10}, "ability_id": 456, "fields": {}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, index = self.make_bundle(Path(directory), extra)
+            metrics = analyze_player(manifest, index, 10)["metrics"]
+        self.assertEqual(metrics["duration_ms"], 1000)
+        self.assertEqual(metrics["damage_per_minute"], 9000)
+        self.assertEqual(metrics["casts"], {"1": 1, "123": 1, "456": 1})
+        self.assertEqual(metrics["player_casts"], {"456": 1})
+        self.assertEqual(metrics["owned_actor_casts"], {"123": 1})
+        self.assertEqual(metrics["synthetic_casts"], {"1": 1})
+        self.assertEqual(metrics["damage_total"], 150)
+        self.assertEqual(metrics["damage_by_npc"], {"900": 150})
+
+    def test_unavailable_or_inconsistent_duration_preserves_totals_without_rates(self) -> None:
+        for duration in (None, 0, -1, True, "1000", 2000):
+            with self.subTest(duration=duration), tempfile.TemporaryDirectory() as directory:
+                manifest, index = self.make_bundle(Path(directory), duration_ms=duration)
+                metrics = analyze_player(manifest, index, 10)["metrics"]
+                self.assertEqual(metrics["damage_total"], 150)
+                self.assertIsNone(metrics["duration_ms"])
+                self.assertIsNone(metrics["damage_per_minute"])
+        for duration in (None, 0, -1, True, "1000", float("nan"), float("inf"), 10 ** 400):
+            with self.subTest(duration=duration):
+                self.assertIsNone(per_minute(100, duration))
 
     def test_ranking_partition_name_is_the_game_version_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

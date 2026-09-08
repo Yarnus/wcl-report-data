@@ -105,19 +105,35 @@ Raid Guide 不需要调用方重写 Report Document。把 `coach guide` 返回�
 python -m wcl_raid_coach coach guide-report "<DATA_ROOT>/guides/<SNAPSHOT_ID>.json"
 ```
 
-Personal Review 同样不需要重抄指标或身份。把 `coach review`、`coach benchmark` 和 `coach compare` 生成的三个 JSON artifact 直接交给第一方 assembler：
+Personal Review 同样不需要重抄指标或身份。正式交付必须把 `coach review`、`coach benchmark` 和 `coach compare` 生成的三个 JSON artifact 与 canonical comparison-ready `--workflow` 一起交给第一方 assembler；CLI 会在 HTML/index 后完成 delivery finalization，不提供绕过 workflow 的正式 Personal Review：
 
 ```bash
 python -m wcl_raid_coach coach personal-report \
   "<WORK_DIR>/personal-analysis.json" \
   "<WORK_DIR>/encounter-benchmark.json" \
   "<WORK_DIR>/comparison.json" \
+  --workflow "<DATA_ROOT>/outputs/personal-workflows/<WORKFLOW_ID>.json" \
+  --advice "<WORK_DIR>/advice-draft.json" \
+  --encounter-profile "<WORK_DIR>/encounter-profile.json" \
+  --specialization-profile "<WORK_DIR>/specialization-profile.json" \
   --locale zh-CN
 ```
 
-该命令重新校验 Personal Analysis schema `3`、Encounter Benchmark schema `2` 和 Comparison schema `2`，从 Complete Bundle 重新计算 Personal Analysis，再从前两个 artifact 重新计算并精确核对 Comparison。Report Revision、Boss Attempt、actor、匿名状态、职业、专精、装等、ranking partition、game version、encounter、difficulty、Benchmark ID、样本数、置信度和所有指标都由 artifact 派生。它不接受调用方标题、摘要、指标或建议文本。技能行保留数字 `ability_id` 和 WCL 原名；中文名只有在 ID 同时存在于 Report Index 和已校验 `ability-names.zhCN.json` 时使用并记录 mapping build，mapping 未命中时回退 WCL 原名且 mapping build 为 `null`。
+计时必须在 Boss Attempt 和玩家选定后立即开始，并早于目标 Complete Bundle retrieval：先用尚不存在的 Analysis 路径调用 `coach personal-workflow` 创建 canonical blocked workflow，后续每次调用都将它作为 `--previous-workflow`。monotonic 起点与跨调用墙钟间隔保守覆盖 retrieval、Agent advice synthesis、validation、rendering 和 delivery；3 到 9 个合格 Reference Samples 全部保留。delivery artifact 只采样到 HTML/index 校验，后续 finalization 才声明 delivery 已持久化。`stage_progress` 仅由 CLI 推导，不接受调用方 timing。Agent synthesis 持续时间无法直接观测，因此标记为 `unavailable`，最终 `target_met` 为 `null`；不能仅凭总 elapsed 宣称 180/30 秒目标已证明。
 
-CLI 返回派生的 `document`，以及 `report` 中的 `html_path`、`html_sha256`、`index_path`、`document_id` 和两项 schema version。HTML 不加载远程字体、样式、脚本或图片；页面支持系统主题以及 Auto/亮色/暗色手动选择。assembler 保留精确 Snapshot ID 和文件 SHA-256，并逐 Boss 复制 encounter/Benchmark/Profile 身份、样本数、置信度、指标、本地化技能、机制锚点和来源；不同 Boss 的字段不会混合。renderer 会解析并校验每个来源 artifact，而不只检查路径和 SHA-256；Personal Review 必须提供 Personal Analysis、Encounter Benchmark 和 Comparison 三个来源。规则集和 Guide 来源 URL 必须是公开 HTTP(S) URL，authority 不得包含用户信息，query string 或 fragment 不得包含凭据或签名参数。Mechanic Review 只能携带扁平最小证据摘录；Personal Review 使用固定中性文字，不生成机制归因、死亡原因、责任、建议或可实现提升声明；Raid Guide 不生成 Snapshot 中不存在的 rotation、天赋、装备、阶段策略、建议或可实现目标。
+Personal Review 只复用绑定当前 Ranking Cohort 且能从每个 Reference Sample 的 Complete Bundle evidence 完整重建的 Encounter Benchmark；3 到 9 个合格样本全部保留并可交付，不为达到 10 而继续采集。Boss Attempt 和玩家选定后、获取目标 Complete Bundle 前，先以尚不存在的 Analysis 路径调用 `coach personal-workflow`，得到 canonical blocked workflow；后续调用必须带其 `--previous-workflow`。monotonic 起点和跨调用墙钟间隔会保守覆盖 retrieval、Agent advice synthesis、validation、rendering 及 delivery；系统重启或连续性无法证明时停止目标判定。
+
+workflow 保存精确的 Cohort、Profile、Benchmark、全部 Reference Samples 及其 Complete Bundle provenance。assembly、render 和 delivery 都重新读取并深度校验这些快照。delivery artifact 的计时边界只到 HTML/index 校验；随后写入的 finalization 才声明 delivery artifact 已持久化。CLI 从实际 artifact 状态推导 `stage_progress`，不接受调用方 timing。CLI 无法直接观测 Agent synthesis 持续时间，因此该阶段标为 `unavailable`，最终 `target_met` 为 `null`，不会仅凭总 elapsed 宣称 180/30 秒目标已证明。`wcl_network_measurement` 仍为 `not_measured`。content-addressed Artifact 只有规范文件字节和 SHA-256 完全一致时才复用；失败后已写入的不可变 artifact 可作为 orphan 保留。
+
+每个 rejection 必须使用 Ranking Cohort 中的稳定候选身份，不能以样本数推算进度。`coach candidates` 达到目标时保留最后一次已查询的完整去重页，因此同页剩余候选可在后续 workflow 调用中继续使用；pagination 记录真实已查询页范围、远端 `hasMorePages`、`target_reached` 和 `exhausted`。只有 metadata 明确证明终页时才声明 page exhaustion；否则候选用尽要求刷新 Cohort。预算、已证明的 page exhaustion 或 API failure 后仍不足 3 个合格样本时，可运行 `coach personal-report <ANALYSIS> --workflow <PARTIAL_READY_WORKFLOW> --encounter-profile <PROFILE> --specialization-profile <PROFILE> [--advice <DRAFT>]`。报告从 workflow、Cohort 和 Reference Sample evidence 推导样本数，不接受手填整数。玩家 Complete Bundle 不完整时 workflow 只返回 `blocked`，并可用 `--progress <CHECKPOINT>` 按路径/hash 保留进度，不生成报告或声称 Complete Bundle。
+
+该命令重新校验 Personal Analysis schema `4`、Encounter Benchmark schema `3` 和 Comparison schema `3`。`--advice` 可省略；提供时必须同时传入两个 Profile 路径。Coaching Advice schema `2` 不接受自由文本动作、条件或验证目标，只接受有限结构化枚举，由 CLI 按 `zh-CN`/`en` 生成文案，因此不能承载责任、因果、保证提升或中位数处方；这不是自然语言语义审查，超出枚举的表达必须人工复核。任何带 ability ID 的动作都要求 Specialization Profile 将该技能声明为 `action_type: "player_cast"`。事件支持的能力动作还必须引用同一 ability ID 的 direct-player `player_cast`/`key_action` 指标；owned aggregate damage/healing 只保留审计用途，不能支持建议。当前 Personal Review 没有 Mechanic Review 来源，所以机制 Advice 只能使用有当前 Profile 指导的条件性经验类别。CLI 同时验证事实值及本地 Profile 路径、文件哈希、Profile ID 和 sources。Advice 一经写入即保持不可变；后续组装或渲染失败时可能留下可安全复用的 content-addressed 孤儿 artifact。
+
+建议中的 Spell 必须使用 ability ID；中文输出要求命中已校验的 zhCN SpellName mapping，缺失时返回结构化错误，不自行翻译。Specialization Profile 只有把技能显式声明为 `action_type: "player_cast"`，才会生成 `key_action_*`；即使所有 Reference Sample 都是零次也保留零中位数。未声明技能以及 `automatic`、`internal`、`owned_actor` 不进入关键动作，WCL synthetic Melee ID `1` 不能声明为玩家动作。关键动作展示不回退使用含宠物和内部事件的原始 `casts_median`。
+
+Encounter Profile 的非空 `priority_target_ids` 和 `excluded_target_ids` 必须声明 `target_id_type: "npc_game_id"`；旧的 report-local actor ID 不能跨 WCL Report 比较，必须按各 Report Index 的 NPC `gameID` 重建 Profile、Benchmark 和 Comparison。已有本地 Complete Bundle、Report Index、Profile 和 ability-name mapping 足够时，这个重建流程可以离线运行；缺少 Reference Sample 数据或中文 mapping 时仍需先联网准备。Personal Review 同时展示总量、双方时长、每分钟伤害/治疗及有效 Reference Sample 分母；归一化不校正存活、停手、阶段、天赋、装备或任务分配差异，样本中位数也不是推荐动作。数字只能出现在结构化事实引用中。Advice/Report renderer 对来源 URL 使用相同的公开 HTTP(S)、无认证信息和无 credential query 检查。
+
+CLI 返回派生的 `document` 和 `report` 路径/内容身份；带建议时还返回 `advice.path`、`advice.sha256` 和 `advice.advice_id`。HTML 无外部资源。Personal Review 固定展开输出、生存、机制和团队贡献四个维度，每个维度把可用事实/比较、改进建议、适用条件、下一次 Boss Attempt 验证目标及证据/限制放在一起；完整比较明细随后保留。没有建议、未评估、中文 SpellName 缺失或 Reference Samples 不足时不会补写结论，对应位置明确显示“未评估”或拒绝生成带未验证中文名的 Advice。renderer 会重新解析并核对所有来源；Personal Review 建议不得声明未验证原因、责任、保证提升或把样本中位数当作推荐次数。当前只接受 Report Document schema `2`；旧 schema `1` 的静态 HTML 仍可直接查看，但不能重新渲染。需要先基于当前 Analysis、Benchmark、Comparison source artifacts 重新运行 `personal-report`。
 
 准备 URL 中选中的战斗：
 
@@ -142,7 +158,7 @@ python -m wcl_raid_coach query \
 
 CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。完整参数参见 `python -m wcl_raid_coach --help`，完整工作流参见 [Skill 使用说明](SKILL.md)。
 
-`coach review`、`coach benchmark`、`coach guide` 和 `coach compare` 只消费本地 Artifact；本地名称 mapping 已存在时，它们不会为了校验 Artifact 而读取 WCL 凭据。带 `--partition-id` 的 `coach review` 从同一 Report Index 的 ranking partition 解析 game version，并生成 Personal Analysis schema `3`；schema `2` 分析必须重新生成。缺少 partition 元数据的旧 Report Index 需要删除对应本地 Report Revision 数据后重新 `prepare`。访问 WCL API 的命令仍需要 OAuth client credentials。
+`coach review`、`coach benchmark`、`coach guide`、`coach compare` 和 `coach personal-report` 只消费本地 Artifact。当前链路使用 Personal Analysis `4`、Encounter Benchmark `3` 和 Comparison `3`；旧 schema 必须重新生成。访问 WCL API 的命令仍需要 OAuth client credentials。
 
 ## Encounter Designator 与名称映射
 
@@ -191,6 +207,14 @@ content-names.zhCN.meta.json
 outputs/reports/
 ├── <html-sha256>.html
 └── <html-sha256>.json
+outputs/advice/
+└── <advice-id>.json
+outputs/personal-workflows/
+├── <workflow-id>.json
+└── index.json
+outputs/personal-deliveries/
+├── <delivery-id>.json
+└── <finalization-id>.json
 ```
 
 同一 Report Revision 内的 Fight Bundle 不可变。重新导出报告会创建新的 revision 目录；`latest.json` 只是指针，可复现的消费者应使用 manifest 中记录的 revision。原始页单独压缩保存，以便中断下载继续并审计字段规范化过程。
@@ -206,6 +230,8 @@ outputs/reports/
 - 查询结果是证据，不是结论。没有独立的首领机制知识来源时，不得把伤害标记为可规避或推断责任。
 - Mechanic Evidence Set 只在当前进程中存在，不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点。它必须完整跟随过滤事件分页到 `nextPageTimestamp: null`，保持固定 Boss Attempt 时间范围，并在前后校验同一 Report Revision。
 - Mechanic Review 使用安装包内最新版本的规则，不按报告日期回放历史热修规则。更新规则需要更新软件包；输出记录规则版本、来源和 `selection_policy: latest`。
+- Personal Review 的 workflow、Advice、Report Index、delivery 和 finalization 都是本 CLI 写入的内容寻址 Artifact。组装、渲染或 finalization 失败后已经写入但没有被最终报告引用的 Artifact 会作为 orphan 保留；必须依据引用关系和保留策略由明确的人工或专用回收命令处理，不能自动删除或覆盖。
+- Personal Review timing 使用本机 monotonic 与 wall clock；测试中的 deterministic injected clock 只验证状态和连续性，不代表实际本机墙钟耗时，也不包含 WCL 网络测量。CLI 的正式报告命令必须提供 `--workflow`。
 - `coach mechanics --compact` 只裁剪当前 stdout，不改变 Mechanic Evidence Set；Focused Evidence Window 是显式参与者和短时间范围的临时跟进证据，不是 Complete Bundle 或 Canonical Event 集。
 - 每条机制的触发、成功和失败计数都是规则定义的事件信号统计；不可由日志判定时为 `null`。异常仅表示已验证事件模式命中，不表示玩家责任、表现评价或灭团因果。
 - 教练 Artifact 只支持本 CLI 在用户本地数据目录或工作目录中生成和消费。Hash 用于内容身份和损坏检测，不认证来源；外部提供的 Artifact 不属于受支持输入。使用旧 HMAC schema 的 Complete Bundle、Ranking Cohort、Personal Review、Encounter Benchmark 和 Guide Snapshot 必须重新生成。

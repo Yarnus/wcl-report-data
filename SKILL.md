@@ -142,29 +142,80 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach render "<WORK_DIR>/report.do
 
 候选选择、澄清、进度、错误、数据查询和局部追问仍直接使用文本。用户说“直接回答”或“不要报告”时不生成 HTML；用户明确说“生成报告”或“导出 HTML”时必须生成。对话中交付短摘要和 `html_path` 的可点击链接。
 
-Report Document 只能包含对应类型允许的结构化字段，不得包含调用方 HTML、CSS 或 JavaScript；`source_artifacts` 必须记录来源 artifact 路径和 SHA-256。Mechanic Review 只保留结论、计数和扁平最小证据摘录，不得复制完整 Mechanic Evidence Set；Personal Review 不得补写机制归因或建议；Raid Guide 不得补写 Snapshot 中不存在的 rotation、天赋、装备、阶段策略或具体建议。只有玩家、Boss Attempt、Benchmark 或正式结论范围变化时才生成新报告；不改变正式结论的局部追问直接文本回答。
+Report Document 只能包含对应类型允许的结构化字段，不得包含调用方 HTML、CSS 或 JavaScript；`source_artifacts` 必须记录来源 artifact 路径和 SHA-256。Mechanic Review 只保留结论、计数和扁平最小证据摘录，不得复制完整 Mechanic Evidence Set；Personal Review 建议必须来自下面的 Coaching Advice 门禁；Raid Guide 不得补写 Snapshot 中不存在的 rotation、天赋、装备、阶段策略或具体建议。
 
 ## 5. 个人复盘
 
 裸报告 URL 先执行 `inspect`，让用户明确选择一个 Boss Attempt 和一个参与者。完整 URL 仍须确认 URL 中的 fight/source 指向预期对象。
 
-准备 Complete Bundle 后计算个人日志事实：
+Boss Attempt 和玩家一经确认，先用尚不存在的 `<PERSONAL_ANALYSIS_PATH>` 初始化 canonical workflow；这一步必须早于目标 Complete Bundle 的 `prepare`/`review`。先解析或复用所需 Ranking Cohort 与两个 Profile，然后调用：
+
+```text
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-workflow "<PERSONAL_ANALYSIS_PATH>" --cohort "<COHORT_PATH>" --encounter-profile "<ENCOUNTER_PROFILE>" --specialization-profile "<SPECIALIZATION_PROFILE>"
+```
+
+首次结果预期为 `blocked`、`retrieval: in_progress` 和 `personal_analysis: null`；保存其 `workflow_path`。随后准备目标 Complete Bundle 并计算个人日志事实：
 
 ```text
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach review "<MANIFEST_PATH>" --index "<REPORT_INDEX_PATH>" --source-id <ACTOR_ID> --partition-id <PARTITION_ID>
 ```
 
-`coach review` 只产生结构化日志事实。要评价表现，必须再建立同 encounter、difficulty、class、spec 和 partition 的 Encounter Benchmark。不得把总排名差距写成可实现提升。
+`coach review` 只产生结构化日志事实。优先复用同 encounter、difficulty、class、spec、partition 且 Profile ID/source 一致的现有 Encounter Benchmark；3 到 9 个 Reference Samples 的低置信度 Benchmark 可立即使用，不为凑到 10 个而补样本。没有可复用 Benchmark 时，Personal Review 以 3 个通过 Complete Bundle、硬条件和 Encounter Profile eligibility 的 Reference Samples 为目标。Ranking Candidate 不是 Reference Sample；候选被拒后只在预算允许时补下一个。
 
-运行 `coach benchmark` 建立 Encounter Benchmark，再运行 `coach compare` 保存精确 Comparison 后，正式交付不得手工重写身份、指标或正文。直接把三个 artifact 组装为 Personal Review Report Document 并渲染自包含 HTML：
+计时从上述 selection 后的首次 blocked workflow 开始。CLI 用系统 monotonic clock 生成起点、累计 elapsed 和内部 stage timings；公开 CLI 没有原始 timing 参数。后续调用必须传入 canonical previous workflow，跨调用墙钟间隔会保守计入 elapsed；系统重启或时钟连续性无法证明时停止目标判定。workflow/finalization 的 `stage_progress` 由 CLI 推导 retrieval、Agent synthesis、validation 和 rendering 状态，不接受调用方 timing。CLI 无法直接观测 Agent 建议合成持续时间，因此交付将 `agent_synthesis` 标为 `unavailable`，即使 elapsed 小于 180/30 秒也令 `target_met: null`。`wcl_network_measurement` 仍为 `not_measured`。
 
 ```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-report "<PERSONAL_ANALYSIS_PATH>" "<ENCOUNTER_BENCHMARK_PATH>" "<COMPARISON_PATH>" --locale zh-CN
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-workflow "<PERSONAL_ANALYSIS_PATH>" --cohort "<COHORT_PATH>" --encounter-profile "<ENCOUNTER_PROFILE>" --specialization-profile "<SPECIALIZATION_PROFILE>" --reference-analysis "<REFERENCE_ANALYSIS>" --benchmark "<EXISTING_BENCHMARK>" --previous-workflow "<PREVIOUS_WORKFLOW>" --progress "<CHECKPOINT_PATH>"
 ```
 
-英文交付使用 `--locale en`。命令会重新校验 schema `3`/`2`/`2`，从 Complete Bundle 重算 Personal Analysis，从 Analysis 与 Benchmark 重算并精确核对 Comparison，再派生完整文档。向用户交付短摘要和 `report.html_path`，并保留 `report.document_id`、`report.html_sha256` 与 `report.index_path` 供复核。
+只有 selection 后的初始化调用省略 `--previous-workflow`；后续 retrieval、复用、Reference Sample 校验和 Benchmark 建立都必须传入它。候选失败时用稳定身份记录，例如 `--rejection ABC123:7:42=player_death`。`coach candidates` 达到目标时保留最后一次查询的完整去重页，同页剩余候选可按稳定身份继续消费。每次返回下一候选前，CLI 都先按 20 秒校验/渲染预留检查预算。不要启动新的可选工作后再检查。已在途 WCL 请求和限流等待不能取消，可能越过目标；完成后再次调用 workflow 会记录实际 elapsed 并停止后续调度。只有 Ranking Cohort 的分页 metadata 明确证明无更多页时才记录 `ranking_page_exhausted`，否则候选用尽会记录 `ranking_cohort_refresh_required`。`completion_state` 为 `acquiring` 时只处理 `next_ranking_candidate`；为 `comparison_ready` 时运行 `coach compare` 和完整报告；为 `partial_ready` 时不得创建 Benchmark/Comparison。
 
-Personal Review 必须保留精确 Report Revision、Boss Attempt、actor、匿名状态、职业/专精、可用装等、完整比较硬条件、Benchmark ID、样本数、置信度和指标。技能以数字 `ability_id` 作为审计身份；中文展示仅使用已校验 `ability-names.zhCN.json` 的 ID mapping，未命中时回退同一 Report Index 的 WCL 原名并把 mapping build 记录为 `null`。不得根据文本名称反查技能。assembler 不接受自定义标题、摘要、指标或建议参数，并使用固定中性文字；不得补写机制归因、死亡原因、责任、建议、推荐或可实现提升。
+`--progress` 只按路径和 SHA-256 保留 Raw Page/checkpoint 等进度引用，不把它声明为 Complete Bundle。目标 Personal Analysis 或其 Complete Bundle 不可用时，workflow 输出 `blocked`、`player_evidence_incomplete` 和 `personal_analysis: null`；不得运行报告命令。重复调用通过前序 workflow 恢复 Reference Sample 路径和稳定候选状态，不得用样本数或拒绝数推算候选 cursor。系统重启导致 monotonic 基准中断时保留这些进度，记录 `timing_continuity_unavailable` 并停止新的可选采集，而不是伪造连续 elapsed。
+
+运行 `coach benchmark` 建立 Encounter Benchmark，再运行 `coach compare` 保存精确 Comparison 后，正式交付不得手工重写身份、指标或正文。comparison-ready workflow 交付时把 `--workflow <COMPARISON_READY_WORKFLOW>` 与两个 artifact 一起传入；`--workflow` 是 assembler、renderer 和 delivery 的必需来源。三处都会重新读取 workflow 绑定的 Ranking Cohort、两个 Profile、Benchmark 及每个 Reference Sample Complete Bundle 的路径和哈希，并用 `verify_benchmark_for_cohort` 重建精确 Benchmark；证据在 workflow 创建后变化即拒绝。CLI 在 HTML/index 存在后完成 content-addressed delivery finalization，返回 status、elapsed 和 `target_met`。content-addressed artifact 仅在规范文件字节与 SHA-256 完全一致时复用，解析对象相同但字节不同也拒绝覆盖。直接把三个 artifact 组装为 Personal Review Report Document 并渲染自包含 HTML：
+
+```text
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-report "<PERSONAL_ANALYSIS_PATH>" "<ENCOUNTER_BENCHMARK_PATH>" "<COMPARISON_PATH>" --workflow "<COMPARISON_READY_WORKFLOW>" --advice "<WORK_DIR>/advice-draft.json" --encounter-profile "<WORK_DIR>/encounter-profile.json" --specialization-profile "<WORK_DIR>/specialization-profile.json" --locale zh-CN
+```
+
+英文交付使用 `--locale en`。命令会重新校验 schema `4`/`3`/`3`，从 Complete Bundle 重算 Personal Analysis，从 Analysis 与 Benchmark 重算并精确核对 Comparison，再校验建议和派生完整文档。向用户交付短摘要和 `report.html_path`，并保留 `advice.advice_id`、`report.document_id`、`report.html_sha256` 与 `report.index_path` 供复核。不需要建议时省略 `--advice`，相应维度是 Not Evaluated，不是通过。
+
+若 workflow 以 0 到 2 个合格 Reference Samples 结束，使用明确 partial 路径：
+
+```text
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-report "<PERSONAL_ANALYSIS_PATH>" --workflow "<PARTIAL_READY_WORKFLOW>" --encounter-profile "<ENCOUNTER_PROFILE>" --specialization-profile "<SPECIALIZATION_PROFILE>" --advice "<WORK_DIR>/advice-draft.json" --locale zh-CN
+```
+
+partial 报告从 workflow 深度重验 Ranking Cohort、Reference Sample Complete Bundle evidence、资格结果及所有 artifact hash，并由此推导 0 到 2 的合格样本数；不接受调用方整数。它仍重算玩家 Complete Bundle 事实并校验两个 Profile，显式输出 `comparison.status: unavailable`，且不创建 Benchmark/Comparison。Advice 可以省略；存在时，经验型 Advice 只能引用已校验 Profile 来源，事件支持 Advice 只能引用 Personal Analysis 事实。玩家 Complete Bundle 不完整时不能走 partial 报告。
+
+Personal Review 必须保留精确 Report Revision、Boss Attempt、actor、完整比较硬条件、Benchmark ID、样本数、置信度、总量、双方时长、每分钟伤害/治疗及各自有效 Reference Sample 数。每分钟值只在分母有效时生成；不得声称它校正存活、停手、阶段、天赋、装备或任务分配差异。
+
+关键动作只使用 Benchmark `key_action_*` 字段。Specialization Profile 必须以 `action_type: "player_cast"` 显式声明；所有 Reference Sample 均为零次时仍保留零中位数。不得回退使用原始 `casts_median`，也不得把 `automatic`、`internal`、`owned_actor`、WCL synthetic Melee ID `1` 或 Birth 等内部事件写成玩家应增加施放的动作。Encounter Profile 的非空目标列表使用 `target_id_type: "npc_game_id"`；report-local actor ID 必须迁移为 NPC gameID 后重建 Profile、Benchmark 和 Comparison。已有全部本地 artifact 和 mapping 时可离线重建，缺失数据时先完成采集。普通事实技能未命中中文 mapping 时可回退 WCL 原名；建议中的 Spell 必须按 ability ID 命中已校验的 zhCN mapping，否则停止中文报告并披露建议不可用。样本中位数只描述观察结果，不是推荐次数。
+
+### Coaching Advice 草稿
+
+当前 Agent 从已校验 artifact 和当前 Profile 来源合成草稿，不调用新的模型服务。草稿只能使用以下形状；正文使用报告 locale，不自行翻译 Spell 名称：
+
+```json
+{
+  "schema_version": 2,
+  "locale": "zh-CN",
+  "items": [{
+    "dimension": "output",
+    "evidence_class": "event_supported",
+    "action": {"kind": "use_ability", "ability_id": 12345},
+    "conditions": ["effective_window", "mechanic_safe"],
+    "verification_goal": "check_ability_usage",
+    "ability_ids": [12345],
+    "fact_references": [{"source": "comparison", "path": "/metrics/cast_count_deltas/12345", "value": -2}],
+    "guidance_references": [{"profile_kind": "specialization", "source_index": 0}]
+  }]
+}
+```
+
+`dimension` 只接受 `output`、`survival`、`mechanics`、`team_contribution`；`evidence_class` 只接受 `event_supported` 或 `experience_based`。`action.kind`、`conditions` 和 `verification_goal` 只能使用 schema `2` 的有限结构化枚举，CLI 按 locale 生成文案，因此不存在可验证的责任、因果、保证提升或中位数处方自由文本槽位；这不是自然语言语义审查。任何带 ability ID 的动作都必须绑定 Specialization Profile 中同 ID 的 `action_type: "player_cast"` 声明，包括经验型 Advice。事件支持项必须引用维度相关的明确事实白名单；能力动作只能使用同 ability ID 的 direct-player `player_cast`/`key_action` 字段。按技能 damage/healing、`automatic`、`internal`、`owned_actor` 和宠物聚合只供审计，不得支持建议。生存只使用死亡字段；团队贡献使用打断、总治疗或资源事件。Personal Review 当前没有 Mechanic Review 来源，因此机制维度不得使用 `event_supported`；只能在当前 Profile 指导支持时使用明确标为有条件的 `experience_based`。经验型项必须引用当前 Benchmark Profile 来源。两个本地 Profile 的路径、哈希、Profile ID 和 sources 必须与 Benchmark 一致。事实引用逐值精确核对；指导引用按 Profile kind 和零基 source index 解析，Agent 不重抄来源摘要。
+
+建议 artifact 按内容地址保存在 `outputs/advice/`，workflow 及 index 在 `outputs/personal-workflows/`，delivery/finalization 在 `outputs/personal-deliveries/`，Report Document/index 在 `outputs/reports/`。这些 Artifact 写入后不覆盖也不因后续失败删除；组装、renderer 或 delivery finalization 失败可能保留不可变的 content-addressed 孤儿 artifact，必须依据引用关系和保留策略由明确的人工或专用回收命令处理。Report Document 只接受 schema `2`；旧 schema `1` 的静态 HTML 可查看但不可重渲染，必须从当前 Analysis、Benchmark、Comparison source artifacts 重新运行 `personal-report`。
 
 ## 6. 通用攻略
 

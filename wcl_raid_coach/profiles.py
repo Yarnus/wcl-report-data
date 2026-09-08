@@ -34,9 +34,19 @@ def validate_profile(value: Any, expected_kind: ProfileKind | None = None) -> di
                 raise InputError(f"Specialization Profile identity requires {field}.")
         if not isinstance(value.get("abilities"), list):
             raise InputError("Specialization Profile abilities must be a list.")
+        ability_ids = set()
         for ability in value["abilities"]:
             if not isinstance(ability, dict) or not _positive_int(ability.get("id")):
                 raise InputError("Every specialization ability requires a positive numeric id.")
+            if ability["id"] in ability_ids:
+                raise InputError("Specialization ability IDs must be unique.")
+            ability_ids.add(ability["id"])
+            if "action_type" in ability and ability["action_type"] not in (
+                "player_cast", "automatic", "internal", "owned_actor"
+            ):
+                raise InputError("Specialization ability action_type is invalid.")
+            if ability.get("action_type") == "player_cast" and ability["id"] == 1:
+                raise InputError("WCL synthetic Melee ID 1 cannot be declared a player_cast.")
         for field in ("resources", "cooldown_relationships", "role_guardrails"):
             if not isinstance(value.get(field), list) or not value[field]:
                 raise InputError(f"Specialization Profile requires non-empty {field}.")
@@ -51,6 +61,11 @@ def validate_profile(value: Any, expected_kind: ProfileKind | None = None) -> di
             raise InputError("Encounter Profile eligibility requires priority_target_ids.")
         if not isinstance(eligibility.get("excluded_target_ids"), list):
             raise InputError("Encounter Profile eligibility requires excluded_target_ids.")
+        target_ids = eligibility["priority_target_ids"] + eligibility["excluded_target_ids"]
+        if (target_ids or "target_id_type" in eligibility) and eligibility.get("target_id_type") != "npc_game_id":
+            raise InputError("Encounter Profile target IDs require target_id_type npc_game_id; report-local actor IDs are not comparable.")
+        if any(not _positive_int(item) for item in target_ids) or len(set(target_ids)) != len(target_ids):
+            raise InputError("Encounter Profile target IDs must be distinct positive NPC gameIDs across both lists.")
         for field in ("phases", "mechanic_anchors"):
             if not isinstance(value.get(field), list) or not value[field]:
                 raise InputError(f"Encounter Profile requires non-empty {field}.")
@@ -77,11 +92,18 @@ def validate_profile(value: Any, expected_kind: ProfileKind | None = None) -> di
             datetime.fromisoformat(source["accessed_at"].replace("Z", "+00:00"))
         except ValueError as exc:
             raise InputError("Profile source accessed_at must be ISO 8601.") from exc
+    declared_id = value.get("profile_id")
+    if declared_id is not None and (
+        not isinstance(declared_id, str) or not re.fullmatch(r"[0-9a-f]{64}", declared_id)
+    ):
+        raise InputError("Profile profile_id must be a SHA-256 hex digest.")
     canonical = dict(value)
     canonical.pop("profile_id", None)
     profile_id = hashlib.sha256(
         json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    if declared_id is not None and declared_id != profile_id:
+        raise InputError("Profile profile_id does not match its canonical content.")
     return canonical | {"profile_id": profile_id}
 
 

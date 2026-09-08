@@ -11,6 +11,7 @@ from typing import Any, Sequence
 
 from . import __version__
 from .analysis import analyze_player
+from .advice import create_coaching_advice
 from .ability_names import ensure_ability_names
 from .content_names import RAID_DIFFICULTY_IDS, ensure_content_names, load_content_names, localize_encounter
 from .api import WclClient
@@ -26,8 +27,10 @@ from .models import ReportRef
 from .mechanics import MechanicReviewService, compact_mechanic_review
 from .guides import create_guide_snapshot
 from .profiles import ProfileStore
+from .personal_workflow import finalize_personal_review_delivery, orchestrate_personal_review
 from .report_documents import (
     assemble_personal_review_document,
+    assemble_partial_personal_review_document,
     assemble_raid_guide_document,
     create_mechanic_review_report,
     render_report_document,
@@ -95,7 +98,7 @@ def create_parser() -> argparse.ArgumentParser:
     resolve.add_argument("--report-url")
     resolve.add_argument("--fight-id", type=int)
     resolve.add_argument("--source-id", type=int)
-    resolve.add_argument("--sample-goal", type=int, default=10)
+    resolve.add_argument("--sample-goal", type=int)
     coach_commands.add_parser("status", help="List persisted coaching tasks.")
     confirm = coach_commands.add_parser("confirm", help="Confirm a resolved Coach Request.")
     confirm.add_argument("task_id")
@@ -142,12 +145,35 @@ def create_parser() -> argparse.ArgumentParser:
     guide_report.add_argument("snapshot", type=Path)
     personal_report = coach_commands.add_parser(
         "personal-report",
-        help="Assemble and render a Personal Review from Analysis, Benchmark, and Comparison artifacts.",
+        help="Deliver a workflow-validated Personal Review.",
     )
     personal_report.add_argument("analysis", type=Path)
-    personal_report.add_argument("benchmark", type=Path)
-    personal_report.add_argument("comparison", type=Path)
+    personal_report.add_argument("benchmark", type=Path, nargs="?")
+    personal_report.add_argument("comparison", type=Path, nargs="?")
+    personal_report.add_argument(
+        "--advice", type=Path,
+        help="Validate an Agent-authored Coaching Advice draft and include it in the report.",
+    )
+    personal_report.add_argument("--encounter-profile", type=Path)
+    personal_report.add_argument("--specialization-profile", type=Path)
+    personal_report.add_argument(
+        "--workflow", type=Path, required=True,
+        help="Canonical comparison-ready or partial-ready Personal Review workflow.",
+    )
     personal_report.add_argument("--locale", choices=("zh-CN", "en"), default="zh-CN")
+    workflow = coach_commands.add_parser(
+        "personal-workflow", help="Evaluate bounded Personal Review acquisition and reuse."
+    )
+    workflow.add_argument("analysis", type=Path)
+    workflow.add_argument("--cohort", type=Path, required=True)
+    workflow.add_argument("--encounter-profile", type=Path, required=True)
+    workflow.add_argument("--specialization-profile", type=Path, required=True)
+    workflow.add_argument("--reference-analysis", type=Path, action="append", default=[])
+    workflow.add_argument("--benchmark", type=Path, action="append", default=[])
+    workflow.add_argument("--rejection", action="append", default=[], help="Candidate progress as REPORT:FIGHT:SOURCE=reason.")
+    workflow.add_argument("--blocker", action="append", default=[])
+    workflow.add_argument("--previous-workflow", type=Path)
+    workflow.add_argument("--progress", type=Path, action="append", default=[], help="Preserve a checkpoint or progress artifact by path and hash.")
     candidates = coach_commands.add_parser("candidates", help="Discover content-addressed recent ranking candidates.")
     candidates.add_argument("--encounter-id", type=int, required=True)
     candidates.add_argument("--difficulty-id", type=int, required=True)
@@ -229,21 +255,75 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "report": report,
             }
         if args.coach_command == "personal-report":
+            partial = not args.benchmark and not args.comparison
+            if bool(args.benchmark) != bool(args.comparison):
+                raise InputError("Personal Review requires both Benchmark and Comparison for comparison-ready delivery.")
+            if partial and (not args.encounter_profile or not args.specialization_profile):
+                raise InputError("Partial Personal Review delivery requires both Profiles.")
             ability_names_info = _ensure_ability_names(store)
-            document = assemble_personal_review_document(
-                args.analysis,
-                args.benchmark,
-                args.comparison,
-                ability_names_path=Path(ability_names_info["mapping_path"]),
-                ability_names_metadata_path=Path(ability_names_info["metadata_path"]),
-                locale=args.locale,
-            )
+            advice_result = None
+            if args.advice:
+                if not args.encounter_profile or not args.specialization_profile:
+                    raise InputError("--advice requires --encounter-profile and --specialization-profile.")
+                try:
+                    advice_draft = read_json(args.advice)
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise InputError("Coaching Advice draft must be valid UTF-8 JSON.") from exc
+                advice_result = create_coaching_advice(
+                    advice_draft, args.analysis, args.benchmark, args.comparison,
+                    store.data_root / "outputs" / "advice",
+                    args.encounter_profile, args.specialization_profile,
+                )
+            if partial:
+                document = assemble_partial_personal_review_document(
+                    args.analysis, args.encounter_profile, args.specialization_profile,
+                    workflow_path=args.workflow,
+                    ability_names_path=Path(ability_names_info["mapping_path"]),
+                    ability_names_metadata_path=Path(ability_names_info["metadata_path"]),
+                    advice_path=Path(advice_result["path"]) if advice_result else None,
+                    locale=args.locale,
+                )
+            else:
+                document = assemble_personal_review_document(
+                    args.analysis, args.benchmark, args.comparison,
+                    ability_names_path=Path(ability_names_info["mapping_path"]),
+                    ability_names_metadata_path=Path(ability_names_info["metadata_path"]),
+                    advice_path=Path(advice_result["path"]) if advice_result else None,
+                    workflow_path=args.workflow,
+                    locale=args.locale,
+                )
             report = render_report_document(document, store.data_root / "outputs" / "reports")
-            return {
+            result = {
                 "action": "coach_personal_report",
                 "document": validate_report_document(document),
                 "report": report,
             }
+            result["delivery"] = finalize_personal_review_delivery(
+                args.workflow, report, store.data_root / "outputs"
+            )
+            if advice_result:
+                result["advice"] = {
+                    "path": advice_result["path"],
+                    "sha256": advice_result["sha256"],
+                    "advice_id": advice_result["artifact"]["advice_id"],
+                }
+            return result
+        if args.coach_command == "personal-workflow":
+            rejections = []
+            for item in args.rejection:
+                if "=" not in item:
+                    raise InputError("--rejection must use REPORT:FIGHT:SOURCE=reason.")
+                candidate_id, reason = item.split("=", 1)
+                if not candidate_id or not reason:
+                    raise InputError("--rejection must use non-empty REPORT:FIGHT:SOURCE=reason.")
+                rejections.append((candidate_id, reason))
+            return {"action": "coach_personal_workflow"} | orchestrate_personal_review(
+                args.analysis, args.cohort, args.encounter_profile, args.specialization_profile,
+                store.data_root / "outputs", reference_analysis_paths=args.reference_analysis,
+                benchmark_paths=args.benchmark, candidate_rejections=rejections,
+                blockers=args.blocker, previous_workflow_path=args.previous_workflow,
+                progress_paths=args.progress,
+            )
         task_store = CoachTaskStore(args.data_root)
         if args.coach_command == "status":
             return {"action": "coach_status", "tasks": task_store.list_tasks()}
@@ -290,7 +370,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 int(args.game_version) if args.game_version.isdigit() else args.game_version
             )
             page = args.page
+            first_page = page
+            last_page = page
             discovered = {"eligible_recent_candidates": [], "unverified_recency_candidates": [], "rejected_candidates": []}
+            seen_ranking_entries: set[tuple[Any, ...]] = set()
+            seen_candidates: set[tuple[Any, ...]] = set()
             while len(discovered["eligible_recent_candidates"]) < args.sample_goal:
                 rankings = client.fetch_rankings(
                     encounter_id=args.encounter_id,
@@ -300,12 +384,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     spec_name=args.spec_name,
                     page=page,
                 )
+                last_page = page
                 batch = extract_ranking_candidates(rankings)
                 resolved_candidates = []
                 for candidate in batch["eligible_recent_candidates"]:
+                    ranking_key = _ranking_candidate_locator(candidate)
+                    if ranking_key is not None and ranking_key in seen_ranking_entries:
+                        continue
+                    if ranking_key is not None:
+                        seen_ranking_entries.add(ranking_key)
                     if candidate.get("source_id") is None:
                         source_id = client.resolve_candidate_source(candidate)
                         if source_id is None:
+                            batch["rejected_candidates"].append(
+                                candidate | {"reason": "source_identity_not_unique"}
+                            )
+                            continue
+                        if type(source_id) is not int or source_id <= 0:
                             batch["rejected_candidates"].append(
                                 candidate | {"reason": "source_identity_not_unique"}
                             )
@@ -317,11 +412,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     resolved_candidates.append(candidate)
                 batch["eligible_recent_candidates"] = resolved_candidates
                 for field in discovered:
-                    discovered[field].extend(batch[field])
+                    for candidate in batch[field]:
+                        key = _ranking_candidate_key(candidate)
+                        if key is not None and key in seen_candidates:
+                            continue
+                        if key is not None:
+                            seen_candidates.add(key)
+                        discovered[field].append(candidate)
                 if rankings.get("hasMorePages") is not True:
                     break
                 page += 1
-            discovered["eligible_recent_candidates"] = discovered["eligible_recent_candidates"][: args.sample_goal]
             cohort = identify_cohort(
                 {
                     "schema_version": 2,
@@ -333,6 +433,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "class_name": args.class_name,
                         "spec_name": args.spec_name,
                         "recency": "recent_14_days",
+                    },
+                    "pagination": {
+                        "first_page": first_page,
+                        "last_page": last_page,
+                        "has_more_pages": rankings.get("hasMorePages") is True,
+                        "truncated": False,
+                        "target_reached": len(discovered["eligible_recent_candidates"]) >= args.sample_goal,
+                        "exhausted": rankings.get("hasMorePages") is not True,
                     },
                     **discovered,
                 }
@@ -416,7 +524,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report_code=report_ref.code if report_ref else None,
             fight_id=report_ref.fight if report_ref and isinstance(report_ref.fight, int) else args.fight_id,
             source_id=report_ref.source_hint if report_ref else args.source_id,
-            sample_goal=args.sample_goal,
+            sample_goal=args.sample_goal if args.sample_goal is not None else (3 if args.mode == "personal_review" else 10),
         )
         if args.mode == "raid_guide":
             credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
@@ -502,6 +610,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def _print_json(value: dict[str, Any]) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _ranking_candidate_key(candidate: Any) -> tuple[Any, ...] | None:
+    if not isinstance(candidate, dict):
+        return None
+    code = candidate.get("report_code")
+    fight_id = candidate.get("fight_id")
+    source = candidate.get("source_id")
+    if not isinstance(code, str) or type(fight_id) is not int or type(source) is not int:
+        return None
+    return code, fight_id, source
+
+
+def _ranking_candidate_locator(candidate: Any) -> tuple[Any, ...] | None:
+    key = _ranking_candidate_key(candidate)
+    if key is not None:
+        return key
+    if not isinstance(candidate, dict):
+        return None
+    code, fight_id, name, server = (
+        candidate.get("report_code"), candidate.get("fight_id"),
+        candidate.get("name"), candidate.get("server"),
+    )
+    if not isinstance(code, str) or type(fight_id) is not int or not isinstance(name, str):
+        return None
+    return code, fight_id, name, server
 
 
 def _ensure_ability_names(store: DatasetStore) -> dict[str, Any]:

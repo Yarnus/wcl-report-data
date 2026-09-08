@@ -68,4 +68,6 @@ Windows：
 
 `doctor` 的 JSON 输出会报告本次运行实际使用的 `data_root` 和 `cache_root`。高级用户或宿主可以设置 `WCL_RAID_COACH_HOME` 和 `WCL_RAID_COACH_CACHE`，但普通用户只需配置 WCL 凭据。
 
-Skill 安装目录只保存程序和文档。Skill 更新不得影响上述持久数据或缓存。渲染后的 Report Document 位于数据目录的 `outputs/reports/`。清理缓存会保留规范 Fight Bundle 和渲染报告，但会删除未知字段值的本地副本和下载检查点。Mechanic Evidence Set 只存在于当前进程内，不写入以上目录；渲染报告只保存其最小证据摘录。
+Skill 安装目录只保存程序和文档。Skill 更新不得影响上述持久数据或缓存。渲染后的 Report Document 位于数据目录的 `outputs/reports/`，Personal Review 的结构化 Advice 位于 `outputs/advice/`。Personal Review acquisition workflow 及其 artifact index 位于 `outputs/personal-workflows/`；最终交付记录和 finalization 记录位于 `outputs/personal-deliveries/`。这些目录中的 `index.json` 只登记对应的本地内容寻址 artifact，不是可替代来源数据的指针。canonical path、index 和 SHA-256 防止误用任意路径并检测损坏，但不认证生成者，也不能抵抗可同时修改 artifact 与 index 的本地进程。
+
+组装、渲染或 finalization 失败时，已经写入但未被最终 Report Document 引用的不可变 Advice、delivery 或 workflow artifact 会作为 orphan 保留；它们不得被覆盖或自动删除，因为并发报告可能已经引用。回收必须由明确的人工或未来专用清理命令按引用关系和保留策略执行，不能通过清理缓存删除。清理缓存仍会保留 Complete Bundle、Report Index 和渲染报告，但会删除未知字段值的本地副本与下载检查点。公开 CLI 没有原始 timing 参数；Personal Review 的 timing 使用本机 monotonic/wall clock，180/30 秒测量仅在协作式本地 workspace 内可信。测试中的 deterministic injected clock 只用于验证状态，不代表真实本机耗时；`wcl_network_measurement` 为 `not_measured`。Mechanic Evidence Set 只存在于当前进程内，不写入以上目录；渲染报告只保存其最小证据摘录。

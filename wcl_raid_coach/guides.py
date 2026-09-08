@@ -85,7 +85,7 @@ def create_guide_snapshot(
         ).hexdigest(),
         "content_names_build": content_names_build,
         "content_names_sha256": content_names_sha256,
-        "render_schema_version": 2,
+        "render_schema_version": 3,
         "chapters": chapters,
     }
     snapshot_id = hashlib.sha256(
@@ -206,9 +206,9 @@ def _render_markdown(
                 "### 日志事实",
                 "",
                 f"- 有效伤害中位数：{chapter['metrics'].get('damage_total_median', '不可用')}",
-                f"- 技能施放中位数：{_localized_values(chapter['metrics'].get('casts_median', {}), ability_names)}",
-                f"- 首次施放时间中位数（毫秒）：{_localized_values(chapter['metrics'].get('first_cast_ms_median', {}), ability_names)}",
-                f"- 目标伤害中位数：{json.dumps(chapter['metrics'].get('damage_by_target_median', {}), ensure_ascii=False, sort_keys=True)}",
+                f"- 关键动作施放中位数：{_localized_values(chapter['metrics'].get('key_action_casts_median', {}), ability_names)}",
+                f"- 首次施放时间中位数（毫秒）：{_localized_values(chapter['metrics'].get('key_action_first_cast_ms_median', {}), ability_names)}",
+                f"- 目标伤害中位数（NPC gameID）：{json.dumps(chapter['metrics'].get('damage_by_npc_median', {}), ensure_ascii=False, sort_keys=True)}",
                 "",
                 "### 机制时间线",
                 "",
@@ -222,7 +222,7 @@ def _render_markdown(
                 "",
                 "### 推断",
                 "",
-                "- 仅可依据上述日志事实与已校验 Profile 补充实战建议；不得把总排名差距写成可实现提升。",
+                "- 仅可依据上述日志事实与已校验 Profile 补充实战建议；不得把总排名差距写成可实现提升，也不得把样本中位数当作推荐施放次数。",
             ]
         )
     lines.extend(["", "## 下一把动作", "", "- 按各 Boss 章节核对爆发、目标选择和个人减伤锚点。", ""])
@@ -241,6 +241,8 @@ def _localize_mechanic_anchors(value: Any, ability_names: dict[str, str]) -> lis
         ):
             raise InputError("Encounter Benchmark mechanic anchor ID is malformed.")
         ability_id = str(anchor["ability_id"])
+        if anchor["ability_id"] <= 1:
+            raise InputError("WCL synthetic ability IDs cannot use client SpellName localization.")
         name = ability_names.get(ability_id)
         if not isinstance(name, str) or not name.strip():
             raise InputError(f"Spell ID {ability_id} has no zhCN SpellName mapping.")
@@ -251,17 +253,25 @@ def _localize_mechanic_anchors(value: Any, ability_names: dict[str, str]) -> lis
 def _localize_ability_metrics(value: Any, ability_names: dict[str, str]) -> list[dict[str, Any]]:
     if not isinstance(value, dict):
         raise InputError("Encounter Benchmark metrics are malformed.")
-    casts = value.get("casts_median", {})
-    first_casts = value.get("first_cast_ms_median", {})
+    casts = value.get("key_action_casts_median", {})
+    first_casts = value.get("key_action_first_cast_ms_median", {})
     if not isinstance(casts, dict) or not isinstance(first_casts, dict):
         raise InputError("Encounter Benchmark ability metrics are malformed.")
     result = []
-    for ability_id in sorted(set(casts) | set(first_casts), key=lambda item: (0, int(item)) if str(item).isdigit() else (1, str(item))):
+    for ability_id in sorted(set(casts) | set(first_casts), key=str):
+        try:
+            numeric_id = int(ability_id)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise InputError("Encounter Benchmark key-action ability ID is malformed.") from exc
+        if str(numeric_id) != str(ability_id):
+            raise InputError("Encounter Benchmark key-action ability ID is malformed.")
+        if numeric_id <= 1:
+            raise InputError("WCL synthetic ability IDs cannot use client SpellName localization.")
         name = ability_names.get(str(ability_id))
         if not isinstance(name, str) or not name.strip():
             raise InputError(f"Spell ID {ability_id} has no zhCN SpellName mapping.")
         result.append({
-            "ability_id": int(ability_id),
+            "ability_id": numeric_id,
             "name_zh": name,
             "median_casts": casts.get(ability_id),
             "median_first_cast_ms": first_casts.get(ability_id),

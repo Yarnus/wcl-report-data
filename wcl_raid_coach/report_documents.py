@@ -9,15 +9,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
 
+from .advice import validate_advice_evidence, verify_coaching_advice
 from .analysis import ANALYSIS_SCHEMA_VERSION
 from .cohort import verify_benchmark
-from .comparison import compare_player
+from .comparison import compare_player, verify_analysis_evidence
 from .errors import InputError, WclRaidCoachError
 from .guides import verify_guide_snapshot
+from .profiles import validate_profile
+from .personal_workflow import validate_comparison_workflow, validate_partial_workflow
 from .storage import artifact_lock, atomic_write_json, atomic_write_text, read_json, sha256_file
 
 
-DOCUMENT_SCHEMA_VERSION = 1
+DOCUMENT_SCHEMA_VERSION = 2
 RENDERER_SCHEMA_VERSION = 1
 EVIDENCE_EXCERPT_FIELDS = {
     "event_type", "ability_id", "source_id", "target_id", "amount",
@@ -33,6 +36,8 @@ def assemble_personal_review_document(
     *,
     ability_names_path: Path,
     ability_names_metadata_path: Path,
+    advice_path: Path | None = None,
+    workflow_path: Path,
     locale: str = "zh-CN",
 ) -> dict[str, Any]:
     if locale not in {"zh-CN", "en"}:
@@ -55,6 +60,11 @@ def assemble_personal_review_document(
         "encounter_benchmark": benchmark_path.expanduser().resolve(),
         "comparison": comparison_path.expanduser().resolve(),
     }
+    if advice_path is not None:
+        paths["coaching_advice"] = advice_path.expanduser().resolve()
+    workflow_path = workflow_path.expanduser().resolve()
+    validate_comparison_workflow(workflow_path, analysis_path, benchmark_path)
+    paths["personal_review_workflow"] = workflow_path
     sources = {kind: _read_json_artifact(path, kind) for kind, path in paths.items()}
     sources["ability_names"] = ability_names
     sources["ability_names_metadata"] = metadata
@@ -66,6 +76,14 @@ def assemble_personal_review_document(
     verify_benchmark(benchmark)
     if comparison != compare_player(analysis, benchmark):
         raise InputError("Report Document Comparison source does not match its Personal Analysis and Benchmark.")
+    advice = None
+    if advice_path is not None:
+        advice = verify_coaching_advice(
+            sources["coaching_advice"],
+            {kind: sources[kind] for kind in ("personal_analysis", "encounter_benchmark", "comparison")},
+        )
+        if advice["locale"] != locale:
+            raise InputError("Coaching Advice locale does not match the Personal Review locale.")
 
     identity = _object(analysis.get("identity"), "Personal Analysis identity")
     player = _object(analysis.get("player"), "Personal Analysis player")
@@ -117,26 +135,152 @@ def assemble_personal_review_document(
             "benchmark_id": benchmark.get("benchmark_id"),
             "sample_count": benchmark.get("sample_count"),
             "confidence": benchmark.get("confidence"),
+            "unmatched_context": (comparison.get("guardrails") or {}).get("unmatched_context"),
         },
         "metrics": {
             field: metrics.get(field)
-            for field in ("damage_total", "healing_total", "interrupts", "deaths", "resource_events")
-        } | {"damage_total_delta": (comparison.get("metrics") or {}).get("damage_total_delta")},
+            for field in (
+                "duration_ms", "damage_total", "healing_total", "damage_per_minute",
+                "healing_per_minute", "interrupts", "deaths", "resource_events",
+            )
+        } | {
+            field: (comparison.get("metrics") or {}).get(field)
+            for field in (
+                "damage_total_delta", "reference_damage_total_median", "damage_per_minute_delta", "healing_per_minute_delta",
+                "reference_duration_ms_median", "reference_duration_ms_min", "reference_duration_ms_max",
+                "reference_rate_sample_count", "reference_damage_per_minute_median",
+                "reference_healing_rate_sample_count", "reference_healing_per_minute_median",
+            )
+        },
         "abilities": _personal_source_abilities(
             metrics,
             _object(benchmark.get("metrics"), "Encounter Benchmark metrics"),
             index,
+            comparison_metrics=_object(comparison.get("metrics"), "Comparison metrics"),
             ability_names=ability_names if language_zh else {},
             ability_names_build=build,
         ),
+        "advice": _advice_document_items(advice, index, ability_names, build, locale) if advice else [],
         "scope_note": (
-            "仅展示已校验日志事实和同硬条件样本比较；不提供机制归因、死亡原因、建议或可实现提升声明。"
+            "日志事实与引用由 CLI 校验；建议正文正确性仍需人工判断，不构成责任、因果或保证提升。"
             if language_zh else
-            "Shows only verified log facts and a same-condition sample comparison; it provides no mechanic attribution, death cause, advice, or achievable-improvement claim."
+            "The CLI validates facts and references; coaching prose still requires human judgment and makes no responsibility, causality, or guaranteed-gain claim."
         ),
     }
     canonical = validate_report_document(document)
     _verify_personal_sources(canonical, sources)
+    return document
+
+
+def assemble_partial_personal_review_document(
+    analysis_path: Path,
+    encounter_profile_path: Path,
+    specialization_profile_path: Path,
+    *,
+    workflow_path: Path,
+    ability_names_path: Path,
+    ability_names_metadata_path: Path,
+    advice_path: Path | None = None,
+    locale: str = "zh-CN",
+) -> dict[str, Any]:
+    if locale not in {"zh-CN", "en"}:
+        raise InputError("Personal Review report locale must be zh-CN or en.")
+    workflow_path = workflow_path.expanduser().resolve()
+    qualified_sample_count = validate_partial_workflow(
+        workflow_path, analysis_path, encounter_profile_path, specialization_profile_path
+    )
+    paths = {
+        "personal_analysis": analysis_path.expanduser().resolve(),
+        "encounter_profile": encounter_profile_path.expanduser().resolve(),
+        "specialization_profile": specialization_profile_path.expanduser().resolve(),
+        "personal_review_workflow": workflow_path,
+    }
+    if advice_path is not None:
+        paths["coaching_advice"] = advice_path.expanduser().resolve()
+    mapping_path = ability_names_path.expanduser().resolve()
+    metadata_path = ability_names_metadata_path.expanduser().resolve()
+    sources = {kind: _read_json_artifact(path, kind) for kind, path in paths.items()}
+    ability_names = _read_json_artifact(mapping_path, "ability_names")
+    metadata = _read_json_artifact(metadata_path, "ability_names_metadata")
+    if metadata.get("mapping_sha256") != sha256_file(mapping_path):
+        raise InputError("zhCN ability names mapping hash does not match its metadata.")
+    build = _text(metadata.get("build"), "Personal Review ability names build", 100)
+    analysis = sources["personal_analysis"]
+    verify_analysis_evidence(analysis)
+    encounter_profile = validate_profile(sources["encounter_profile"], "encounter")
+    specialization_profile = validate_profile(sources["specialization_profile"], "specialization")
+    comparison_identity = _object(analysis.get("comparison_identity"), "Personal Analysis comparison identity")
+    _verify_partial_profile_identity(encounter_profile, specialization_profile, comparison_identity)
+    advice = None
+    if advice_path is not None:
+        advice = verify_coaching_advice(sources["coaching_advice"], {
+            "personal_analysis": analysis,
+            "encounter_profile": encounter_profile,
+            "specialization_profile": specialization_profile,
+        })
+        if advice["locale"] != locale:
+            raise InputError("Coaching Advice locale does not match the Personal Review locale.")
+    identity = _object(analysis.get("identity"), "Personal Analysis identity")
+    player = _object(analysis.get("player"), "Personal Analysis player")
+    metrics = _object(analysis.get("metrics"), "Personal Analysis metrics")
+    index, fight = _analysis_report_index(analysis, identity)
+    difficulty_names = {
+        item.get("id"): item.get("name")
+        for item in ((index.get("report") or {}).get("zone") or {}).get("difficulties", [])
+        if isinstance(item, dict)
+    }
+    language_zh = locale == "zh-CN"
+    player_name = _text(player.get("name"), "Personal Analysis player name", 200)
+    document = {
+        "schema_version": DOCUMENT_SCHEMA_VERSION,
+        "document_type": "personal_review",
+        "locale": locale,
+        "title": f"{player_name} · 个人复盘" if language_zh else f"{player_name} personal review",
+        "subtitle": "Complete Bundle 日志事实 · Benchmark 比较不可用" if language_zh else "Complete Bundle log facts · Benchmark comparison unavailable",
+        "source_artifacts": [
+            {"kind": kind, "path": str(path), "sha256": sha256_file(path)} for kind, path in paths.items()
+        ] + [
+            {"kind": "ability_names", "path": str(mapping_path), "sha256": sha256_file(mapping_path)},
+            {"kind": "ability_names_metadata", "path": str(metadata_path), "sha256": sha256_file(metadata_path)},
+        ],
+        "identity": {
+            "report_code": identity.get("report_code"), "report_revision": identity.get("report_revision"),
+            "fight_id": identity.get("fight_id"), "encounter_name": fight.get("name"),
+            "difficulty_name": difficulty_names.get(fight.get("difficulty")), "duration_ms": fight.get("duration_ms"),
+            "outcome": "kill" if fight.get("kill") is True else "wipe" if fight.get("kill") is False else None,
+            "boss_percentage": fight.get("boss_percentage"),
+        },
+        "player": {
+            "actor_id": player.get("actor_id"), "name": player_name, "class_name": player.get("class"),
+            "spec_name": player.get("spec"), "item_level": player.get("item_level"),
+            "anonymous": player.get("anonymous", False),
+        },
+        "comparison": {
+            "status": "unavailable", "reason": "insufficient_reference_samples",
+            "qualified_sample_count": qualified_sample_count,
+        },
+        "metrics": {
+            "duration_ms": metrics.get("duration_ms"), "damage_total": metrics.get("damage_total"),
+            "healing_total": metrics.get("healing_total"), "damage_per_minute": metrics.get("damage_per_minute"),
+            "healing_per_minute": metrics.get("healing_per_minute"), "interrupts": metrics.get("interrupts"),
+            "deaths": metrics.get("deaths"), "resource_events": metrics.get("resource_events"),
+            "damage_total_delta": None, "reference_damage_total_median": None,
+            "damage_per_minute_delta": None, "healing_per_minute_delta": None,
+            "reference_duration_ms_median": None, "reference_duration_ms_min": None,
+            "reference_duration_ms_max": None, "reference_rate_sample_count": 0,
+            "reference_damage_per_minute_median": None, "reference_healing_rate_sample_count": 0,
+            "reference_healing_per_minute_median": None,
+        },
+        "abilities": [],
+        "advice": _advice_document_items(advice, index, ability_names, build, locale) if advice else [],
+        "scope_note": (
+            "玩家日志事实与 Profile 引用已校验；Reference Samples 少于 3，未生成 Benchmark 或比较。建议正文仍需人工判断。"
+            if language_zh else
+            "Player facts and Profile references are validated; fewer than 3 Reference Samples means no Benchmark or comparison. Coaching prose still requires human judgment."
+        ),
+    }
+    canonical = validate_report_document(document)
+    _verify_personal_sources(canonical, sources | {"ability_names": ability_names, "ability_names_metadata": metadata})
     return document
 
 
@@ -639,7 +783,7 @@ def _assemble_raid_guide_document(snapshot: Any, snapshot_path: Path) -> dict[st
             "target_damage": [
                 {"target_id": int(target_id), "median_amount": amount}
                 for target_id, amount in sorted(
-                    (metrics.get("damage_by_target_median") or {}).items(), key=lambda item: int(item[0])
+                    (metrics.get("damage_by_npc_median") or {}).items(), key=lambda item: int(item[0])
                 )
             ],
             "mechanic_anchors": [
@@ -685,6 +829,10 @@ def _assemble_raid_guide_document(snapshot: Any, snapshot_path: Path) -> dict[st
 def validate_report_document(value: Any) -> dict[str, Any]:
     document = _object(value, "Report Document")
     if document.get("schema_version") != DOCUMENT_SCHEMA_VERSION:
+        if document.get("schema_version") == 1:
+            raise InputError(
+                "Report Document schema 1 cannot be rerendered; rerun personal-report from current source artifacts."
+            )
         raise InputError(f"Report Document schema_version must be {DOCUMENT_SCHEMA_VERSION}.")
     document_type = document.get("document_type")
     if document_type not in {"mechanic_review", "personal_review", "raid_guide"}:
@@ -747,26 +895,46 @@ def _validate_personal_document(document: dict[str, Any], common: dict[str, Any]
         {
             "schema_version", "document_type", "locale", "title", "subtitle",
             "source_artifacts", "identity", "player", "comparison", "metrics",
-            "abilities", "scope_note",
+            "abilities", "advice", "scope_note",
         },
     )
     player = _validate_player(document["player"])
     comparison = _validate_comparison(document["comparison"])
-    if (comparison["class_name"], comparison["spec_name"]) != (player["class_name"], player["spec_name"]):
+    if comparison.get("status", "available") == "available" and (comparison["class_name"], comparison["spec_name"]) != (player["class_name"], player["spec_name"]):
         raise InputError("Report Document player and comparison specialization do not match.")
-    return common | {
+    advice = _validate_advice_items(document["advice"])
+    expected_sources = {"personal_analysis", "ability_names", "ability_names_metadata"}
+    if comparison.get("status", "available") == "available":
+        expected_sources.update({"encounter_benchmark", "comparison", "personal_review_workflow"})
+    else:
+        expected_sources.update({"encounter_profile", "specialization_profile", "personal_review_workflow"})
+    if any(isinstance(item, dict) and item.get("kind") == "coaching_advice" for item in document["source_artifacts"]):
+        expected_sources.add("coaching_advice")
+    canonical = common | {
         "source_artifacts": _validate_sources(
-            document["source_artifacts"], {
-                "personal_analysis", "encounter_benchmark", "comparison",
-                "ability_names", "ability_names_metadata",
-            }
+            document["source_artifacts"], expected_sources
         ),
         "identity": _validate_identity(document["identity"]),
         "player": player,
         "comparison": comparison,
         "metrics": _validate_personal_metrics(document["metrics"]),
         "abilities": _validate_personal_abilities(document["abilities"]),
+        "advice": advice,
     }
+    sample_count = comparison.get("sample_count", 0)
+    if canonical["metrics"]["reference_rate_sample_count"] > sample_count or canonical["metrics"]["reference_healing_rate_sample_count"] > sample_count:
+        raise InputError("Report Document rate sample coverage exceeds the Encounter Benchmark sample count.")
+    for value_field, count_field in (
+        ("reference_damage_per_minute_median", "reference_rate_sample_count"),
+        ("reference_healing_per_minute_median", "reference_healing_rate_sample_count"),
+    ):
+        if (canonical["metrics"][value_field] is None) != (canonical["metrics"][count_field] == 0):
+            raise InputError("Report Document reference rate and sample coverage are inconsistent.")
+    if any(ability["rate_sample_count"] > sample_count for ability in canonical["abilities"]):
+        raise InputError("Report Document key-action rate sample coverage exceeds the Encounter Benchmark sample count.")
+    if any((ability["median_casts_per_minute"] is None) != (ability["rate_sample_count"] == 0) for ability in canonical["abilities"]):
+        raise InputError("Report Document key-action rate and sample coverage are inconsistent.")
+    return canonical
 
 
 def _validate_guide_document(document: dict[str, Any], common: dict[str, Any]) -> dict[str, Any]:
@@ -816,9 +984,10 @@ def render_report_document(value: Any, output_dir: Path) -> dict[str, Any]:
             "html_sha256": html_sha256,
         },
     }
+    index_bytes = _json_file_bytes(index)
     with artifact_lock(index_path):
         if index_path.exists():
-            if read_json(index_path) != index or not html_path.is_file() or sha256_file(html_path) != html_sha256:
+            if index_path.read_bytes() != index_bytes or not html_path.is_file() or sha256_file(html_path) != html_sha256:
                 raise InputError("Existing rendered Report Document is incomplete or has an invalid identity.")
         else:
             if html_path.exists() and sha256_file(html_path) != html_sha256:
@@ -887,7 +1056,12 @@ def _validate_source_artifacts(document: dict[str, Any]) -> dict[str, bool]:
             return {"mechanic_source": True}
         elif document["document_type"] == "personal_review":
             _verify_personal_sources(document, artifacts)
-            return {"complete_bundle": True, "hard_conditions": True, "comparison": True}
+            comparison_available = document["comparison"].get("status") != "unavailable"
+            return {
+                "complete_bundle": True, "hard_conditions": comparison_available,
+                "comparison": comparison_available,
+                "advice": bool(document["advice"]),
+            }
         else:
             _verify_guide_source(document, verify_guide_snapshot(artifacts["guide_snapshot"]))
             return {"guide_snapshot": True, "hard_conditions": True, "profiles": True}
@@ -973,7 +1147,18 @@ def _verify_mechanic_source(document: dict[str, Any], source: dict[str, Any]) ->
 
 def _verify_personal_sources(document: dict[str, Any], sources: dict[str, dict[str, Any]]) -> None:
     analysis = sources["personal_analysis"]
+    if document["comparison"].get("status") == "unavailable":
+        _verify_partial_personal_sources(document, sources, analysis)
+        return
     benchmark = sources["encounter_benchmark"]
+    workflow_ref = next((item for item in document["source_artifacts"] if item["kind"] == "personal_review_workflow"), None)
+    if workflow_ref is None:
+        raise InputError("Full Personal Review requires a workflow source artifact.")
+    analysis_ref = next(item for item in document["source_artifacts"] if item["kind"] == "personal_analysis")
+    benchmark_ref = next(item for item in document["source_artifacts"] if item["kind"] == "encounter_benchmark")
+    validate_comparison_workflow(
+        Path(workflow_ref["path"]), Path(analysis_ref["path"]), Path(benchmark_ref["path"])
+    )
     comparison = sources["comparison"]
     ability_names = sources["ability_names"]
     ability_names_metadata = sources["ability_names_metadata"]
@@ -983,7 +1168,7 @@ def _verify_personal_sources(document: dict[str, Any], sources: dict[str, dict[s
     recomputed_comparison = compare_player(analysis, benchmark)
     if comparison != recomputed_comparison:
         raise InputError("Report Document Comparison source does not match its Personal Analysis and Benchmark.")
-    if comparison.get("schema_version") != 2:
+    if comparison.get("schema_version") != 3:
         raise InputError("Report Document Comparison uses an unsupported schema version.")
     analysis_identity = analysis.get("identity")
     analysis_player = analysis.get("player")
@@ -1024,14 +1209,26 @@ def _verify_personal_sources(document: dict[str, Any], sources: dict[str, dict[s
         raise InputError("Report Document player does not match the Personal Analysis actor.")
     expected_comparison = dict(benchmark_identity) | {
         "benchmark_id": benchmark.get("benchmark_id"),
-        "sample_count": benchmark.get("sample_count"), "confidence": benchmark.get("confidence")
+        "sample_count": benchmark.get("sample_count"), "confidence": benchmark.get("confidence"),
+        "unmatched_context": (comparison.get("guardrails") or {}).get("unmatched_context"),
     }
     if document["comparison"] != expected_comparison:
         raise InputError("Report Document comparison hard conditions or Benchmark identity do not match.")
     expected_metrics = {
         field: analysis_metrics.get(field)
-        for field in ("damage_total", "healing_total", "interrupts", "deaths", "resource_events")
-    } | {"damage_total_delta": (comparison.get("metrics") or {}).get("damage_total_delta")}
+        for field in (
+            "duration_ms", "damage_total", "healing_total", "damage_per_minute",
+            "healing_per_minute", "interrupts", "deaths", "resource_events",
+        )
+    } | {
+        field: (comparison.get("metrics") or {}).get(field)
+        for field in (
+            "damage_total_delta", "reference_damage_total_median", "damage_per_minute_delta", "healing_per_minute_delta",
+            "reference_duration_ms_median", "reference_duration_ms_min", "reference_duration_ms_max",
+            "reference_rate_sample_count", "reference_damage_per_minute_median",
+            "reference_healing_rate_sample_count", "reference_healing_per_minute_median",
+        )
+    }
     if document["metrics"] != expected_metrics:
         raise InputError("Report Document personal metrics do not match their source artifacts.")
     mapping_ref = next(item for item in document["source_artifacts"] if item["kind"] == "ability_names")
@@ -1043,10 +1240,46 @@ def _verify_personal_sources(document: dict[str, Any], sources: dict[str, dict[s
     build = _text(ability_names_metadata.get("build"), "Report Document ability names build", 100)
     if document["abilities"] != _personal_source_abilities(
         analysis_metrics, benchmark_metrics, index,
+        comparison_metrics=_object(comparison.get("metrics"), "Comparison metrics"),
         ability_names=ability_names if document["locale"] == "zh-CN" else {},
         ability_names_build=build,
     ):
         raise InputError("Report Document ability claims do not match their source artifacts.")
+    advice = None
+    if "coaching_advice" in sources:
+        advice_refs = sources["coaching_advice"].get("source_artifacts")
+        if not isinstance(advice_refs, dict):
+            raise InputError("Coaching Advice Profile provenance is missing.")
+        for kind in ("encounter_profile", "specialization_profile"):
+            ref = advice_refs.get(kind)
+            if not isinstance(ref, dict) or not isinstance(ref.get("path"), str):
+                raise InputError("Coaching Advice Profile provenance is incomplete.")
+            path = Path(ref["path"])
+            if ref.get("sha256") != sha256_file(path):
+                raise InputError("Coaching Advice Profile artifact hash is invalid.")
+            sources[kind] = _read_json_artifact(path, kind)
+        source_refs = {
+            kind: {"path": item["path"], "sha256": item["sha256"]}
+            for kind in ("personal_analysis", "encounter_benchmark", "comparison", "encounter_profile", "specialization_profile")
+            for item in document["source_artifacts"] if item["kind"] == kind
+        }
+        source_refs.update({
+            kind: {"path": sources["coaching_advice"]["source_artifacts"][kind]["path"],
+                   "sha256": sources["coaching_advice"]["source_artifacts"][kind]["sha256"]}
+            for kind in ("encounter_profile", "specialization_profile")
+        })
+        advice = verify_coaching_advice(
+            sources["coaching_advice"],
+            {kind: sources[kind] for kind in ("personal_analysis", "encounter_benchmark", "comparison", "encounter_profile", "specialization_profile")},
+            source_refs,
+        )
+        if advice["locale"] != document["locale"]:
+            raise InputError("Coaching Advice locale does not match the Personal Review locale.")
+    expected_advice = _advice_document_items(
+        advice, index, ability_names, build, document["locale"]
+    ) if advice else []
+    if document["advice"] != expected_advice:
+        raise InputError("Report Document Coaching Advice does not match its validated source.")
     expected_title = (
         f"{player['name']} · 个人复盘" if document["locale"] == "zh-CN"
         else f"{player['name']} personal review"
@@ -1056,14 +1289,111 @@ def _verify_personal_sources(document: dict[str, Any], sources: dict[str, dict[s
         if document["locale"] == "zh-CN" else "Complete Bundle log facts + matched Encounter Benchmark"
     )
     expected_scope = (
-        "仅展示已校验日志事实和同硬条件样本比较；不提供机制归因、死亡原因、建议或可实现提升声明。"
+        "日志事实与引用由 CLI 校验；建议正文正确性仍需人工判断，不构成责任、因果或保证提升。"
         if document["locale"] == "zh-CN" else
-        "Shows only verified log facts and a same-condition sample comparison; it provides no mechanic attribution, death cause, advice, or achievable-improvement claim."
+        "The CLI validates facts and references; coaching prose still requires human judgment and makes no responsibility, causality, or guaranteed-gain claim."
     )
     if (document["title"], document["subtitle"], document["scope_note"]) != (
         expected_title, expected_subtitle, expected_scope
     ):
         raise InputError("Report Document Personal Review narrative is not source-derived.")
+
+
+def _verify_partial_personal_sources(
+    document: dict[str, Any], sources: dict[str, dict[str, Any]], analysis: dict[str, Any]
+) -> None:
+    workflow_ref = next(item for item in document["source_artifacts"] if item["kind"] == "personal_review_workflow")
+    qualified_sample_count = validate_partial_workflow(
+        Path(workflow_ref["path"]),
+        Path(next(item["path"] for item in document["source_artifacts"] if item["kind"] == "personal_analysis")),
+        Path(next(item["path"] for item in document["source_artifacts"] if item["kind"] == "encounter_profile")),
+        Path(next(item["path"] for item in document["source_artifacts"] if item["kind"] == "specialization_profile")),
+    )
+    if document["comparison"].get("qualified_sample_count") != qualified_sample_count:
+        raise InputError("Partial Personal Review sample count does not match its workflow artifact.")
+    verify_analysis_evidence(analysis)
+    encounter = validate_profile(sources["encounter_profile"], "encounter")
+    specialization = validate_profile(sources["specialization_profile"], "specialization")
+    comparison_identity = _object(analysis.get("comparison_identity"), "Personal Analysis comparison identity")
+    _verify_partial_profile_identity(encounter, specialization, comparison_identity)
+    identity = _object(analysis.get("identity"), "Personal Analysis identity")
+    player_source = _object(analysis.get("player"), "Personal Analysis player")
+    metrics = _object(analysis.get("metrics"), "Personal Analysis metrics")
+    index, fight = _analysis_report_index(analysis, identity)
+    difficulties = {
+        item.get("id"): item.get("name")
+        for item in ((index.get("report") or {}).get("zone") or {}).get("difficulties", [])
+        if isinstance(item, dict)
+    }
+    expected_identity = {
+        "report_code": identity.get("report_code"), "report_revision": identity.get("report_revision"),
+        "fight_id": identity.get("fight_id"), "encounter_name": fight.get("name"),
+        "difficulty_name": difficulties.get(fight.get("difficulty")), "duration_ms": fight.get("duration_ms"),
+        "outcome": "kill" if fight.get("kill") is True else "wipe" if fight.get("kill") is False else None,
+        "boss_percentage": fight.get("boss_percentage"),
+    }
+    expected_player = {
+        "actor_id": player_source.get("actor_id"), "name": player_source.get("name"),
+        "class_name": player_source.get("class"), "spec_name": player_source.get("spec"),
+        "item_level": player_source.get("item_level"), "anonymous": player_source.get("anonymous", False),
+    }
+    if document["identity"] != expected_identity or document["player"] != expected_player:
+        raise InputError("Partial Personal Review identity does not match its Personal Analysis.")
+    expected_metrics = {
+        "duration_ms": metrics.get("duration_ms"), "damage_total": metrics.get("damage_total"),
+        "healing_total": metrics.get("healing_total"), "damage_per_minute": metrics.get("damage_per_minute"),
+        "healing_per_minute": metrics.get("healing_per_minute"), "interrupts": metrics.get("interrupts"),
+        "deaths": metrics.get("deaths"), "resource_events": metrics.get("resource_events"),
+        "damage_total_delta": None, "reference_damage_total_median": None,
+        "damage_per_minute_delta": None, "healing_per_minute_delta": None,
+        "reference_duration_ms_median": None, "reference_duration_ms_min": None,
+        "reference_duration_ms_max": None, "reference_rate_sample_count": 0,
+        "reference_damage_per_minute_median": None, "reference_healing_rate_sample_count": 0,
+        "reference_healing_per_minute_median": None,
+    }
+    if document["metrics"] != expected_metrics or document["abilities"]:
+        raise InputError("Partial Personal Review facts do not match the Personal Analysis.")
+    metadata = sources["ability_names_metadata"]
+    mapping_ref = next(item for item in document["source_artifacts"] if item["kind"] == "ability_names")
+    if metadata.get("mapping_sha256") != mapping_ref["sha256"]:
+        raise InputError("Report Document ability-name metadata does not match its mapping artifact.")
+    advice = None
+    if "coaching_advice" in sources:
+        source_refs = {
+            kind: {"path": item["path"], "sha256": item["sha256"]}
+            for kind in ("personal_analysis", "encounter_profile", "specialization_profile")
+            for item in document["source_artifacts"] if item["kind"] == kind
+        }
+        advice = verify_coaching_advice(sources["coaching_advice"], {
+            "personal_analysis": analysis, "encounter_profile": encounter,
+            "specialization_profile": specialization,
+        }, source_refs)
+    expected_advice = _advice_document_items(
+        advice, index, sources["ability_names"],
+        _text(metadata.get("build"), "Report Document ability names build", 100), document["locale"],
+    ) if advice else []
+    if document["advice"] != expected_advice:
+        raise InputError("Partial Personal Review advice does not match its validated source.")
+    expected_subtitle = "Complete Bundle 日志事实 · Benchmark 比较不可用" if document["locale"] == "zh-CN" else "Complete Bundle log facts · Benchmark comparison unavailable"
+    expected_scope = (
+        "玩家日志事实与 Profile 引用已校验；Reference Samples 少于 3，未生成 Benchmark 或比较。建议正文仍需人工判断。"
+        if document["locale"] == "zh-CN" else
+        "Player facts and Profile references are validated; fewer than 3 Reference Samples means no Benchmark or comparison. Coaching prose still requires human judgment."
+    )
+    expected_title = f"{document['player']['name']} · 个人复盘" if document["locale"] == "zh-CN" else f"{document['player']['name']} personal review"
+    if (document["title"], document["subtitle"], document["scope_note"]) != (expected_title, expected_subtitle, expected_scope):
+        raise InputError("Partial Personal Review narrative is not source-derived.")
+
+
+def _verify_partial_profile_identity(
+    encounter: dict[str, Any], specialization: dict[str, Any], identity: dict[str, Any]
+) -> None:
+    for field in ("game_version", "partition_id", "encounter_id", "difficulty_id"):
+        if encounter["identity"].get(field) != identity.get(field):
+            raise InputError(f"Encounter Profile {field} does not match the Personal Analysis.")
+    for field in ("game_version", "partition_id", "class_name", "spec_name"):
+        if specialization["identity"].get(field) != identity.get(field):
+            raise InputError(f"Specialization Profile {field} does not match the Personal Analysis.")
 
 
 def _verify_guide_source(document: dict[str, Any], snapshot: dict[str, Any]) -> None:
@@ -1101,7 +1431,7 @@ def _verify_guide_source(document: dict[str, Any], snapshot: dict[str, Any]) -> 
             raise InputError("Report Document guide chapter metrics do not match.")
         expected_targets = [
             {"target_id": int(target), "median_amount": amount}
-            for target, amount in sorted((metrics.get("damage_by_target_median") or {}).items(), key=lambda item: int(item[0]))
+            for target, amount in sorted((metrics.get("damage_by_npc_median") or {}).items(), key=lambda item: int(item[0]))
         ]
         if chapter["target_damage"] != expected_targets:
             raise InputError("Report Document guide target metrics do not match.")
@@ -1152,20 +1482,27 @@ def _analysis_report_index(analysis: dict[str, Any], identity: dict[str, Any]) -
 
 def _personal_source_abilities(
     analysis_metrics: dict[str, Any], benchmark_metrics: dict[str, Any], index: dict[str, Any],
-    *, ability_names: dict[str, str] | None = None, ability_names_build: str = "unmapped",
+    *, comparison_metrics: dict[str, Any], ability_names: dict[str, str] | None = None,
+    ability_names_build: str = "unmapped",
 ) -> list[dict[str, Any]]:
-    casts = analysis_metrics.get("casts") if isinstance(analysis_metrics.get("casts"), dict) else {}
-    first_casts = analysis_metrics.get("first_cast_ms") if isinstance(analysis_metrics.get("first_cast_ms"), dict) else {}
-    median_casts = benchmark_metrics.get("casts_median") if isinstance(benchmark_metrics.get("casts_median"), dict) else {}
-    median_first = benchmark_metrics.get("first_cast_ms_median") if isinstance(benchmark_metrics.get("first_cast_ms_median"), dict) else {}
+    casts = analysis_metrics.get("player_casts") if isinstance(analysis_metrics.get("player_casts"), dict) else {}
+    first_casts = analysis_metrics.get("player_first_cast_ms") if isinstance(analysis_metrics.get("player_first_cast_ms"), dict) else {}
+    median_casts = benchmark_metrics.get("key_action_casts_median") if isinstance(benchmark_metrics.get("key_action_casts_median"), dict) else {}
+    median_first = benchmark_metrics.get("key_action_first_cast_ms_median") if isinstance(benchmark_metrics.get("key_action_first_cast_ms_median"), dict) else {}
     names = {
         str(item.get("gameID")): item.get("name")
         for item in index.get("abilities", []) if isinstance(item, dict) and isinstance(item.get("name"), str)
     }
     localized = ability_names or {}
+    player_rates = comparison_metrics.get("key_action_player_casts_per_minute", {})
+    median_rates = comparison_metrics.get("key_action_reference_casts_per_minute_median", {})
+    rate_deltas = comparison_metrics.get("key_action_casts_per_minute_deltas", {})
+    rate_counts = comparison_metrics.get("key_action_rate_sample_counts", {})
+    if not all(isinstance(item, dict) for item in (player_rates, median_rates, rate_deltas, rate_counts)):
+        raise InputError("Personal Review key-action rate metrics are malformed.")
     result = []
     for ability in sorted(
-        set(casts) | set(median_casts),
+        set(median_casts),
         key=lambda value: (0, int(value)) if value.isdigit() else (1, value),
     ):
         if not ability.isdigit() or int(ability) <= 0 or ability not in names:
@@ -1180,9 +1517,53 @@ def _personal_source_abilities(
             "player_casts": casts.get(ability, 0),
             "median_casts": None if ability not in median_casts else float(median_casts[ability]),
             "player_first_cast_ms": None if ability not in first_casts else float(first_casts[ability]),
-            "median_first_cast_ms": None if ability not in median_first else float(median_first[ability]),
+            "median_first_cast_ms": None if median_first.get(ability) is None else float(median_first[ability]),
+            "player_casts_per_minute": player_rates.get(ability),
+            "median_casts_per_minute": median_rates.get(ability),
+            "casts_per_minute_delta": rate_deltas.get(ability),
+            "rate_sample_count": rate_counts.get(ability, 0),
         }
         )
+    return result
+
+
+def _advice_document_items(
+    advice: dict[str, Any] | None,
+    index: dict[str, Any],
+    ability_names: dict[str, str],
+    ability_names_build: str,
+    locale: str,
+) -> list[dict[str, Any]]:
+    if advice is None:
+        return []
+    wcl_names = {
+        str(item.get("gameID")): item.get("name")
+        for item in index.get("abilities", [])
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    result = []
+    for item in advice["items"]:
+        abilities = []
+        for ability_id in item["ability_ids"]:
+            key = str(ability_id)
+            if key not in wcl_names:
+                raise InputError("Coaching Advice ability identity is absent from the Report Index.")
+            mapped = ability_names.get(key) if locale == "zh-CN" else None
+            if locale == "zh-CN" and not mapped:
+                raise InputError(f"Coaching Advice Spell ID {ability_id} has no zhCN SpellName mapping.")
+            abilities.append({
+                "ability_id": ability_id,
+                "name": mapped or wcl_names[key],
+                "wcl_name": wcl_names[key],
+                "ability_names_build": ability_names_build if mapped else None,
+            })
+        result.append({
+            field: item[field]
+            for field in (
+                "dimension", "evidence_class", "action", "conditions", "verification_goal",
+                "fact_references", "guidance_references",
+            )
+        } | {"abilities": abilities})
     return result
 
 
@@ -1256,12 +1637,21 @@ def _validate_player(value: Any) -> dict[str, Any]:
 
 def _validate_comparison(value: Any) -> dict[str, Any]:
     comparison = _object(value, "Report Document comparison")
+    if comparison.get("status") == "unavailable":
+        _fields(comparison, "Report Document comparison", {"status", "reason", "qualified_sample_count"})
+        if comparison["reason"] != "insufficient_reference_samples":
+            raise InputError("Report Document unavailable comparison reason is invalid.")
+        count = _integer(comparison["qualified_sample_count"], "Report Document qualified sample count")
+        if count >= 3:
+            raise InputError("Report Document unavailable comparison cannot have three Reference Samples.")
+        return {"status": "unavailable", "reason": comparison["reason"], "qualified_sample_count": count}
     _fields(
         comparison,
         "Report Document comparison",
         {
             "game_version", "partition_id", "encounter_id", "difficulty_id",
             "class_name", "spec_name", "benchmark_id", "sample_count", "confidence",
+            "unmatched_context",
         },
     )
     if comparison["confidence"] not in {"low", "normal"}:
@@ -1269,6 +1659,11 @@ def _validate_comparison(value: Any) -> dict[str, Any]:
     sample_count = _integer(comparison["sample_count"], "Report Document comparison sample_count", positive=True)
     if sample_count < 3:
         raise InputError("Report Document comparison requires at least three samples.")
+    unmatched_context = _list(
+        comparison["unmatched_context"], "Report Document unmatched comparison context", maximum=10
+    )
+    if unmatched_context != ["survival", "downtime", "phases", "talents", "gear", "assignments"]:
+        raise InputError("Report Document unmatched comparison context is malformed.")
     return {
         "game_version": _text(comparison["game_version"], "Report Document comparison game_version", 100),
         "partition_id": _integer(comparison["partition_id"], "Report Document comparison partition_id", positive=True),
@@ -1279,20 +1674,34 @@ def _validate_comparison(value: Any) -> dict[str, Any]:
         "benchmark_id": _digest(comparison["benchmark_id"], "Report Document comparison benchmark_id"),
         "sample_count": sample_count,
         "confidence": comparison["confidence"],
+        "unmatched_context": unmatched_context,
     }
 
 
 def _validate_personal_metrics(value: Any) -> dict[str, Any]:
     metrics = _object(value, "Report Document personal metrics")
-    fields = {"damage_total", "healing_total", "interrupts", "deaths", "resource_events", "damage_total_delta"}
+    integer_fields = {"damage_total", "healing_total", "interrupts", "deaths", "resource_events"}
+    optional_fields = {
+        "duration_ms", "damage_per_minute", "healing_per_minute", "damage_total_delta",
+        "reference_damage_total_median", "damage_per_minute_delta", "healing_per_minute_delta",
+        "reference_duration_ms_median", "reference_duration_ms_min", "reference_duration_ms_max",
+        "reference_damage_per_minute_median", "reference_healing_per_minute_median",
+    }
+    coverage_fields = {"reference_rate_sample_count", "reference_healing_rate_sample_count"}
+    fields = integer_fields | optional_fields | coverage_fields
     _fields(metrics, "Report Document personal metrics", fields)
-    delta = metrics["damage_total_delta"]
-    if delta is not None and not _number(delta):
-        raise InputError("Report Document damage_total_delta must be null or a finite number.")
-    return {
+    result = {
         field: _integer(metrics[field], f"Report Document personal metrics {field}")
-        for field in fields - {"damage_total_delta"}
-    } | {"damage_total_delta": float(delta) if delta is not None else None}
+        for field in integer_fields
+    }
+    for field in optional_fields:
+        item = metrics[field]
+        if item is not None and (not _number(item) or field == "duration_ms" and item <= 0):
+            raise InputError(f"Report Document personal metrics {field} must be null or a finite number.")
+        result[field] = float(item) if item is not None else None
+    for field in coverage_fields:
+        result[field] = _integer(metrics[field], f"Report Document personal metrics {field}")
+    return result
 
 
 def _validate_personal_abilities(value: Any) -> list[dict[str, Any]]:
@@ -1303,7 +1712,8 @@ def _validate_personal_abilities(value: Any) -> list[dict[str, Any]]:
         _fields(
             ability,
             "Report Document personal ability",
-            {"ability_id", "name", "wcl_name", "ability_names_build", "player_casts", "median_casts", "player_first_cast_ms", "median_first_cast_ms"},
+            {"ability_id", "name", "wcl_name", "ability_names_build", "player_casts", "median_casts", "player_first_cast_ms", "median_first_cast_ms",
+             "player_casts_per_minute", "median_casts_per_minute", "casts_per_minute_delta", "rate_sample_count"},
         )
         result.append({
             "ability_id": _integer(ability["ability_id"], "Report Document personal ability ability_id", positive=True),
@@ -1322,9 +1732,135 @@ def _validate_personal_abilities(value: Any) -> list[dict[str, Any]]:
             "median_first_cast_ms": _optional_nonnegative_number(
                 ability["median_first_cast_ms"], "Report Document personal ability median_first_cast_ms"
             ),
+            "player_casts_per_minute": _optional_nonnegative_number(
+                ability["player_casts_per_minute"], "Report Document personal ability player_casts_per_minute"
+            ),
+            "median_casts_per_minute": _optional_nonnegative_number(
+                ability["median_casts_per_minute"], "Report Document personal ability median_casts_per_minute"
+            ),
+            "casts_per_minute_delta": _optional_number(
+                ability["casts_per_minute_delta"], "Report Document personal ability casts_per_minute_delta"
+            ),
+            "rate_sample_count": _integer(
+                ability["rate_sample_count"], "Report Document personal ability rate_sample_count"
+            ),
         })
     if len({ability["ability_id"] for ability in result}) != len(result):
         raise InputError("Report Document personal ability IDs must be unique.")
+    return result
+
+
+def _validate_advice_items(value: Any) -> list[dict[str, Any]]:
+    items = _list(value, "Report Document advice", maximum=20)
+    result = []
+    for value in items:
+        item = _object(value, "Report Document advice item")
+        _fields(item, "Report Document advice item", {
+            "dimension", "evidence_class", "action", "conditions", "verification_goal",
+            "abilities", "fact_references", "guidance_references",
+        })
+        if item["dimension"] not in {"output", "survival", "mechanics", "team_contribution"}:
+            raise InputError("Report Document advice dimension is invalid.")
+        if item["evidence_class"] not in {"event_supported", "experience_based"}:
+            raise InputError("Report Document advice evidence_class is invalid.")
+        conditions = _list(item["conditions"], "Report Document advice conditions", nonempty=True, maximum=10)
+        if any(value not in {"effective_window", "mechanic_safe", "target_available", "next_attempt"} for value in conditions):
+            raise InputError("Report Document advice conditions use an unsupported structured kind.")
+        facts = _validate_advice_facts(item["fact_references"])
+        guidance = _validate_advice_guidance(item["guidance_references"])
+        if item["evidence_class"] == "experience_based" and not guidance:
+            raise InputError("Report Document experience-based advice requires guidance.")
+        abilities = _validate_advice_abilities(item["abilities"])
+        action = _validate_advice_action(item["action"], {ability["ability_id"] for ability in abilities})
+        validate_advice_evidence(item["dimension"], item["evidence_class"], action, facts)
+        result.append({
+            "dimension": item["dimension"], "evidence_class": item["evidence_class"],
+            "action": action,
+            "conditions": conditions,
+            "verification_goal": _validate_advice_goal(item["verification_goal"]),
+            "abilities": abilities,
+            "fact_references": facts, "guidance_references": guidance,
+        })
+    return result
+
+
+def _validate_advice_action(value: Any, ability_ids: set[int]) -> dict[str, Any]:
+    action = _object(value, "Report Document advice action")
+    _fields(action, "Report Document advice action", {"kind", "ability_id"})
+    if action["kind"] not in {"use_ability", "review_fact", "observe_pattern", "adjust_timing"}:
+        raise InputError("Report Document advice action kind is unsupported.")
+    if action["ability_id"] is not None and (type(action["ability_id"]) is not int or action["ability_id"] <= 1):
+        raise InputError("Report Document advice action ability_id is invalid.")
+    if action["kind"] == "use_ability" and action["ability_id"] is None:
+        raise InputError("Report Document advice use_ability requires ability_id.")
+    if action["ability_id"] is not None and action["ability_id"] not in ability_ids:
+        raise InputError("Report Document advice action ability_id must be listed in abilities.")
+    return dict(action)
+
+
+def _validate_advice_goal(value: Any) -> str:
+    if value not in {"compare_next_attempt", "check_event_fact", "check_ability_usage"}:
+        raise InputError("Report Document advice verification_goal is unsupported.")
+    return value
+
+
+def _validate_advice_abilities(value: Any) -> list[dict[str, Any]]:
+    abilities = _list(value, "Report Document advice abilities", maximum=20)
+    result = []
+    for value in abilities:
+        ability = _object(value, "Report Document advice ability")
+        _fields(ability, "Report Document advice ability", {
+            "ability_id", "name", "wcl_name", "ability_names_build",
+        })
+        result.append({
+            "ability_id": _integer(ability["ability_id"], "Report Document advice ability_id", positive=True),
+            "name": _text(ability["name"], "Report Document advice ability name", 200),
+            "wcl_name": _text(ability["wcl_name"], "Report Document advice WCL name", 200),
+            "ability_names_build": None if ability["ability_names_build"] is None else _text(
+                ability["ability_names_build"], "Report Document advice ability names build", 100
+            ),
+        })
+    if len({item["ability_id"] for item in result}) != len(result):
+        raise InputError("Report Document advice ability IDs must be unique within an item.")
+    return result
+
+
+def _validate_advice_facts(value: Any) -> list[dict[str, Any]]:
+    facts = _list(value, "Report Document advice fact references", maximum=20)
+    result = []
+    for value in facts:
+        fact = _object(value, "Report Document advice fact reference")
+        _fields(fact, "Report Document advice fact reference", {"source", "path", "value"})
+        if fact["source"] not in {"personal_analysis", "encounter_benchmark", "comparison"} or not _scalar(fact["value"]):
+            raise InputError("Report Document advice fact reference is invalid.")
+        result.append({
+            "source": fact["source"],
+            "path": _text(fact["path"], "Report Document advice fact path", 500),
+            "value": fact["value"],
+        })
+    return result
+
+
+def _validate_advice_guidance(value: Any) -> list[dict[str, str]]:
+    refs = _list(value, "Report Document advice guidance references", maximum=10)
+    result = []
+    for value in refs:
+        ref = _object(value, "Report Document advice guidance reference")
+        _fields(ref, "Report Document advice guidance reference", {
+            "profile_kind", "profile_id", "title", "url", "accessed_at",
+            "quote_summary", "content_hash",
+        })
+        if ref["profile_kind"] not in {"encounter", "specialization"}:
+            raise InputError("Report Document advice guidance profile kind is invalid.")
+        result.append({
+            "profile_kind": ref["profile_kind"],
+            "profile_id": _digest(ref["profile_id"], "Report Document advice Profile ID"),
+            "title": _text(ref["title"], "Report Document advice guidance title", 1000),
+            "url": _public_url(ref["url"], "Report Document advice guidance"),
+            "accessed_at": _text(ref["accessed_at"], "Report Document advice guidance accessed_at", 1000),
+            "quote_summary": _text(ref["quote_summary"], "Report Document advice guidance quote_summary", 1000),
+            "content_hash": _digest(ref["content_hash"], "Report Document advice guidance content hash"),
+        })
     return result
 
 
@@ -1609,9 +2145,9 @@ def _render_mechanic_html(document: dict[str, Any]) -> str:
 <style>{_CSS}</style>
 </head>
 <body>
-<input class="theme-radio" id="theme-auto" name="theme" type="radio" checked><input class="theme-radio" id="theme-light" name="theme" type="radio"><input class="theme-radio" id="theme-dark" name="theme" type="radio">
+<input class="theme-radio" id="theme-auto" name="theme" type="radio" aria-label="{escape(labels['theme_auto'], quote=True)}" checked><input class="theme-radio" id="theme-light" name="theme" type="radio" aria-label="{escape(labels['theme_light'], quote=True)}"><input class="theme-radio" id="theme-dark" name="theme" type="radio" aria-label="{escape(labels['theme_dark'], quote=True)}">
 <div class="report">
-  <nav class="theme-controls" aria-label="{escape(labels['theme'])}"><label for="theme-auto">A</label><label for="theme-light">☀</label><label for="theme-dark">☾</label></nav>
+  <nav class="theme-controls" aria-label="{escape(labels['theme'])}"><label for="theme-auto" aria-label="{escape(labels['theme_auto'], quote=True)}" title="{escape(labels['theme_auto'], quote=True)}">A</label><label for="theme-light" aria-label="{escape(labels['theme_light'], quote=True)}" title="{escape(labels['theme_light'], quote=True)}">☀</label><label for="theme-dark" aria-label="{escape(labels['theme_dark'], quote=True)}" title="{escape(labels['theme_dark'], quote=True)}">☾</label></nav>
   <div class="shell">
     <header class="masthead"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><div><h1>{escape(document['title'])}</h1><p>{escape(document['subtitle'])}</p></div><div class="attempt"><small>{escape(labels['boss_attempt'])}</small><b>#{identity['fight_id']} / {_format_time(identity['duration_ms'])}</b></div></header>
     <section class="hero"><div class="verdict"><small>{escape(labels['result'])}</small><strong>{escape(outcome)}</strong><p>{failure_total} {escape(labels['verified_anomalies_count'])}<br>{review_total} {escape(labels['manual_review_count'])}</p><span>{escape(labels['reviewable'])}</span></div><div class="timeline"><div class="section-head"><h2>{escape(labels['attempt_timeline'])}</h2><code>00:00 → {_format_time(identity['duration_ms'])}</code></div><div class="phase-rail">{_render_phases(phases, identity['duration_ms'])}{_render_timeline_events(timeline_events, identity['duration_ms'])}</div></div></section>
@@ -1637,18 +2173,54 @@ def _render_personal_html(document: dict[str, Any], verification: dict[str, bool
     delta_text = labels["unavailable"] if damage_delta is None else _format_amount(damage_delta)
     hard_match = labels["hard_match"] if verification.get("hard_conditions") else labels["not_verified"]
     evidence_status = labels["bundle_verified"] if verification.get("complete_bundle") else labels["not_verified"]
+    dimensions = _render_coaching_dimensions(document, labels)
+    assessed_dimensions = len({item["dimension"] for item in document["advice"]})
+    comparison_available = comparison.get("status") != "unavailable"
+    reference_duration = _format_optional_time(metrics["reference_duration_ms_median"], labels)
+    duration_range = (
+        labels["unavailable"] if metrics["reference_duration_ms_min"] is None or metrics["reference_duration_ms_max"] is None
+        else f'{_format_optional_time(metrics["reference_duration_ms_min"], labels)} - {_format_optional_time(metrics["reference_duration_ms_max"], labels)}'
+    )
+    unmatched = ", ".join(labels["context_" + item] for item in comparison.get("unmatched_context", []))
+    damage_coverage = f'{metrics["reference_rate_sample_count"]}/{comparison.get("sample_count", 0)}'
+    healing_coverage = f'{metrics["reference_healing_rate_sample_count"]}/{comparison.get("sample_count", 0)}'
+    rate_context = (
+        f'<section class="panel rate-board"><h2 class="panel-title">{escape(labels["normalized_context"])}<span>{escape(labels["observed_rates"])}</span></h2>'
+        f'<div class="rate-grid">'
+        f'{_metric(labels["player_duration"], _format_optional_time(metrics["duration_ms"], labels))}'
+        f'{_metric(labels["reference_duration"], reference_duration)}'
+        f'{_metric(labels["reference_duration_range"], duration_range)}'
+        f'{_metric(labels["reference_damage_total"], _format_optional_amount(metrics["reference_damage_total_median"], labels))}'
+        f'{_metric(labels["damage_per_minute"], _format_optional_amount(metrics["damage_per_minute"], labels))}'
+        f'{_metric(labels["reference_damage_per_minute"], _format_optional_amount(metrics["reference_damage_per_minute_median"], labels))}'
+        f'{_metric(labels["damage_per_minute_delta"], _signed(metrics["damage_per_minute_delta"], labels))}'
+        f'{_metric(labels["damage_rate_coverage"], damage_coverage)}'
+        f'{_metric(labels["healing_per_minute"], _format_optional_amount(metrics["healing_per_minute"], labels))}'
+        f'{_metric(labels["reference_healing_per_minute"], _format_optional_amount(metrics["reference_healing_per_minute_median"], labels))}'
+        f'{_metric(labels["healing_per_minute_delta"], _signed(metrics["healing_per_minute_delta"], labels))}'
+        f'{_metric(labels["healing_rate_coverage"], healing_coverage)}'
+        f'</div><p class="rate-limit"><b>{escape(labels["unmatched_context"])}</b> {escape(unmatched)}. {escape(labels["normalization_limit"])} {escape(labels["median_limit"])}</p></section>'
+    )
+    if comparison_available:
+        comparison_seal = f'<aside class="benchmark-seal"><span class="kicker">{escape(labels["comparison_scope"])}</span><strong>{comparison["sample_count"]} {escape(labels["samples"])}</strong><p>{escape(identity["difficulty_name"])} · Partition {comparison["partition_id"]}<br>{escape(labels[comparison["confidence"]])} · {escape(hard_match)}<br>Benchmark <code>{escape(comparison["benchmark_id"][:12])}</code></p></aside>'
+        ranking_identity = f'{escape(comparison["game_version"])} / Partition {comparison["partition_id"]}'
+        benchmark_copy = labels["benchmark_copy"].format(samples=comparison["sample_count"])
+    else:
+        comparison_seal = f'<aside class="benchmark-seal"><span class="kicker">{escape(labels["comparison_scope"])}</span><strong>{escape(labels["unavailable"])}</strong><p>{comparison["qualified_sample_count"]}/3 {escape(labels["qualified_samples"])}<br>{escape(labels["insufficient_samples"])}</p></aside>'
+        ranking_identity = labels["unavailable"]
+        benchmark_copy = labels["comparison_unavailable_copy"].format(samples=comparison["qualified_sample_count"])
     return f"""<!doctype html>
 <html lang="{escape(document['locale'], quote=True)}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(document['title'])}</title><style>{_COACHING_CSS}</style></head>
 <body>
-<input class="theme-radio" id="theme-auto" name="theme" type="radio" checked><input class="theme-radio" id="theme-light" name="theme" type="radio"><input class="theme-radio" id="theme-dark" name="theme" type="radio">
-<div class="report"><nav class="theme-controls" aria-label="{escape(labels['theme'])}"><label for="theme-auto">A</label><label for="theme-light">☀</label><label for="theme-dark">☾</label></nav><div class="p-shell">
+<input class="theme-radio" id="theme-auto" name="theme" type="radio" aria-label="{escape(labels['theme_auto'], quote=True)}" checked><input class="theme-radio" id="theme-light" name="theme" type="radio" aria-label="{escape(labels['theme_light'], quote=True)}"><input class="theme-radio" id="theme-dark" name="theme" type="radio" aria-label="{escape(labels['theme_dark'], quote=True)}">
+<div class="report"><nav class="theme-controls" aria-label="{escape(labels['theme'])}"><label for="theme-auto" aria-label="{escape(labels['theme_auto'], quote=True)}" title="{escape(labels['theme_auto'], quote=True)}">A</label><label for="theme-light" aria-label="{escape(labels['theme_light'], quote=True)}" title="{escape(labels['theme_light'], quote=True)}">☀</label><label for="theme-dark" aria-label="{escape(labels['theme_dark'], quote=True)}" title="{escape(labels['theme_dark'], quote=True)}">☾</label></nav><div class="p-shell">
 <header class="p-head"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><div><h1>{escape(document['title'])}</h1><p>{escape(document['subtitle'])}</p></div><div class="p-id"><span class="kicker">Boss Attempt</span><b>#{identity['fight_id']} / Revision {identity['report_revision']}</b></div></header>
-<section class="player-strip"><div class="player-card"><span class="avatar">{escape(_initials(player['name']))}</span><div><h2>{escape(player['name'])}</h2><p>{escape(player['class_name'])} · {escape(player['spec_name'])} · Actor {player['actor_id']}<br>{escape(labels['item_level'])} {item_level}{' · ' + escape(labels['anonymous']) if player['anonymous'] else ''}</p></div></div><div class="fact-ribbon">{_metric(labels['damage'], _format_amount(metrics['damage_total']))}{_metric(labels['healing'], _format_amount(metrics['healing_total']))}{_metric(labels['interrupts'], str(metrics['interrupts']))}{_metric(labels['deaths'], str(metrics['deaths']), 'bad' if metrics['deaths'] else '')}</div><aside class="benchmark-seal"><span class="kicker">{escape(labels['comparison_scope'])}</span><strong>{comparison['sample_count']} {escape(labels['samples'])}</strong><p>{escape(identity['difficulty_name'])} · Partition {comparison['partition_id']}<br>{escape(labels[comparison['confidence']])} · {escape(hard_match)}<br>Benchmark <code>{escape(comparison['benchmark_id'][:12])}</code></p></aside></section>
-<section class="p-grid"><aside class="panel"><h2 class="panel-title">{escape(labels['identity_evidence'])}<span>LOG FACT</span></h2><ul class="scope-list"><li><small>WCL Report</small><b>{escape(identity['report_code'])} / Revision {identity['report_revision']}</b></li><li><small>Boss Attempt</small><b>{escape(identity['encounter_name'])} · {escape(identity['difficulty_name'])}</b></li><li><small>{escape(labels['specialization'])}</small><b>{escape(player['class_name'])} / {escape(player['spec_name'])}</b></li><li><small>{escape(labels['ranking_partition'])}</small><b>{escape(comparison['game_version'])} / Partition {comparison['partition_id']}</b></li><li><small>{escape(labels['evidence_status'])}</small><b class="{'good' if verification.get('complete_bundle') else ''}">{escape(evidence_status)}</b></li></ul></aside>
+<section class="player-strip"><div class="player-card"><span class="avatar">{escape(_initials(player['name']))}</span><div><h2>{escape(player['name'])}</h2><p>{escape(player['class_name'])} · {escape(player['spec_name'])} · Actor {player['actor_id']}<br>{escape(labels['item_level'])} {item_level}{' · ' + escape(labels['anonymous']) if player['anonymous'] else ''}</p></div></div><div class="fact-ribbon">{_metric(labels['encounter'], identity['encounter_name'])}{_metric(labels['difficulty'], identity['difficulty_name'])}{_metric(labels['result'], labels[identity['outcome']])}{_metric(labels['attempt_duration'], _format_time(identity['duration_ms']))}{_metric(labels['deaths'], str(metrics['deaths']), 'bad' if metrics['deaths'] else '')}{_metric(labels['analysis_coverage'], labels['coverage_value'].format(count=assessed_dimensions))}</div>{comparison_seal}</section>
+<section class="p-grid">{dimensions}<h2 class="comparison-heading">{escape(labels['full_comparison_details'])}</h2>{rate_context}<aside class="panel"><h2 class="panel-title">{escape(labels['identity_evidence'])}<span>LOG FACT</span></h2><ul class="scope-list"><li><small>WCL Report</small><b>{escape(identity['report_code'])} / Revision {identity['report_revision']}</b></li><li><small>Boss Attempt</small><b>{escape(identity['encounter_name'])} · {escape(identity['difficulty_name'])}</b></li><li><small>{escape(labels['specialization'])}</small><b>{escape(player['class_name'])} / {escape(player['spec_name'])}</b></li><li><small>{escape(labels['ranking_partition'])}</small><b>{ranking_identity}</b></li><li><small>{escape(labels['evidence_status'])}</small><b class="{'good' if verification.get('complete_bundle') else ''}">{escape(evidence_status)}</b></li></ul></aside>
 <section class="panel ability-board"><h2 class="panel-title">{escape(labels['ability_track'])}<span>{escape(labels['player_vs_median'])}</span></h2><div class="ability-head"><span>{escape(labels['ability'])}</span><span>{escape(labels['player'])}</span><span>{escape(labels['median'])}</span><span>{escape(labels['delta'])}</span><span>{escape(labels['relative_count'])}</span></div>{abilities or f'<p class="empty">{escape(labels["no_abilities"])}</p>'}</section>
 <aside class="panel guard"><h2 class="panel-title">{escape(labels['claim_limits'])}<span>GUARDRAILS</span></h2><article><b class="{'bad' if metrics['deaths'] else ''}">{metrics['deaths']} {escape(labels['death_events'])}</b><p>{escape(labels['death_limit'])}</p></article><article><b>{escape(labels['damage_delta'])} {escape(delta_text)}</b><p>{escape(labels['damage_limit'])}</p></article><article><b>{escape(labels['resource_events'])} {metrics['resource_events']}</b><p>{escape(labels['resource_limit'])}</p></article></aside>
-<section class="panel evidence-lane"><h2>{escape(labels['evidence_layers'])}</h2><div><article><h3>{escape(labels['log_facts'])}</h3><p>{escape(labels['log_fact_copy'])}</p></article><article><h3>{escape(labels['benchmark_comparison'])}</h3><p>{escape(labels['benchmark_copy'].format(samples=comparison['sample_count']))}</p></article><article><h3>{escape(labels['no_advice'])}</h3><p>{escape(labels['no_advice_copy'])}</p></article></div></section></section>
+<section class="panel evidence-lane"><h2>{escape(labels['evidence_layers'])}</h2><div><article><h3>{escape(labels['log_facts'])}</h3><p>{escape(labels['log_fact_copy'])}</p></article><article><h3>{escape(labels['benchmark_comparison'])}</h3><p>{escape(benchmark_copy)}</p></article><article><h3>{escape(labels['advice_boundary'])}</h3><p>{escape(labels['advice_boundary_copy'])}</p></article></div></section></section>
 <footer>{escape(document['scope_note'])}<code>{escape(identity['report_code'])} / {escape(document['document_id'][:12])}</code></footer></div></div></body></html>
 """
 
@@ -1665,8 +2237,8 @@ def _render_guide_html(document: dict[str, Any]) -> str:
 <html lang="{escape(document['locale'], quote=True)}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(document['title'])}</title><style>{_COACHING_CSS}</style></head>
 <body>
-<input class="theme-radio" id="theme-auto" name="theme" type="radio" checked><input class="theme-radio" id="theme-light" name="theme" type="radio"><input class="theme-radio" id="theme-dark" name="theme" type="radio">
-<div class="report"><nav class="theme-controls" aria-label="{escape(labels['theme'])}"><label for="theme-auto">A</label><label for="theme-light">☀</label><label for="theme-dark">☾</label></nav><div class="g-shell">
+<input class="theme-radio" id="theme-auto" name="theme" type="radio" aria-label="{escape(labels['theme_auto'], quote=True)}" checked><input class="theme-radio" id="theme-light" name="theme" type="radio" aria-label="{escape(labels['theme_light'], quote=True)}"><input class="theme-radio" id="theme-dark" name="theme" type="radio" aria-label="{escape(labels['theme_dark'], quote=True)}">
+<div class="report"><nav class="theme-controls" aria-label="{escape(labels['theme'])}"><label for="theme-auto" aria-label="{escape(labels['theme_auto'], quote=True)}" title="{escape(labels['theme_auto'], quote=True)}">A</label><label for="theme-light" aria-label="{escape(labels['theme_light'], quote=True)}" title="{escape(labels['theme_light'], quote=True)}">☀</label><label for="theme-dark" aria-label="{escape(labels['theme_dark'], quote=True)}" title="{escape(labels['theme_dark'], quote=True)}">☾</label></nav><div class="g-shell">
 <header class="g-head"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><div><h1>{escape(document['title'])}</h1><p>{escape(document['subtitle'])}</p></div><div class="edition"><span class="kicker">Guide Snapshot</span><strong>{len(document['chapters']):02d}</strong><small>{escape(labels['bosses'])}</small></div></header>
 <div class="guide-scope"><span>{escape(identity['game_version'])} · {escape(identity['difficulty_name'])} · Partition {identity['partition_id']} · {escape(identity['class_name'])} / {escape(identity['spec_name'])}</span><span>SpellName {escape(document['ability_names_build'])} · Snapshot <code>{escape(document['snapshot_id'][:12])}</code></span></div>
 <section class="g-layout"><nav class="panel chapter-nav" aria-label="{escape(labels['chapters'])}">{navigation}</nav><main class="chapters">{chapters}</main><aside class="panel guide-boundary"><h2>{escape(labels['boundary'])}</h2><p>{escape(document['scope_note'])}</p><p>{escape(labels['missing'])}</p></aside></section>
@@ -1680,7 +2252,119 @@ def _render_personal_ability(ability: dict[str, Any], labels: dict[str, str]) ->
     player_width = ability["player_casts"] / maximum * 100
     median_width = (median or 0) / maximum * 100
     delta = None if median is None else ability["player_casts"] - median
-    return f'<div class="ability-row"><div class="ability-name"><b>{escape(ability["name"])}</b><small>Spell {ability["ability_id"]} · WCL {escape(ability["wcl_name"])} · {escape(labels["first_cast"])} {_format_optional_time(ability["player_first_cast_ms"], labels)} / {escape(labels["median_short"])} {_format_optional_time(ability["median_first_cast_ms"], labels)}</small></div><span>{ability["player_casts"]}</span><span>{_format_optional_number(median, labels)}</span><span class="delta {"bad" if delta is not None and delta < 0 else ""}">{_signed(delta, labels)}</span><div class="cast-track" style="--player:{player_width:.2f}%;--median:{median_width:.2f}%"><i></i><b></b></div></div>'
+    rate_line = labels["ability_rate"].format(
+        player=_format_optional_number(ability["player_casts_per_minute"], labels),
+        median=_format_optional_number(ability["median_casts_per_minute"], labels),
+        delta=_signed(ability["casts_per_minute_delta"], labels),
+        coverage=f'{ability["rate_sample_count"]}',
+    )
+    return f'<div class="ability-row"><div class="ability-name"><b>{escape(ability["name"])}</b><small>Spell {ability["ability_id"]} · WCL {escape(ability["wcl_name"])} · {escape(labels["first_cast"])} {_format_optional_time(ability["player_first_cast_ms"], labels)} / {escape(labels["median_short"])} {_format_optional_time(ability["median_first_cast_ms"], labels)}<br>{escape(rate_line)}</small></div><span>{ability["player_casts"]}</span><span>{_format_optional_number(median, labels)}</span><span class="delta {"bad" if delta is not None and delta < 0 else ""}">{_signed(delta, labels)}</span><div class="cast-track" style="--player:{player_width:.2f}%;--median:{median_width:.2f}%"><i></i><b></b></div></div>'
+
+
+def _render_coaching_dimensions(document: dict[str, Any], labels: dict[str, str]) -> str:
+    items = document["advice"]
+    sections = "".join(
+        _render_coaching_dimension(
+            dimension,
+            document,
+            [item for item in items if item["dimension"] == dimension],
+            labels,
+        )
+        for dimension in ("output", "survival", "mechanics", "team_contribution")
+    )
+    return f'<div class="dimensions" aria-label="{escape(labels["analysis_dimensions"], quote=True)}">{sections}</div>'
+
+
+def _render_coaching_dimension(
+    dimension: str,
+    document: dict[str, Any],
+    items: list[dict[str, Any]],
+    labels: dict[str, str],
+) -> str:
+    metrics = document["metrics"]
+    comparison_available = document["comparison"].get("status") != "unavailable"
+    facts = {
+        "output": (
+            _metric(labels["damage"], _format_amount(metrics["damage_total"]))
+            + _metric(labels["damage_per_minute"], _format_optional_amount(metrics["damage_per_minute"], labels))
+            + _metric(
+                labels["reference_damage_per_minute"],
+                _format_optional_amount(metrics["reference_damage_per_minute_median"], labels)
+                if comparison_available else labels["not_evaluated"],
+            )
+            + _metric(labels["healing"], _format_amount(metrics["healing_total"]))
+        ),
+        "survival": (
+            _metric(labels["deaths"], str(metrics["deaths"]), "bad" if metrics["deaths"] else "")
+            + _metric(labels["attempt_duration"], _format_time(document["identity"]["duration_ms"]))
+            + _metric(labels["survival_comparison"], labels["not_evaluated"])
+        ),
+        "mechanics": _metric(
+            labels["mechanic_assessment"],
+            labels["not_evaluated"],
+        ),
+        "team_contribution": (
+            _metric(labels["interrupts"], str(metrics["interrupts"]))
+            + _metric(labels["healing"], _format_amount(metrics["healing_total"]))
+            + _metric(labels["resource_events"], str(metrics["resource_events"]))
+            + _metric(labels["assignment_assessment"], labels["not_evaluated"])
+        ),
+    }[dimension]
+    advice_html = "".join(
+        _render_dimension_action(item, index, dimension, labels) for index, item in enumerate(items, 1)
+    )
+    no_advice_copy = labels["no_advice_copy"] if comparison_available else labels["no_advice_partial_copy"]
+    not_evaluated = f'<p class="not-evaluated"><b>{escape(labels["not_evaluated"])}</b> {escape(no_advice_copy)}</p>'
+    advice_html = advice_html or not_evaluated
+    comparison_note = ""
+    if dimension == "output" and not comparison_available:
+        comparison_note = f'<p class="not-evaluated"><b>{escape(labels["comparison"])}: {escape(labels["not_evaluated"])}</b> {escape(labels["insufficient_samples"])}</p>'
+    limit = labels["dimension_limit_" + dimension]
+    if dimension == "output" and comparison_available and document["comparison"]["confidence"] == "low":
+        limit += " " + labels["low_confidence_limit"]
+    return (
+        f'<section class="panel coaching-dimension" id="dimension-{dimension}" data-dimension="{dimension}">'
+        f'<header><h2>{escape(labels[dimension])}</h2><span>{escape(labels["advice_available"] if items else labels["not_evaluated"])}</span></header>'
+        f'<div class="dimension-facts"><h3>{escape(labels["facts_and_comparisons"])}</h3><div class="dimension-metrics">{facts}</div>{comparison_note}</div>'
+        f'<div class="dimension-advice"><h3>{escape(labels["improvement_advice"])}</h3>{advice_html}</div>'
+        f'<div class="dimension-limit"><h3>{escape(labels["evidence_and_limits"])}</h3><p>{escape(limit)}</p></div>'
+        "</section>"
+    )
+
+
+def _render_dimension_action(
+    item: dict[str, Any], index: int, dimension: str, labels: dict[str, str]
+) -> str:
+    abilities = ", ".join(f'{escape(value["name"])} (Spell {value["ability_id"]})' for value in item["abilities"])
+    action = labels["action_" + item["action"]["kind"]]
+    if item["action"]["ability_id"] is not None:
+        action += f" (Spell {item['action']['ability_id']})"
+    conditions = "".join(
+        f'<li>{escape(labels["condition_" + condition])}</li>' for condition in item["conditions"]
+    )
+    return (
+        f'<article class="advice-item" id="dimension-{dimension}-advice-{index}"><div class="advice-class"><b>{escape(labels[item["evidence_class"]])}</b></div><h4>{escape(action)}</h4>'
+        + (f'<p>{escape(labels["abilities"])}: {abilities}</p>' if abilities else "")
+        + f'<div class="advice-item-conditions"><h5>{escape(labels["conditions"])}</h5><ul>{conditions}</ul></div>'
+        + f'<div class="advice-item-goal"><h5>{escape(labels["verification_goal"])}</h5><p>{escape(labels["goal_" + item["verification_goal"]])}</p></div>'
+        + f'<div class="advice-item-references"><h5>{escape(labels["evidence_and_limits"])}</h5>{_render_dimension_references(item, labels)}</div>'
+        + "</article>"
+    )
+
+
+def _render_dimension_references(item: dict[str, Any], labels: dict[str, str]) -> str:
+    facts = "".join(
+        f'<li><code>{escape(ref["source"] + ref["path"])}</code>: {escape(json.dumps(ref["value"], ensure_ascii=False))}</li>'
+        for ref in item["fact_references"]
+    )
+    guidance = "".join(
+        f'<li><a href="{escape(ref["url"], quote=True)}" rel="noreferrer">{escape(ref["title"])}</a><small>{escape(ref["quote_summary"])}</small></li>'
+        for ref in item["guidance_references"]
+    )
+    return (
+        (f'<details><summary>{escape(labels["fact_references"])}</summary><ul>{facts}</ul></details>' if facts else "")
+        + (f'<details><summary>{escape(labels["guidance_references"])}</summary><ul>{guidance}</ul></details>' if guidance else "")
+    )
 
 
 def _render_guide_chapter(chapter: dict[str, Any], labels: dict[str, str]) -> str:
@@ -1765,35 +2449,91 @@ def _status_text(item: dict[str, Any], labels: dict[str, str]) -> str:
 def _personal_labels(locale: str) -> dict[str, str]:
     if locale == "en":
         return {
-            "theme": "Color theme", "item_level": "Item level", "anonymous": "anonymized data",
+            "theme": "Color theme", "theme_auto": "Auto", "theme_light": "Light", "theme_dark": "Dark", "item_level": "Item level", "anonymous": "anonymized data",
             "damage": "Damage total", "healing": "Healing total", "interrupts": "Interrupt events", "deaths": "Deaths",
+            "encounter": "Encounter", "difficulty": "Difficulty", "result": "Result", "kill": "Kill", "wipe": "Wipe",
+            "attempt_duration": "Boss Attempt duration", "analysis_coverage": "Analysis coverage", "coverage_value": "{count}/4 dimensions with Advice",
             "comparison_scope": "Comparison scope", "samples": "samples", "low": "Low confidence", "normal": "Normal confidence", "hard_match": "Hard conditions match",
             "identity_evidence": "Identity and evidence", "specialization": "Specialization", "ranking_partition": "Ranking partition", "evidence_status": "Evidence status", "bundle_verified": "Complete Bundle verified", "not_verified": "Not verified",
             "ability_track": "Key ability cast track", "player_vs_median": "Player vs sample median", "ability": "Ability", "player": "Player", "median": "Median", "delta": "Delta", "relative_count": "Relative count",
             "claim_limits": "Claim limits", "death_events": "death events", "death_limit": "The analysis has no death timestamp, killing ability, or responsibility attribution.",
             "damage_delta": "Damage delta", "damage_limit": "This unnormalized arithmetic delta is not an achievable improvement estimate.", "resource_events": "Resource events", "resource_limit": "This is an event count, not resource gain, overcap, or waste.",
             "evidence_layers": "Evidence layers", "log_facts": "Log facts", "log_fact_copy": "Casts, first-cast times, damage, healing, interrupts, resource events, and death counts come from the Complete Bundle.",
-            "benchmark_comparison": "Benchmark comparison", "benchmark_copy": "Medians come from {samples} Reference Samples under the same hard conditions.", "no_advice": "No formal advice", "no_advice_copy": "The comparison artifact does not produce mechanic attribution or a coaching verdict.",
-            "first_cast": "First cast", "median_short": "median", "unavailable": "Unavailable", "no_abilities": "No ability comparison is available.",
+            "benchmark_comparison": "Benchmark comparison", "benchmark_copy": "Medians come from {samples} Reference Samples under the same hard conditions.", "no_advice": "No formal advice", "no_advice_copy": "The Comparison artifact does not produce mechanic attribution or a coaching verdict.", "no_advice_partial_copy": "No Coaching Advice item exists for this dimension; no Benchmark or Comparison artifact was created.",
+            "qualified_samples": "qualified Reference Samples", "insufficient_samples": "No Encounter Benchmark was aggregated.", "comparison_unavailable_copy": "Only {samples} qualified Reference Samples were available; no Benchmark or comparison was created.",
+            "advice_boundary": "Validation boundary", "advice_boundary_copy": "Reference validation does not certify the coaching prose as correct or guarantee improvement.",
+            "coaching_advice": "Coaching advice", "not_evaluated": "Not evaluated", "validated_references": "REFERENCES VALIDATED",
+            "output": "Output", "survival": "Survival", "mechanics": "Mechanics", "team_contribution": "Team contribution",
+            "event_supported": "Event-supported", "experience_based": "Experience-based and conditional", "abilities": "Abilities",
+             "conditions": "Applicability conditions", "verification_goal": "Next Boss Attempt verification", "fact_references": "Local fact references", "guidance_references": "Current guidance references",
+             "action_use_ability": "Use the selected ability", "action_review_fact": "Review the selected fact", "action_observe_pattern": "Observe the event pattern", "action_adjust_timing": "Adjust timing for the next attempt",
+             "condition_effective_window": "when an effective window is available", "condition_mechanic_safe": "when mechanic handling remains safe", "condition_target_available": "when the target is available", "condition_next_attempt": "on the next Boss Attempt",
+             "goal_compare_next_attempt": "Compare this action on the next Boss Attempt.", "goal_check_event_fact": "Check the cited event fact on the next Boss Attempt.", "goal_check_ability_usage": "Check the selected ability usage on the next Boss Attempt.",
+             "first_cast": "First cast", "median_short": "median", "unavailable": "Unavailable", "no_abilities": "No ability comparison is available.",
+             "normalized_context": "Duration and normalized context", "observed_rates": "Observed rates, not corrections",
+             "player_duration": "Player duration", "reference_duration": "Reference median duration", "reference_duration_range": "Reference duration range",
+             "reference_damage_total": "Reference median damage total",
+             "damage_per_minute": "Player damage/min", "reference_damage_per_minute": "Reference median damage/min", "damage_per_minute_delta": "Damage/min delta", "damage_rate_coverage": "Damage-rate coverage",
+             "healing_per_minute": "Player healing/min", "reference_healing_per_minute": "Reference median healing/min", "healing_per_minute_delta": "Healing/min delta", "healing_rate_coverage": "Healing-rate coverage",
+             "unmatched_context": "Unmatched context:", "normalization_limit": "Per-minute normalization does not correct these differences.", "median_limit": "Sample medians describe observations and are not prescribed actions.",
+             "context_survival": "survival", "context_downtime": "downtime", "context_phases": "phases", "context_talents": "talents", "context_gear": "gear", "context_assignments": "assignments",
+             "ability_rate": "Per minute: player {player} / reference median {median} / delta {delta} / {coverage} valid Reference Samples",
+             "analysis_dimensions": "Coaching dimensions", "facts_and_comparisons": "Facts and comparisons", "improvement_advice": "Improvement advice",
+             "evidence_and_limits": "Evidence and limits", "advice_available": "Advice available", "comparison": "Comparison",
+             "survival_comparison": "Survival comparison", "mechanic_assessment": "Mechanic assessment", "assignment_assessment": "Assignment assessment",
+             "full_comparison_details": "Full comparison details",
+             "dimension_limit_output": "Totals and per-minute values are observations. Sample medians are not prescribed actions or guaranteed gains.",
+             "dimension_limit_survival": "A death count does not identify a timestamp, cause, killing ability, or responsibility. Survival is not matched by the Benchmark.",
+             "dimension_limit_mechanics": "Only cited event facts or current guidance support displayed advice. Missing checks are not treated as successful execution.",
+             "dimension_limit_team_contribution": "Interrupt, healing, and resource-event counts do not establish assignment quality, responsibility, resource waste, or causality.",
+             "low_confidence_limit": "This comparison has low confidence; interpret the limited sample cautiously and do not treat it as a prescription.",
         }
     return {
-        "theme": "颜色主题", "item_level": "装等", "anonymous": "匿名化数据",
+        "theme": "颜色主题", "theme_auto": "自动", "theme_light": "浅色", "theme_dark": "深色", "item_level": "装等", "anonymous": "匿名化数据",
         "damage": "伤害总量", "healing": "治疗量", "interrupts": "打断事件", "deaths": "死亡",
+        "encounter": "首领", "difficulty": "难度", "result": "结果", "kill": "击杀", "wipe": "灭团",
+        "attempt_duration": "Boss Attempt 时长", "analysis_coverage": "分析覆盖", "coverage_value": "{count}/4 个维度含 Advice",
         "comparison_scope": "比较范围", "samples": "个样本", "low": "低置信度", "normal": "标准置信度", "hard_match": "硬条件匹配",
         "identity_evidence": "身份与证据", "specialization": "专精条件", "ranking_partition": "排名分区", "evidence_status": "证据状态", "bundle_verified": "Complete Bundle 已校验", "not_verified": "未校验",
         "ability_track": "关键技能施放轨", "player_vs_median": "玩家 vs 样本中位数", "ability": "技能", "player": "玩家", "median": "中位数", "delta": "差值", "relative_count": "相对次数",
         "claim_limits": "结论边界", "death_events": "次死亡", "death_limit": "当前 analysis 不包含死亡时间、致死技能或责任，不能推断死亡原因。",
         "damage_delta": "伤害差值", "damage_limit": "这是未归一化的算术差值，不是可实现提升值。", "resource_events": "资源事件", "resource_limit": "这里只表示资源事件条数，不表示获取量、溢出或浪费。",
         "evidence_layers": "证据分层", "log_facts": "日志事实", "log_fact_copy": "施放、首次施放时间、伤害、治疗、打断、资源事件和死亡计数来自 Complete Bundle。",
-        "benchmark_comparison": "Benchmark 比较", "benchmark_copy": "中位数来自同一硬条件下的 {samples} 个 Reference Samples。", "no_advice": "尚无正式建议", "no_advice_copy": "comparison artifact 不产生机制归因或 coaching verdict。",
+        "benchmark_comparison": "Benchmark 比较", "benchmark_copy": "中位数来自同一硬条件下的 {samples} 个 Reference Samples。", "no_advice": "尚无正式建议", "no_advice_copy": "Comparison artifact 不产生机制归因或 coaching verdict。", "no_advice_partial_copy": "该维度没有 Coaching Advice；当前未创建 Benchmark 或 Comparison artifact。",
+        "qualified_samples": "个合格 Reference Samples", "insufficient_samples": "未聚合 Encounter Benchmark。", "comparison_unavailable_copy": "只有 {samples} 个合格 Reference Samples；未创建 Benchmark 或比较。",
+        "advice_boundary": "校验边界", "advice_boundary_copy": "引用校验不证明建议正文正确，也不保证带来提升。",
+        "coaching_advice": "改进建议", "not_evaluated": "未评估", "validated_references": "引用已校验",
+        "output": "输出", "survival": "生存", "mechanics": "机制", "team_contribution": "团队贡献",
+        "event_supported": "事件支持", "experience_based": "经验性且有条件", "abilities": "技能",
+         "conditions": "适用条件", "verification_goal": "下一次 Boss Attempt 验证", "fact_references": "本地事实引用", "guidance_references": "当前资料引用",
+         "action_use_ability": "使用所选技能", "action_review_fact": "复核所选事实", "action_observe_pattern": "观察事件模式", "action_adjust_timing": "调整下一次尝试的时机",
+         "condition_effective_window": "存在有效输出窗口时", "condition_mechanic_safe": "不影响机制处理时", "condition_target_available": "目标可用时", "condition_next_attempt": "下一次 Boss Attempt",
+         "goal_compare_next_attempt": "在下一次 Boss Attempt 比较该动作。", "goal_check_event_fact": "在下一次 Boss Attempt 检查引用的事件事实。", "goal_check_ability_usage": "在下一次 Boss Attempt 检查所选技能的使用情况。",
         "first_cast": "首次施放", "median_short": "中位", "unavailable": "不可用", "no_abilities": "没有可展示的技能比较。",
+        "normalized_context": "时长与归一化上下文", "observed_rates": "观察速率，不是校正值",
+        "player_duration": "玩家时长", "reference_duration": "参考时长中位数", "reference_duration_range": "参考时长范围",
+        "reference_damage_total": "参考伤害总量中位数",
+        "damage_per_minute": "玩家每分钟伤害", "reference_damage_per_minute": "参考每分钟伤害中位数", "damage_per_minute_delta": "每分钟伤害差值", "damage_rate_coverage": "伤害速率有效样本",
+        "healing_per_minute": "玩家每分钟治疗", "reference_healing_per_minute": "参考每分钟治疗中位数", "healing_per_minute_delta": "每分钟治疗差值", "healing_rate_coverage": "治疗速率有效样本",
+        "unmatched_context": "未匹配上下文：", "normalization_limit": "每分钟归一化不会校正这些差异。", "median_limit": "样本中位数只描述观察结果，不是推荐动作。",
+        "context_survival": "存活", "context_downtime": "停手时间", "context_phases": "阶段", "context_talents": "天赋", "context_gear": "装备", "context_assignments": "任务分配",
+        "ability_rate": "每分钟：玩家 {player} / 参考中位数 {median} / 差值 {delta} / {coverage} 个有效 Reference Samples",
+        "analysis_dimensions": "复盘维度", "facts_and_comparisons": "事实与比较", "improvement_advice": "改进建议",
+        "evidence_and_limits": "证据与限制", "advice_available": "有结构化建议", "comparison": "比较",
+        "survival_comparison": "生存比较", "mechanic_assessment": "机制评估", "assignment_assessment": "任务分配评估",
+        "full_comparison_details": "完整比较明细",
+        "dimension_limit_output": "总量和每分钟数值只描述观察结果；样本中位数不是动作处方、可实现提升或保证收益。",
+        "dimension_limit_survival": "死亡计数不包含时间、原因、致死技能或责任；Encounter Benchmark 也未匹配存活条件。",
+        "dimension_limit_mechanics": "展示的建议仅由所引用的事件事实或当前资料支持；缺少检查不表示机制处理成功。",
+        "dimension_limit_team_contribution": "打断、治疗和资源事件计数不能证明任务完成质量、责任、资源浪费或因果。",
+        "low_confidence_limit": "该比较为低置信度；应谨慎解释有限样本，不能把它当作处方。",
     }
 
 
 def _guide_labels(locale: str) -> dict[str, str]:
     if locale == "en":
         return {
-            "theme": "Color theme", "bosses": "Bosses", "chapters": "Boss chapters", "samples": "samples", "low": "Low", "normal": "Normal",
+            "theme": "Color theme", "theme_auto": "Auto", "theme_light": "Light", "theme_dark": "Dark", "bosses": "Bosses", "chapters": "Boss chapters", "samples": "samples", "low": "Low", "normal": "Normal",
             "boundary": "Interpretation boundary", "missing": "This Guide Snapshot has no structured rotation, talent, gear, or prescriptive advice fields, so none are generated.", "boss_isolation": "Encounter Benchmarks from different Bosses are not mixed.",
             "confidence": "Evidence level", "anchors": "Mechanic time anchors", "patterns": "Observable high-ranked patterns", "not_recommendations": "whole-attempt medians, not recommendations",
             "ability": "Ability", "median_casts": "Median casts", "median_first_cast": "Median first cast", "interpretation": "Interpretation", "observed_only": "Describes samples only",
@@ -1801,7 +2541,7 @@ def _guide_labels(locale: str) -> dict[str, str]:
             "sources": "Sources", "encounter": "Encounter Profile", "specialization": "Specialization Profile", "no_sources": "No source summary is available.", "no_anchors": "No verified mechanic Spell time anchor.", "no_abilities": "No cast median is available.", "unavailable": "Unavailable",
         }
     return {
-        "theme": "颜色主题", "bosses": "BOSSES", "chapters": "Boss 章节", "samples": "样本", "low": "低置信度", "normal": "标准置信度",
+        "theme": "颜色主题", "theme_auto": "自动", "theme_light": "浅色", "theme_dark": "深色", "bosses": "BOSSES", "chapters": "Boss 章节", "samples": "样本", "low": "低置信度", "normal": "标准置信度",
         "boundary": "解释边界", "missing": "当前 Guide Snapshot 没有结构化 rotation、天赋、装备或具体实战建议字段，因此本页不生成这些内容。", "boss_isolation": "不同 Boss 的 Encounter Benchmark 不混合。",
         "confidence": "证据等级", "anchors": "机制时间锚点", "patterns": "高分样本可观察模式", "not_recommendations": "整场中位数 · 非推荐次数",
         "ability": "技能", "median_casts": "施放中位数", "median_first_cast": "首次施放中位数", "interpretation": "解释边界", "observed_only": "只描述样本",
@@ -1848,7 +2588,7 @@ def _signed(value: float | None, labels: dict[str, str]) -> str:
 def _labels(locale: str) -> dict[str, str]:
     if locale == "en":
         return {
-            "theme": "Color theme", "boss_attempt": "Boss Attempt", "result": "Result", "kill": "Kill", "wipe": "Wipe",
+            "theme": "Color theme", "theme_auto": "Auto", "theme_light": "Light", "theme_dark": "Dark", "boss_attempt": "Boss Attempt", "result": "Result", "kill": "Kill", "wipe": "Wipe",
             "verified_anomalies": "Verified anomalies", "manual_review": "Manual review", "verified_anomalies_count": "verified anomalies", "manual_review_count": "signals for manual review", "reviewable": "Reviewable conclusion",
             "attempt_timeline": "Attempt pressure timeline", "successful_signals": "successful signals", "evidence_events": "evidence events",
             "mechanics": "Mechanic signals", "involved_players": "Involved players", "next_attempt": "Next-attempt checks",
@@ -1857,7 +2597,7 @@ def _labels(locale: str) -> dict[str, str]:
             "anomalies": "anomalies", "review": "Manual review", "ok": "No anomaly", "unverified": "Pattern unverified", "none": "No involved players in excerpts", "full_attempt": "Full Boss Attempt",
         }
     return {
-        "theme": "颜色主题", "boss_attempt": "Boss Attempt", "result": "当前结果", "kill": "击杀", "wipe": "灭团",
+        "theme": "颜色主题", "theme_auto": "自动", "theme_light": "浅色", "theme_dark": "深色", "boss_attempt": "Boss Attempt", "result": "当前结果", "kill": "击杀", "wipe": "灭团",
         "verified_anomalies": "已验证异常", "manual_review": "待人工裁决", "verified_anomalies_count": "个已验证异常", "manual_review_count": "个信号待人工裁决", "reviewable": "结论可复核",
         "attempt_timeline": "Attempt 压力轨迹", "successful_signals": "成功机制信号", "evidence_events": "证据事件",
         "mechanics": "机制压力", "involved_players": "涉及玩家", "next_attempt": "下一把验证",
@@ -1924,6 +2664,14 @@ def _optional_nonnegative_number(value: Any, label: str) -> float | None:
     return float(value)
 
 
+def _optional_number(value: Any, label: str) -> float | None:
+    if value is None:
+        return None
+    if not _number(value):
+        raise InputError(f"{label} must be null or a finite number.")
+    return float(value)
+
+
 def _digest(value: Any, label: str) -> str:
     digest = _text(value, label, 64).lower()
     if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
@@ -1978,3 +2726,6 @@ _COACHING_CSS = """
 *{box-sizing:border-box}body{margin:0;min-width:320px}.theme-radio{position:fixed;opacity:0;pointer-events:none}.report{--bg:#e5e1d8;--paper:#fbf8ee;--ink:#231f1a;--muted:#6f675b;--line:#918778;--blue:#284b75;--red:#a82d25;--green:#3d6b50;min-height:100vh;background:var(--bg);color:var(--ink);font-family:"Arial Narrow","Avenir Next Condensed",Arial,sans-serif;overflow-wrap:anywhere}.theme-controls{position:fixed;z-index:5;top:16px;right:18px;display:flex;border:1px solid var(--line);background:var(--paper)}.theme-controls label{display:grid;place-items:center;width:34px;height:34px;border-right:1px solid var(--line);cursor:pointer;font-weight:700}.theme-controls label:last-child{border:0}#theme-auto:focus-visible~.report label[for=theme-auto],#theme-light:focus-visible~.report label[for=theme-light],#theme-dark:focus-visible~.report label[for=theme-dark]{outline:3px solid var(--blue);outline-offset:2px}#theme-auto:checked~.report label[for=theme-auto],#theme-light:checked~.report label[for=theme-light],#theme-dark:checked~.report label[for=theme-dark]{background:var(--blue);color:var(--paper)}#theme-dark:checked~.report{--bg:#171716;--paper:#22211e;--ink:#eee9dc;--muted:#b1aa9b;--line:#655f55;--blue:#80aee0;--red:#ff756d;--green:#79bf91}.p-shell,.g-shell{max-width:1580px;margin:auto;padding:20px 30px 40px}.mark{display:grid;grid-template-columns:repeat(2,12px);gap:3px}.mark i{width:12px;height:12px;background:var(--ink)}.mark i:nth-child(2),.mark i:nth-child(3){background:var(--blue)}.kicker{color:var(--blue);font-size:11px;font-weight:800;letter-spacing:.07em}.panel{border:1px solid var(--line);background:var(--paper)}.panel-title{display:flex;justify-content:space-between;align-items:center;min-height:44px;margin:0;padding:0 14px;border-bottom:1px solid var(--line);font-size:14px}.panel-title span{color:var(--muted);font:10px "SFMono-Regular",Consolas,monospace}.p-head,.g-head{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:15px;padding-right:105px}.p-head h1,.g-head h1{margin:0;font-size:clamp(25px,2.5vw,40px);line-height:1}.p-head p,.g-head p{margin:6px 0 0;color:var(--muted);font-size:13px}.p-id,.edition{text-align:right}.p-id b,.p-id span,.edition span,.edition small{display:block}.p-id b,code,time{font-family:"SFMono-Regular",Consolas,monospace}.player-strip{display:grid;grid-template-columns:240px 1fr 245px;margin-top:19px;border:1px solid var(--line);background:var(--paper)}.player-card{display:grid;grid-template-columns:64px 1fr;gap:14px;align-items:center;padding:20px;background:var(--ink);color:var(--paper)}.avatar{display:grid;place-items:center;width:64px;height:64px;border:1px solid currentColor;font:800 20px "SFMono-Regular",Consolas,monospace}.player-card h2{margin:0;font-size:22px}.player-card p{margin:5px 0 0;color:var(--muted);font-size:12px}.fact-ribbon{display:grid;grid-template-columns:repeat(4,1fr)}.fact-ribbon div{display:grid;align-content:center;padding:17px;border-right:1px solid var(--line)}.fact-ribbon small{color:var(--muted);font-weight:700}.fact-ribbon b{margin-top:7px;font:800 22px "SFMono-Regular",Consolas,monospace}.benchmark-seal{display:grid;align-content:center;padding:18px}.benchmark-seal strong{font-size:24px}.benchmark-seal p{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.5}.p-grid{display:grid;grid-template-columns:250px minmax(560px,1fr) 300px;gap:11px;margin-top:11px;align-items:start}.scope-list{margin:0;padding:7px 14px 13px;list-style:none}.scope-list li{padding:10px 0;border-bottom:1px solid color-mix(in srgb,var(--line) 45%,transparent)}.scope-list li:last-child{border:0}.scope-list small,.scope-list b{display:block}.scope-list small{color:var(--muted);font-size:10px}.scope-list b{margin-top:4px;font-size:13px}.ability-board{padding-bottom:12px}.ability-head,.ability-row{display:grid;grid-template-columns:minmax(150px,1.3fr) 70px 70px 65px minmax(130px,1fr);gap:10px;align-items:center;padding:11px 14px}.ability-head{color:var(--muted);font-size:10px;font-weight:800;border-bottom:1px solid var(--line)}.ability-row{border-bottom:1px solid color-mix(in srgb,var(--line) 45%,transparent);font-family:"SFMono-Regular",Consolas,monospace}.ability-name b,.ability-name small{display:block}.ability-name b{font-family:"Arial Narrow",Arial,sans-serif}.ability-name small{margin-top:4px;color:var(--muted);font-size:10px}.cast-track{position:relative;height:18px;border-bottom:1px solid var(--line)}.cast-track i,.cast-track b{position:absolute;left:0;bottom:2px;height:6px}.cast-track i{width:var(--player);background:var(--blue)}.cast-track b{left:var(--median);width:2px;height:14px;background:var(--red)}.guard article{padding:14px;border-bottom:1px solid var(--line)}.guard article:last-child{border:0}.guard p{margin:7px 0 0;color:var(--muted);font-size:12px;line-height:1.5}.bad{color:var(--red)!important}.good{color:var(--green)!important}.evidence-lane{grid-column:1/4;display:grid;grid-template-columns:170px 1fr}.evidence-lane>h2{margin:0;padding:18px;border-right:1px solid var(--line);font-size:17px}.evidence-lane>div{display:grid;grid-template-columns:repeat(3,1fr)}.evidence-lane article{padding:15px;border-right:1px solid var(--line)}.evidence-lane article:last-child{border:0}.evidence-lane h3{margin:0;font-size:13px}.evidence-lane p{margin:7px 0 0;color:var(--muted);font-size:12px;line-height:1.5}.empty{padding:16px;color:var(--muted)}footer{display:flex;justify-content:space-between;gap:20px;margin-top:18px;padding-top:12px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}.g-head{align-items:end;padding-bottom:17px;border-bottom:5px double var(--ink)}.g-head h1{font:500 clamp(32px,4.3vw,62px)/.95 Georgia,"Songti SC",serif;letter-spacing:-.045em}.edition strong{display:block;font:500 39px Georgia,serif}.guide-scope{display:flex;justify-content:space-between;gap:25px;padding:11px 0;border-bottom:1px solid var(--line);font-size:12px}.g-layout{display:grid;grid-template-columns:230px minmax(570px,1fr) 270px;gap:18px;margin-top:22px;align-items:start}.chapter-nav{position:sticky;top:15px;border-top:4px solid var(--blue)}.chapter-nav a{display:block;padding:14px;border-bottom:1px solid var(--line);color:inherit;text-decoration:none}.chapter-nav b,.chapter-nav small{display:block}.chapter-nav small{margin-top:5px;color:var(--muted)}.chapters{display:grid;gap:18px}.chapter{background:var(--paper);border:1px solid var(--line)}.chapter-lede{display:grid;grid-template-columns:1fr auto;gap:20px;padding:20px;border-bottom:1px solid var(--line)}.chapter-lede h2{margin:0;font:500 35px Georgia,"Songti SC",serif}.chapter-lede p{margin:7px 0 0;color:var(--muted);font-size:12px}.confidence{align-self:start;padding:12px;border:2px solid var(--red);color:var(--red);text-align:center}.confidence strong{display:block;font:700 25px Georgia,serif}.pattern-block{padding:18px 20px;border-bottom:1px solid var(--line)}.pattern-block:last-child{border:0}.pattern-block h3{display:flex;justify-content:space-between;margin:0 0 14px;font-size:16px}.pattern-block h3 span{color:var(--muted);font:10px "SFMono-Regular",Consolas,monospace}.anchor-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:0;padding:0;list-style:none}.anchor-list li{padding:12px;border-left:4px solid var(--blue);background:var(--bg)}.anchor-list time,.anchor-list b{display:block}.anchor-list b{margin-top:6px}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--muted);font-size:10px}.sources article{padding:12px 0;border-bottom:1px solid var(--line)}.sources article small{display:block;margin-top:4px;color:var(--blue)}.sources p{color:var(--muted);line-height:1.5}.sources a{color:var(--blue);overflow-wrap:anywhere}.audit{margin-top:14px;padding:12px;background:var(--bg);line-height:1.6}.guide-boundary{padding:15px;border-top:4px solid var(--red)}.guide-boundary h2{margin:0;font-size:16px}.guide-boundary p{color:var(--muted);font-size:12px;line-height:1.6}
 @media(prefers-color-scheme:dark){#theme-auto:checked~.report{--bg:#171716;--paper:#22211e;--ink:#eee9dc;--muted:#b1aa9b;--line:#655f55;--blue:#80aee0;--red:#ff756d;--green:#79bf91}}@media(max-width:1050px){.p-grid,.g-layout{grid-template-columns:220px 1fr}.guard,.guide-boundary{grid-column:1/3}.evidence-lane{grid-column:1/3}.player-strip{grid-template-columns:220px 1fr}.benchmark-seal{display:none}}@media(max-width:720px){.theme-controls{top:10px;right:10px}.p-shell,.g-shell{padding:14px 12px 30px}.p-head,.g-head{grid-template-columns:auto 1fr;padding-right:100px}.p-id,.edition{grid-column:2;text-align:left}.player-strip{grid-template-columns:1fr}.fact-ribbon{grid-template-columns:1fr 1fr}.fact-ribbon div{border-top:1px solid var(--line)}.p-grid,.g-layout{grid-template-columns:1fr}.guard,.guide-boundary,.evidence-lane{grid-column:1}.ability-board{overflow-x:auto}.ability-head,.ability-row{min-width:650px}.evidence-lane{grid-template-columns:1fr}.evidence-lane>h2{border-right:0;border-bottom:1px solid var(--line)}.evidence-lane>div{grid-template-columns:1fr}.evidence-lane article{border-right:0;border-bottom:1px solid var(--line)}.chapter-nav{position:static}.guide-scope{display:block}.guide-scope span{display:block;margin-top:5px}footer{display:block}footer code{display:block;margin-top:8px}}@media(max-width:430px){.fact-ribbon{grid-template-columns:1fr}.chapter-lede{grid-template-columns:1fr}.confidence{justify-self:start}.g-head h1{font-size:36px}}
 """
+_COACHING_CSS += ".rate-board{grid-column:1/4}.rate-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}.rate-grid>div{min-height:70px;padding:12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.rate-grid small{display:block;color:var(--muted);font-size:11px}.rate-grid b{display:block;margin-top:6px;font:700 16px 'SFMono-Regular',Consolas,monospace}.rate-limit{margin:0;padding:12px 14px;color:var(--muted);font-size:12px;line-height:1.5}@media(max-width:1050px){.rate-board{grid-column:1/3}.rate-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:720px){.rate-board{grid-column:1}.rate-grid{grid-template-columns:1fr 1fr}}@media(max-width:430px){.rate-grid{grid-template-columns:1fr}}"
+_COACHING_CSS += ".fact-ribbon{grid-template-columns:repeat(3,minmax(0,1fr))}.dimensions{grid-column:1/4;display:grid;grid-template-columns:1fr 1fr;gap:11px}.coaching-dimension>header{display:flex;justify-content:space-between;gap:16px;align-items:center;min-height:52px;padding:10px 14px;border-bottom:1px solid var(--line)}.coaching-dimension>header h2{margin:0;font-size:20px}.coaching-dimension>header span{color:var(--muted);font-size:11px;font-weight:700}.dimension-facts,.dimension-advice,.dimension-conditions,.dimension-goal,.dimension-limit{padding:14px;border-bottom:1px solid var(--line)}.dimension-limit{border-bottom:0}.coaching-dimension h3{margin:0 0 10px;color:var(--muted);font-size:11px}.dimension-conditions ul{margin:0;padding-left:18px}.dimension-conditions li,.dimension-goal p{font-size:12px;line-height:1.5}.dimension-goal p{margin:0}.dimension-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line)}.dimension-metrics>div{min-height:62px;padding:10px;background:var(--paper)}.dimension-metrics small,.dimension-metrics b{display:block}.dimension-metrics small{color:var(--muted);font-size:10px}.dimension-metrics b{margin-top:5px;font:700 15px 'SFMono-Regular',Consolas,monospace}.not-evaluated,.dimension-limit p{margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.5}.not-evaluated b{color:var(--ink)}.advice-item{padding:0}.advice-item+.advice-item{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}.advice-class{color:var(--blue);font-size:11px}.advice-item h4{margin:7px 0;font-size:17px}.advice-item p,.advice-item li{font-size:12px;line-height:1.5}.advice-item small{display:block;color:var(--muted)}.advice-item a{color:var(--blue)}.dimension-limit details{margin-top:8px}.dimension-limit summary{cursor:pointer;font-size:12px}.comparison-heading{grid-column:1/4;margin:10px 0 0;padding:12px 0 4px;border-bottom:3px double var(--line);font-size:20px}@media(max-width:1050px){.dimensions,.comparison-heading{grid-column:1/3}.player-strip{grid-template-columns:220px 1fr}.benchmark-seal{display:grid;grid-column:1/3;border-top:1px solid var(--line)}}@media(max-width:720px){.dimensions{grid-column:1;grid-template-columns:1fr}.comparison-heading{grid-column:1}.fact-ribbon{grid-template-columns:1fr 1fr}.benchmark-seal{grid-column:1}}@media(max-width:430px){.dimension-metrics,.fact-ribbon{grid-template-columns:1fr}}"
+_COACHING_CSS += ".advice-item h5{margin:12px 0 5px;color:var(--muted);font-size:11px}.advice-item ul{margin:0;padding-left:18px}.advice-item-goal p{margin:0}.advice-item-references details{margin-top:8px}.advice-item-references summary{cursor:pointer;font-size:12px}"
