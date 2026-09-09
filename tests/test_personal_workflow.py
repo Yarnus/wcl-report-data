@@ -470,6 +470,44 @@ class PersonalWorkflowTests(unittest.TestCase):
         self.assertIn("budget_exhausted", second["blockers"])
         self.assertGreaterEqual(second["budget"]["elapsed_seconds"], 170)
 
+    def test_continuation_uses_monotonic_progress_and_baseline_tolerance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = self.setup_files(root)
+            clock = StepClock()
+            baseline = [1_000_000.49]
+            wall_clock = lambda: baseline[0] + clock.value - clock.step
+            initial = initialize_personal_review(
+                "ABC9", 9, 10, root / "outputs", clock=clock, wall_clock=wall_clock
+            )
+
+            baseline[0] = 1_000_000.51
+            continued = self.invoke(
+                files, root, reference_analysis_paths=[], clock=clock, wall_clock=wall_clock,
+                previous_workflow_path=Path(initial["workflow_path"]),
+            )
+
+            baseline[0] = 1_000_001.51
+            drifted = self.invoke(
+                files, root, reference_analysis_paths=[], clock=clock, wall_clock=wall_clock,
+                previous_workflow_path=Path(continued["workflow_path"]),
+            )
+
+        self.assertTrue(continued["workflow"]["clock"]["continuity_available"])
+        self.assertTrue(continued["workflow"]["budget"]["optional_acquisition_open"])
+        self.assertNotEqual(
+            initial["workflow"]["clock"]["session_marker"],
+            continued["workflow"]["clock"]["session_marker"],
+        )
+        self.assertIsNotNone(continued["workflow"]["next_ranking_candidate"])
+        self.assertEqual(continued["invocation_timing"]["status"], "measured")
+        self.assertFalse(drifted["workflow"]["clock"]["continuity_available"])
+        self.assertFalse(drifted["workflow"]["budget"]["optional_acquisition_open"])
+        self.assertIsNone(drifted["workflow"]["next_ranking_candidate"])
+        self.assertIn("timing_continuity_unavailable", drifted["workflow"]["blockers"])
+        self.assertEqual(drifted["invocation_timing"]["status"], "timing_unavailable")
+        self.assertIsNone(drifted["invocation_timing"]["elapsed_seconds"])
+
     def test_clock_reset_preserves_progress_but_stops_optional_acquisition(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

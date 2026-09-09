@@ -555,7 +555,7 @@ class AdviceTests(unittest.TestCase):
         self.assertEqual(delivery["artifact"]["status"], "delivered")
         self.assertIsNone(delivery["target_met"])
 
-    def test_comparison_ready_review_renders_and_finalizes_delivery(self) -> None:
+    def test_comparison_ready_review_delivers_across_windows_clock_rounding_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             refs, mapping, metadata, _, _, _ = advice_setup(root)
@@ -579,7 +579,7 @@ class AdviceTests(unittest.TestCase):
                 "selected_identity": {"report_code": "ABC", "fight_id": 7, "actor_id": 10},
                 "workflow_started_monotonic_seconds": 10.0,
                 "clock": {
-                    "wall_minus_monotonic_seconds": 1_000_000.0,
+                    "wall_minus_monotonic_seconds": 1_000_000.49,
                     "session_marker": hashlib.sha256(b"1000000").hexdigest()[:16],
                     "baseline_tolerance_seconds": 1.0,
                     "continuity_available": True,
@@ -635,7 +635,11 @@ class AdviceTests(unittest.TestCase):
                 report = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "outputs" / "personal-workflows")
                 delivery = finalize_personal_review_delivery(
                     workflow_path, report, root / "outputs",
-                    clock=lambda: 12.0, wall_clock=lambda: 1_000_012.0,
+                    clock=lambda: 12.0, wall_clock=lambda: 1_000_012.51,
+                )
+                unavailable_delivery = finalize_personal_review_delivery(
+                    workflow_path, report, root / "outputs",
+                    clock=lambda: 12.0, wall_clock=lambda: 1_000_014.0,
                 )
             index = json.loads(Path(report["index_path"]).read_text(encoding="utf-8"))
             workflow_source = next(
@@ -648,6 +652,9 @@ class AdviceTests(unittest.TestCase):
         self.assertTrue(html_exists)
         self.assertEqual(delivery["artifact"]["completion_status"], "comparison_ready")
         self.assertEqual(delivery["artifact"]["status"], "delivered")
+        self.assertEqual(
+            unavailable_delivery["artifact"]["status"], "delivered_timing_unavailable"
+        )
 
     def test_delivery_replay_reuses_delivery_and_addresses_finalization(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

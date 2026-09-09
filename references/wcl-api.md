@@ -24,7 +24,7 @@ CN 报告链接可直接作为输入，并会规范化为全球站报告链接�
 排名候选通过官方 `Encounter.characterRankings` 查询，并传入精确 encounter、difficulty、partition、class 和 spec，使用 `externalBuffs: Exclude` 排除 major external buffs。返回的排名 JSON 仍是不可信输入。WCL 排名通常不返回 source ID；CLI 必须通过候选报告的 actor/fight metadata 唯一补全后，候选才能进入内容寻址的近期 Ranking Cohort。
 
 Personal Review 的排名发现与样本资格是两个阶段：Ranking Candidate 只有在 Complete Bundle、硬条件和 Encounter Profile eligibility 均通过后才成为 Reference Sample。新建 Personal Review 以 3 个 Reference Samples 为交付目标，拒绝候选后按 Cohort 中的稳定 `report_code:fight_id:source_id` 身份补位；Raid Guide 和底层 `coach candidates` 的默认目标仍为 10。Ranking Cohort 保留最后一次已查询的完整去重页，并记录真实已查询页范围、WCL `hasMorePages`、`target_reached`、本地 `truncated` 和派生的 `exhausted`；因此达到目标后的同页候选无需重新请求即可补位。只有 `hasMorePages` 非 true 且结果未截断时才能证明 page exhaustion。预算关闭、已证明的 page exhaustion、API failure 或 WCL 429 断路器会在下一项可选工作前停止调度，但不会取消已在途请求或破坏 Raw Page/checkpoint。
-交付的 finalization artifact 记录从 workflow 选择开始、经过验证/锁/持久化直到 HTML 和 index 哈希确认后的 elapsed、`target_met` 与 `completion_status`；session marker 或 monotonic 连续性无法确认时保留进度但停止可选采集。
+交付的 finalization artifact 记录从 workflow 选择开始、经过验证/锁/持久化直到 HTML 和 index 哈希确认后的 elapsed、`target_met` 与 `completion_status`。计时连续性要求 monotonic clock 不倒退，且当前 wall-minus-monotonic baseline 与持久化 baseline 的差值不超过记录的 tolerance；否则保留进度但停止可选采集和连续计时。session marker 只是持久化 metadata 和本地诊断信息，不参与严格相等比较。
 
 战斗难度 ID 只能通过该报告返回的 `zone.difficulties { id name }` 解释。不同 WCL 上下文中的 ID 可能不同，因此不能使用硬编码的全局枚举。
 
