@@ -192,9 +192,6 @@ def orchestrate_personal_review(
     previous_baseline = previous_clock.get("wall_minus_monotonic_seconds")
     if (
         previous_clock.get("continuity_available") is not True
-        or previous_clock.get("session_marker") != _clock_session_marker(
-            invocation_wall, invocation_started
-        )
         or previous_started > invocation_started
         or not _finite(previous_baseline)
         or abs(previous_baseline - baseline) > CLOCK_BASELINE_TOLERANCE_SECONDS
@@ -747,7 +744,6 @@ def finalize_personal_review_delivery(
 
     _verify_refs_current([html_ref, index_ref])
     completed, current_baseline = _clock_sample(clock, wall_clock)
-    session_marker = _clock_session_marker_from_baseline(current_baseline)
     clock_state = _object(workflow.get("clock"), "Personal Review workflow clock")
     started = workflow.get("workflow_started_monotonic_seconds")
     baseline = clock_state.get("wall_minus_monotonic_seconds")
@@ -758,7 +754,6 @@ def finalize_personal_review_delivery(
         and _finite(baseline)
         and completed >= started
         and abs(current_baseline - baseline) <= CLOCK_BASELINE_TOLERANCE_SECONDS
-        and session_marker == clock_state.get("session_marker")
     )
     target = workflow["budget"]["target_seconds"]
     elapsed = completed - started if continuity else None
@@ -803,7 +798,6 @@ def finalize_personal_review_delivery(
     final_continuity = (
         continuity
         and abs(finalized_baseline - baseline) <= CLOCK_BASELINE_TOLERANCE_SECONDS
-        and _clock_session_marker_from_baseline(finalized_baseline) == clock_state.get("session_marker")
     )
     final_elapsed = finalized_at - started if final_continuity else None
     finalization = {
