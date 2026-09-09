@@ -164,6 +164,8 @@ CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。
 
 Agent 入口按需加载[机制/triage](references/workflow-mechanics.md)、[个人复盘](references/workflow-personal.md)和[攻略](references/workflow-guide.md)。个人复盘先初始化计时，再搜索绑定原 Cohort/Profiles 的本地兼容 Benchmark；深度验证后复用已有3–10样本。多 Boss 攻略复用当前有效公共 Specialization Profile与合格已完成章节，只获取缺失部分。详细字段与来源规则在数据契约中按需读取。
 
+外部攻略按[有界抓取流程](references/guide-retrieval.md)读取：WebFetch一次失败后尝试本地curl，再尝试可用浏览器和版本相关的替代来源。HTTP 200仍须核验实际正文；验证页、脚本外壳、搜索摘要或Blizzard通用职业概述不能替代专精指南。工具不可用或正文/patch无法确认时披露证据缺口。
+
 优先复核候选使用 `python -m wcl_raid_coach coach triage "<WCL_URL_WITH_NUMERIC_FIGHT>"`。CLI 在同一进程复用客户端和报告元数据，输出紧凑 `mechanics`、有序 `candidates`、`windows` 与 `coverage`；只考虑 verified/enabled/target 玩家异常，最多 3 人、每人 3 个不同异常时间。同一异常中的并列玩家才能共享窗口。缺少死亡前 10 秒覆盖时补一次死亡窗口。无受支持候选时返回 `no_supported_candidate`，不请求 focused events。团队事实保持并列；judgment/causal_attribution 为 null。全过程保持临时内存证据和阶段前后的 Report Revision 校验，失败不返回成功的合并结果。coverage 明确记录紧凑异常展示抑制和窗口截断；不代表完整个人复盘。
 
 Skill 能理解 `PT6`、`H6`、`M6` 形式的 Encounter Designator。前缀分别表示 Normal、Heroic、Mythic，数字表示 WCL `zone.encounters` 原始列表中的一基位置。Designator 只确定难度和 encounter；同一报告有多次匹配 Boss Attempt 时，Skill 必须列出明确的 fight ID 等待选择，不能自动选择击杀、最后一次或全部尝试。

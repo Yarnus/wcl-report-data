@@ -15,7 +15,7 @@ Search local compatible, current Specialization Profiles first; share identical 
 
 ## Profiles and candidates
 
-Prioritize Blizzard/WCL official material, maintained class communities/specialization guides/simulation documentation, cross-checking Wowhead/Icy Veins. Verify expansion, patch, update date and actual article text. Store URL, title, access time, excerpt and content hash, not entire third-party articles. Failed retrieval, snippets or generic class overviews do not mean a specialization guide was read; report the gap. External retrieval fallback belongs to separate Issue #29; this workflow neither duplicates its implementation nor makes it a prerequisite.
+Prioritize Blizzard/WCL official material, maintained class communities/specialization guides/simulation documentation, cross-checking Wowhead/Icy Veins. Before reading or refreshing external Profile sources, read and follow [guide retrieval and article validation](guide-retrieval.en.md): after WebFetch fails, try bounded local HTTP retrieval of the same URL before browsers or alternatives. Profiles store only URL, title, access time, excerpt and content hash; guidance requires actually read, version-relevant article text.
 
 When constructing Profiles, read coaching artifact and Advice rules in the [data contract](data-contract.en.md). Encounter eligibility declares priority/excluded targets, using NPC gameIDs for nonempty lists. Missing/invalid Profiles allow candidate display but not stable Benchmark generation.
 

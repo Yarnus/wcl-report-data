@@ -15,7 +15,7 @@ resolve通过官方元数据确定唯一当前Retail zone、Heroic难度、原�
 
 ## Profiles与候选
 
-资料优先Blizzard/WCL官方、维护中的职业社区/专精指南/模拟文档，Wowhead/Icy Veins交叉验证。核验版本、patch、更新日期和实际正文；Profile只保存URL、标题、访问时间、引用摘要与内容hash，不保存整篇文章。抓取失败或只有摘要/通用职业概述不得声称读过专精指南；记录缺口。外部抓取fallback由独立Issue #29负责，本工作流不新增或重复其实现，也不以它为前置条件。
+资料优先Blizzard/WCL官方、维护中的职业社区/专精指南/模拟文档，Wowhead/Icy Veins交叉验证。需要读取或刷新外部Profile来源时，先读并执行[资料抓取与正文验证](guide-retrieval.md)：WebFetch失败后先尝试同URL的有界本地HTTP抓取，再考虑浏览器及替代来源。Profile只保存URL、标题、访问时间、引用摘要与内容hash；只有实际读到且版本相关的正文才能支持资料结论。
 
 构造Profile时读[数据契约](data-contract.md)的教练Artifact与Advice规则。Encounter eligibility必须声明优先/排除目标，非空列表为跨报告NPC gameID。Profile缺失或失败可展示候选，不能生成稳定Benchmark。
 
