@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import math
@@ -9,13 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from .errors import DatasetError, InputError
-from .dataset import validate_complete_bundle
+from .diagnostics import measured
+from .dataset import _complete_bundle_inputs, _validated_events
 from .storage import read_json, sha256_file
 
 
 ANALYSIS_SCHEMA_VERSION = 4
 
 
+@measured("player_analysis")
 def analyze_player(
     manifest_path: Path,
     index_path: Path,
@@ -23,7 +24,7 @@ def analyze_player(
     *,
     partition_id: int | None = None,
 ) -> dict[str, Any]:
-    manifest, events_path = validate_complete_bundle(manifest_path)
+    manifest, events_path = _complete_bundle_inputs(manifest_path)
     index = _object(read_json(index_path), "Report Index")
     index_digest = hashlib.sha256(
         json.dumps(index, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -83,50 +84,43 @@ def analyze_player(
     resource_events = 0
     interrupts = 0
     deaths = 0
-    with gzip.open(events_path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise DatasetError("Canonical Event stream contains invalid JSON.") from exc
-            if not isinstance(event, dict):
-                raise DatasetError("Canonical Event stream contains a non-object event.")
-            source = event.get("source")
-            target = event.get("target")
-            from_player = isinstance(source, dict) and source.get("actor_id") in owned_actor_ids
-            to_player = isinstance(target, dict) and target.get("actor_id") == actor_id
-            event_type = event.get("type")
-            ability = str(event.get("ability_id"))
-            fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
-            amount = _amount(fields)
-            if from_player and event_type == "cast":
-                casts[ability] += 1
-                timestamp = event.get("fight_time_ms")
-                if ability not in first_cast_ms and isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
-                    first_cast_ms[ability] = float(timestamp)
-                if source["actor_id"] != actor_id:
-                    owned_actor_casts[ability] += 1
-                elif type(event.get("ability_id")) is not int or event["ability_id"] <= 1:
-                    # WCL 1 is Melee, not client Spell 1; nonpositive IDs are not client spells.
-                    synthetic_casts[ability] += 1
-                else:
-                    player_casts[ability] += 1
-                    if ability not in player_first_cast_ms and is_finite_number(timestamp):
-                        player_first_cast_ms[ability] = float(timestamp)
-            elif from_player and event_type == "damage":
-                damage_by_ability[ability] += amount
-                if isinstance(target, dict) and isinstance(target.get("actor_id"), int):
-                    damage_by_target[str(target["actor_id"])] += amount
-                    if target["actor_id"] in npc_ids:
-                        damage_by_npc[npc_ids[target["actor_id"]]] += amount
-            elif from_player and event_type == "heal":
-                healing_by_ability[ability] += amount
-            elif from_player and event_type in {"resourcechange", "energize"}:
-                resource_events += 1
-            elif from_player and event_type == "interrupt":
-                interrupts += 1
-            if to_player and event_type == "death":
-                deaths += 1
+    for event in _validated_events(manifest, events_path):
+        source = event.get("source")
+        target = event.get("target")
+        from_player = isinstance(source, dict) and source.get("actor_id") in owned_actor_ids
+        to_player = isinstance(target, dict) and target.get("actor_id") == actor_id
+        event_type = event.get("type")
+        ability = str(event.get("ability_id"))
+        fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+        amount = _amount(fields)
+        if from_player and event_type == "cast":
+            casts[ability] += 1
+            timestamp = event.get("fight_time_ms")
+            if ability not in first_cast_ms and isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
+                first_cast_ms[ability] = float(timestamp)
+            if source["actor_id"] != actor_id:
+                owned_actor_casts[ability] += 1
+            elif type(event.get("ability_id")) is not int or event["ability_id"] <= 1:
+                # WCL 1 is Melee, not client Spell 1; nonpositive IDs are not client spells.
+                synthetic_casts[ability] += 1
+            else:
+                player_casts[ability] += 1
+                if ability not in player_first_cast_ms and is_finite_number(timestamp):
+                    player_first_cast_ms[ability] = float(timestamp)
+        elif from_player and event_type == "damage":
+            damage_by_ability[ability] += amount
+            if isinstance(target, dict) and isinstance(target.get("actor_id"), int):
+                damage_by_target[str(target["actor_id"])] += amount
+                if target["actor_id"] in npc_ids:
+                    damage_by_npc[npc_ids[target["actor_id"]]] += amount
+        elif from_player and event_type == "heal":
+            healing_by_ability[ability] += amount
+        elif from_player and event_type in {"resourcechange", "energize"}:
+            resource_events += 1
+        elif from_player and event_type == "interrupt":
+            interrupts += 1
+        if to_player and event_type == "death":
+            deaths += 1
     duration = valid_duration_ms(fight.get("duration_ms"))
     collection = manifest["collection"]
     if duration != collection["end_time"] - collection["start_time"]:

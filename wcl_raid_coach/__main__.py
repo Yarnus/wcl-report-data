@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import __version__
+from . import diagnostics
 from .analysis import analyze_player
 from .advice import create_coaching_advice
 from .ability_names import ensure_ability_names
@@ -17,7 +18,7 @@ from .content_names import RAID_DIFFICULTY_IDS, ensure_content_names, load_conte
 from .api import WclClient
 from .config import default_cache_root, default_data_root, resolve_credentials
 from .dataset import DatasetService, DatasetStore, query_bundle
-from .errors import InputError, WclRaidCoachError
+from .errors import DatasetError, InputError, WclRaidCoachError
 from .coach_models import CoachRequest, EncounterDesignator, parse_specialization
 from .coach_context import resolve_current_raid
 from .coach_tasks import CoachTaskStore
@@ -53,6 +54,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
 def create_parser() -> argparse.ArgumentParser:
     parser = JsonArgumentParser(prog="wcl-raid-coach", description="Prepare WCL raid evidence and coaching artifacts.")
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--diagnostics", action="store_true", help="Write numeric performance diagnostics as JSON to stderr.")
     parser.add_argument("--data-root", type=Path, default=default_data_root())
     parser.add_argument("--cache-root", type=Path, default=default_cache_root())
     parser.add_argument("--env-file", type=Path, help="Read WCL credentials from this .env file.")
@@ -135,6 +137,8 @@ def create_parser() -> argparse.ArgumentParser:
         help="Return a small summary without raw WCL payloads or pet-only anomaly records.",
     )
     mechanics.add_argument("--locale", choices=("zh-CN", "en"), default="zh-CN")
+    triage = coach_commands.add_parser("triage", help="Collect priority candidates and focused facts in one process.")
+    triage.add_argument("url")
     evidence = coach_commands.add_parser(
         "evidence", help="Collect a focused in-memory event window for specific participants."
     )
@@ -215,7 +219,15 @@ def create_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = create_parser().parse_args(argv)
-        result = run(args)
+        if args.diagnostics:
+            with diagnostics.collect() as measurements:
+                try:
+                    with diagnostics.stage("command"):
+                        result = run(args)
+                finally:
+                    print(json.dumps(measurements.snapshot(), sort_keys=True), file=sys.stderr)
+        else:
+            result = run(args)
         _print_json({"ok": True} | result)
         return 0
     except WclRaidCoachError as exc:
@@ -229,6 +241,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     store = DatasetStore(args.data_root, args.cache_root)
     if args.command == "coach":
+        if args.coach_command == "triage":
+            ref = ReportRef.parse(args.url)
+            if type(ref.fight) is not int:
+                raise InputError("Triage requires an explicit numeric fight ID.")
+            credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
+            return MechanicReviewService(WclClient(credentials)).triage(ref)
         if args.coach_command == "mechanics":
             credentials = resolve_credentials(env_files=[args.env_file] if args.env_file else None)
             review = MechanicReviewService(WclClient(credentials)).review(
@@ -576,7 +594,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result["content_names"] = content_names_info
         return result
     if args.command == "query":
-        ability_names = _ensure_ability_names(store)
         result = query_bundle(
             args.manifest,
             event_types=set(args.event_types) if args.event_types else None,
@@ -588,7 +605,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             cursor=args.cursor,
             limit=args.limit,
         )
-        return result | {"ability_names": ability_names}
+        return result
     if args.command == "dataset":
         if args.dataset_command == "list":
             return {"action": "dataset_list"} | store.list_datasets()
@@ -624,19 +641,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     service = DatasetService(client, store)
     ref = ReportRef.parse(args.url)
     if args.command == "inspect":
-        ability_names = _ensure_ability_names(store)
-        content_names_info = _ensure_content_names(store)
-        content_names = load_content_names(Path(content_names_info["mapping_path"]))
-        result = _localize_inspection(service.inspect(ref), content_names)
-        return result | {"ability_names": ability_names, "content_names": content_names_info}
+        result = service.inspect(ref)
+        content_names_info = None
+        try:
+            with store.content_names_lock(timeout_seconds=0):
+                content_names_info = ensure_content_names(store.data_root, allow_download=False)
+                if content_names_info is not None:
+                    content_names = load_content_names(Path(content_names_info["mapping_path"]))
+                    result = _localize_inspection(result, content_names)
+        except DatasetError:
+            content_names_info = None
+        return result | {"content_names": content_names_info}
     if args.command == "prepare":
-        ability_names = _ensure_ability_names(store)
         return service.prepare(
             ref,
             fight_ids=args.fight_ids,
             encounter_id=args.encounter_id,
             all_boss_fights=args.all_boss_fights,
-        ) | {"ability_names": ability_names}
+        )
     raise InputError(f"Unsupported command: {args.command}")
 
 

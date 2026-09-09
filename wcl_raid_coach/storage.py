@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from .diagnostics import stage
 
 
 def read_json(path: Path) -> Any:
@@ -105,14 +106,15 @@ def artifact_lock(path: Path, timeout_seconds: float = 10.0) -> Iterator[None]:
     lock_path = path.with_name(f".{path.name}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout_seconds
-    while True:
-        try:
-            lock_path.mkdir()
-            break
-        except FileExistsError:
-            if time.monotonic() >= deadline:
-                raise OSError(f"Timed out waiting for artifact lock: {lock_path}")
-            time.sleep(0.05)
+    with stage("artifact_lock_wait"):
+        while True:
+            try:
+                lock_path.mkdir()
+                break
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise OSError(f"Timed out waiting for artifact lock: {lock_path}")
+                time.sleep(0.05)
     try:
         yield
     finally:

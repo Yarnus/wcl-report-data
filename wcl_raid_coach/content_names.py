@@ -5,7 +5,6 @@ import hashlib
 import http.client
 import json
 import re
-import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -13,6 +12,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from .errors import DatasetError
+from .diagnostics import copy_response_body, measured, network_attempt
 from .storage import atomic_write_compact_json, atomic_write_json, read_json
 
 
@@ -46,13 +46,16 @@ SOURCE_URLS = {
 }
 
 
-def ensure_content_names(data_root: Path) -> dict[str, Any]:
+@measured("content_mapping_initialization")
+def ensure_content_names(data_root: Path, *, allow_download: bool = True) -> dict[str, Any] | None:
     root = data_root.expanduser()
     mapping_path = root / MAPPING_NAME
     metadata_path = root / METADATA_NAME
     existing = _read_existing(mapping_path, metadata_path)
     if existing is not None:
         return _result(mapping_path, metadata_path, existing)
+    if not allow_download:
+        return None
 
     try:
         with tempfile.TemporaryDirectory() as temporary:
@@ -234,14 +237,14 @@ def _download(directory: Path, key: str, url: str) -> tuple[Path, str]:
     for attempt in range(3):
         try:
             request = Request(url, headers={"User-Agent": "wcl-raid-coach content names"})
-            with urlopen(request, timeout=120) as response:
+            with network_attempt("WagoContentTable", attempt) as measurement, urlopen(request, timeout=120) as response:
                 source_file = response.headers.get_filename()
                 match = re.fullmatch(rf"{re.escape(table)}\.(\d+(?:\.\d+)+)\.csv", source_file or "")
                 if match is None:
                     raise ValueError(f"Wago response does not identify a {table} client build.")
                 path = directory / f"{key}.{source_file}"
                 with path.open("wb") as handle:
-                    shutil.copyfileobj(response, handle)
+                    copy_response_body(response, handle, measurement)
             return path, match.group(1)
         except (OSError, TimeoutError, http.client.HTTPException):
             if attempt == 2:

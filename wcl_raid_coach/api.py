@@ -19,6 +19,8 @@ from urllib.request import Request, urlopen
 
 from .config import Credentials
 from .errors import ApiError, RateLimitError
+from . import diagnostics
+from .api_schedule import ApiSchedule
 
 
 TOKEN_URL = "https://www.warcraftlogs.com/oauth/token"
@@ -192,6 +194,7 @@ class WclClient:
         self._reserved_points = 0.0
         self._estimated_spent_points = 0.0
         self._rate_limit_tripped = threading.Event()
+        self._candidate_metadata: dict[tuple[str, int], dict[str, Any]] = {}
 
     def token(self) -> str:
         if self._token and time.time() < self._token_expiry - 30:
@@ -211,7 +214,7 @@ class WclClient:
                 },
                 method="POST",
             )
-            payload = self._request_json(request)
+            payload = self._request_json(request, operation="OAuth")
             token = payload.get("access_token")
             if not isinstance(token, str):
                 raise ApiError("WCL token response did not contain an access_token.")
@@ -231,7 +234,14 @@ class WclClient:
             headers={"Authorization": f"Bearer {self.token()}", "Content-Type": "application/json"},
             method="POST",
         )
-        payload = self._request_json(request)
+        operation = {
+            REPORT_QUERY: "ReportIndex", EVENT_QUERY: "FightEvents",
+            MECHANIC_EVENT_QUERY: "MechanicEvents", FOCUSED_EVENT_QUERY: "FocusedEvents",
+            REVISION_QUERY: "ReportRevision", RATE_LIMIT_QUERY: "RateLimit",
+            CURRENT_RAIDS_QUERY: "CurrentRetailRaids", RANKINGS_QUERY: "RankedReferences",
+            CANDIDATE_SOURCE_QUERY: "CandidateSource",
+        }.get(query, "OtherGraphQL")
+        payload = self._request_json(request, operation=operation)
         if payload.get("errors"):
             messages = "; ".join(str(error.get("message", error)) for error in payload["errors"])
             raise ApiError(f"WCL GraphQL error: {messages}")
@@ -239,7 +249,7 @@ class WclClient:
         if not isinstance(data, dict):
             raise ApiError("WCL GraphQL response did not contain a data object.")
         if isinstance(data.get("rateLimitData"), dict):
-            self._update_rate_limit(data["rateLimitData"])
+            self._update_rate_limit(data["rateLimitData"], observed=payload.get("_shared_quota") is not True)
         return data
 
     def fetch_report(self, code: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -409,11 +419,16 @@ class WclClient:
         return rankings
 
     def resolve_candidate_source(self, candidate: dict[str, Any]) -> int | None:
-        with self.reserve_api_points():
-            data = self.graphql(
-                CANDIDATE_SOURCE_QUERY,
-                {"code": candidate.get("report_code"), "fightID": candidate.get("fight_id")},
-            )
+        code, fight_id = candidate.get("report_code"), candidate.get("fight_id")
+        if not isinstance(code, str) or not code or type(fight_id) is not int or fight_id <= 0:
+            return None
+        key = (code, fight_id)
+        if key not in self._candidate_metadata:
+            with self.reserve_api_points():
+                self._candidate_metadata[key] = self.graphql(
+                    CANDIDATE_SOURCE_QUERY, {"code": code, "fightID": fight_id},
+                )
+        data = self._candidate_metadata[key]
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
         if not isinstance(report, dict):
@@ -473,14 +488,14 @@ class WclClient:
                     self._estimated_spent_points += required
 
     def _latest_rate_limit(self) -> dict[str, Any]:
-        with self._rate_limit_lock:
-            snapshot = dict(self._rate_limit_snapshot) if self._rate_limit_snapshot is not None else None
-        return snapshot if snapshot is not None else self.rate_limit()
+        return self.rate_limit()
 
-    def _update_rate_limit(self, value: dict[str, Any]) -> None:
+    def _update_rate_limit(self, value: dict[str, Any], *, observed: bool = True) -> None:
         for field in ("limitPerHour", "pointsSpentThisHour", "pointsResetIn"):
             if isinstance(value.get(field), bool) or not isinstance(value.get(field), (int, float)):
                 raise ApiError(f"WCL rate-limit field {field!r} is missing or invalid.")
+        if observed:
+            diagnostics.quota_snapshot(value)
         with self._rate_limit_lock:
             self._rate_limit_snapshot = dict(value)
             self._estimated_spent_points = 0.0
@@ -490,25 +505,50 @@ class WclClient:
         if self._rate_limit_tripped.is_set():
             raise RateLimitError("WCL API rate-limit circuit breaker is open; request was not started.")
 
-    def _request_json(self, request: Request) -> dict[str, Any]:
+    def _request_json(self, request: Request, *, operation: str = "OtherHTTP") -> dict[str, Any]:
         if not request.has_header("Accept-Encoding"):
             request.add_header("Accept-Encoding", "gzip")
         for attempt in range(self.max_retries + 1):
             try:
-                with urlopen(request, timeout=self.timeout) as response:
-                    raw = response.read()
-                    content_encoding = response.headers.get("Content-Encoding")
-                break
+                with ApiSchedule().attempt(operation) as scheduled:
+                    if scheduled.cached is not None:
+                        return scheduled.cached
+                    with diagnostics.network_attempt(operation, attempt) as measurement:
+                        try:
+                            with urlopen(request, timeout=self.timeout) as response:
+                                raw = response.read()
+                                measurement["response_body_bytes"] = len(raw)
+                                content_encoding = response.headers.get("Content-Encoding")
+                        except HTTPError as exc:
+                            if exc.code == 429:
+                                self._rate_limit_tripped.set()
+                                scheduled.rate_limited(exc.headers)
+                            try:
+                                error_body = exc.read()
+                            except (OSError, http.client.HTTPException) as body_error:
+                                if isinstance(body_error, http.client.IncompleteRead):
+                                    measurement["response_body_bytes"] = len(body_error.partial)
+                                if exc.code == 429:
+                                    raise RateLimitError("WCL HTTP 429: response body unavailable.") from body_error
+                                raise
+                            measurement["response_body_bytes"] = len(error_body)
+                            raise
+                        except http.client.IncompleteRead as exc:
+                            measurement["response_body_bytes"] = len(exc.partial)
+                            raise
+                    payload = _decode_response(raw, content_encoding)
+                    scheduled.observe(payload)
+                    return payload
             except HTTPError as exc:
                 if exc.code == 429:
                     self._rate_limit_tripped.set()
-                    detail = exc.read().decode("utf-8", errors="replace")
+                    detail = error_body.decode("utf-8", errors="replace")
                     raise RateLimitError(f"WCL HTTP 429: {detail[:500]}") from exc
                 if exc.code in RETRYABLE_HTTP_STATUSES and attempt < self.max_retries:
                     retry_after = exc.headers.get("Retry-After") if exc.headers else None
                     self._wait_before_retry(attempt, retry_after)
                     continue
-                detail = exc.read().decode("utf-8", errors="replace")
+                detail = error_body.decode("utf-8", errors="replace")
                 raise ApiError(f"WCL HTTP {exc.code}: {detail[:500]}") from exc
             except (URLError, TimeoutError, ConnectionError, http.client.HTTPException, ssl.SSLError) as exc:
                 if attempt < self.max_retries:
@@ -518,18 +558,6 @@ class WclClient:
                 raise ApiError(f"Unable to reach WCL after {self.max_retries + 1} attempts: {reason}") from exc
         else:
             raise AssertionError("WCL request retry loop exited unexpectedly.")
-        if isinstance(content_encoding, str) and content_encoding.strip().lower() == "gzip":
-            try:
-                raw = gzip.decompress(raw)
-            except (EOFError, OSError, zlib.error) as exc:
-                raise ApiError("WCL returned an invalid gzip response.") from exc
-        try:
-            payload = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise ApiError("WCL returned a non-JSON response.") from exc
-        if not isinstance(payload, dict):
-            raise ApiError("WCL returned an unexpected JSON value.")
-        return payload
 
     def _wait_before_retry(self, attempt: int, retry_after: str | None = None) -> None:
         delay = self.retry_backoff_seconds * (2**attempt)
@@ -549,3 +577,18 @@ class WclClient:
 
 def _server_key(value: Any) -> str:
     return "".join(character for character in str(value).casefold() if character.isalnum())
+
+
+def _decode_response(raw: bytes, content_encoding: Any) -> dict[str, Any]:
+    if isinstance(content_encoding, str) and content_encoding.strip().lower() == "gzip":
+        try:
+            raw = gzip.decompress(raw)
+        except (EOFError, OSError, zlib.error) as exc:
+            raise ApiError("WCL returned an invalid gzip response.") from exc
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ApiError("WCL returned a non-JSON response.") from exc
+    if not isinstance(payload, dict):
+        raise ApiError("WCL returned an unexpected JSON value.")
+    return payload

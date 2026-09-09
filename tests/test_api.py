@@ -3,6 +3,9 @@ from __future__ import annotations
 import gzip
 import io
 import unittest
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
 from http.client import IncompleteRead
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -18,6 +21,7 @@ from wcl_raid_coach.api import (
     WclClient,
 )
 from wcl_raid_coach.config import Credentials
+from wcl_raid_coach.api_schedule import ApiSchedule
 from wcl_raid_coach.errors import ApiError, RateLimitError
 
 
@@ -38,9 +42,38 @@ class Response:
         return self.value
 
 
+@contextmanager
+def isolated_schedule():
+    with tempfile.TemporaryDirectory() as directory, patch("wcl_raid_coach.api_schedule.coordination_root", return_value=Path(directory)):
+        with ApiSchedule().attempt("RateLimit") as scheduled:
+            scheduled.observe({"data": {"rateLimitData": {
+                "limitPerHour": 3600, "pointsSpentThisHour": 0, "pointsResetIn": 3600,
+            }}})
+        yield
+
+
 class WclClientTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(isolated_schedule())
+
     def make_client(self, **kwargs) -> WclClient:
         return WclClient(Credentials("client-id", "client-secret", "test"), **kwargs)
+
+    def test_candidate_metadata_reuse_still_checks_each_unique_identity(self):
+        client = self.make_client()
+        report = {"masterData": {"actors": [
+            {"id": 10, "name": "Alpha", "server": "Realm", "subType": "Priest"},
+            {"id": 11, "name": "Bravo", "server": "Realm", "subType": "Priest"},
+        ]}, "fights": [{"id": 7, "friendlyPlayers": [10, 11], "friendlySpecs": ["Holy", "Shadow"]}]}
+        candidate = {"report_code": "ABC", "fight_id": 7, "name": "Alpha", "server": "Realm", "class_name": "Priest", "spec_name": "Holy"}
+        with patch.object(client, "graphql", return_value={"reportData": {"report": report}}) as graphql, patch.object(
+            client, "rate_limit", return_value={"limitPerHour": 3600, "pointsSpentThisHour": 0, "pointsResetIn": 3600}
+        ):
+            self.assertEqual(client.resolve_candidate_source(candidate), 10)
+            self.assertEqual(client.resolve_candidate_source(candidate | {"name": "Bravo", "spec_name": "Shadow"}), 11)
+            self.assertIsNone(client.resolve_candidate_source(candidate | {"server": "Wrong"}))
+            self.assertIsNone(client.resolve_candidate_source(candidate | {"spec_name": "Shadow"}))
+        self.assertEqual(graphql.call_count, 1)
 
     def test_retries_incomplete_response(self) -> None:
         responses = [Response(IncompleteRead(b"", 1)), Response(b'{"ok": true}')]
@@ -133,7 +166,7 @@ class WclClientTests(unittest.TestCase):
             "pointsSpentThisHour": 0,
             "pointsResetIn": 3600,
         }
-        response = {"reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
+        response = {"rateLimitData": client._rate_limit_snapshot, "reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
 
         with patch.object(client, "graphql", return_value=response) as graphql:
             client.fetch_events_page("AbC123", 1, 2_000, 5_000)
@@ -148,7 +181,7 @@ class WclClientTests(unittest.TestCase):
             "pointsSpentThisHour": 0,
             "pointsResetIn": 3600,
         }
-        response = {"reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
+        response = {"rateLimitData": client._rate_limit_snapshot, "reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
 
         with patch.object(client, "graphql", return_value=response) as graphql:
             client.fetch_mechanic_events_page("AbC123", 1, 2_000, 5_000, "ability.id = 1")
@@ -165,7 +198,7 @@ class WclClientTests(unittest.TestCase):
             "pointsSpentThisHour": 0,
             "pointsResetIn": 3600,
         }
-        response = {"reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
+        response = {"rateLimitData": client._rate_limit_snapshot, "reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
 
         with patch.object(client, "graphql", return_value=response) as graphql:
             client.fetch_focused_events_page("AbC123", 1, 2_000, 5_000, 10)

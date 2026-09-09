@@ -48,9 +48,10 @@ class MechanicReviewService:
         self.client = client
 
     def review(
-        self, ref: ReportRef, *, encounter_designator: EncounterDesignator | None = None
+        self, ref: ReportRef, *, encounter_designator: EncounterDesignator | None = None,
+        _report: tuple[dict[str, Any], Any] | None = None,
     ) -> dict[str, Any]:
-        report, rate_limit = self.client.fetch_report(ref.code)
+        report, rate_limit = _report if _report is not None else self.client.fetch_report(ref.code)
         self._validate_report(report, ref.code)
         choices = self._fight_choices(report, encounter_designator)
         if ref.fight is None:
@@ -157,9 +158,16 @@ class MechanicReviewService:
         window_ms: float,
         player_ids: list[int],
         expected_identity: str,
+        _report: tuple[dict[str, Any], Any] | None = None,
     ) -> dict[str, Any]:
-        report, rate_limit = self.client.fetch_report(ref.code)
+        report, rate_limit = _report if _report is not None else self.client.fetch_report(ref.code)
         self._validate_report(report, ref.code)
+        if _report is not None:
+            revision = self.client.fetch_report_revision(ref.code)
+            if type(revision) is not int:
+                raise ApiError("WCL did not return a numeric report revision.")
+            if revision != report["revision"]:
+                raise RevisionChangedError("Report Revision changed between triage phases.")
         if ref.fight is None or ref.fight == "last":
             raise InputError("Focused evidence requires an explicit numeric fight ID.")
         current_identity = {
@@ -315,6 +323,52 @@ class MechanicReviewService:
             "rate_limit": rate_limit,
             "judgment": None,
             "causal_attribution": None,
+        }
+
+    def triage(self, ref: ReportRef) -> dict[str, Any]:
+        if type(ref.fight) is not int:
+            raise InputError("Triage requires an explicit numeric fight ID.")
+        report = self.client.fetch_report(ref.code)
+        compact = compact_mechanic_review(self.review(ref, _report=report))
+        candidates, requests = _triage_selection(compact)
+        windows = []
+        for at_ms, player_ids, death_anomaly in requests:
+            window = self.focused_evidence(
+                ref, at_ms=at_ms, window_ms=10_000, player_ids=player_ids,
+                expected_identity=compact["evidence_identity"], _report=report,
+            )
+            windows.append(window)
+            # Supplement only a death whose preceding ten seconds extend beyond this window.
+            deaths = [event for event in window["events"] if event["type"] == "death"
+                      and max(0, event["fight_time_ms"] - 10_000) < window["window"]["from_ms"]]
+            if deaths and not death_anomaly:
+                supplemented = set()
+                for death in sorted(deaths, key=lambda event: event["fight_time_ms"]):
+                    if death["target_id"] in supplemented:
+                        continue
+                    supplemented.add(death["target_id"])
+                    windows.append(self.focused_evidence(
+                        ref, at_ms=death["fight_time_ms"], window_ms=10_000,
+                        player_ids=[death["target_id"]],
+                        expected_identity=compact["evidence_identity"], _report=report,
+                    ))
+        return {
+            "action": "coach_triage",
+            "status": "priority_candidates" if candidates else "no_supported_candidate",
+            "identity": compact["identity"],
+            "mechanics": compact,
+            "candidates": candidates,
+            "windows": windows,
+            "coverage": {
+                "candidate_limit": 3, "anomaly_times_per_player_limit": 3,
+                "anomaly_times_source": "compact_mechanics_displayed_anomalies",
+                "suppressed_player_anomalies": sum(
+                    item.get("suppressed_player_anomalies", 0) for item in compact["mechanics"]
+                ),
+                "focused_events_truncated": any(window["evidence"]["truncated"] for window in windows),
+                "storage": "process_memory", "team_facts": "tied_not_ranked",
+            },
+            "judgment": None, "causal_attribution": None,
         }
 
     def _validate_report(self, report: Any, code: str) -> None:
@@ -905,6 +959,42 @@ def _actor(actor_id: Any, actors: dict[int, dict[str, Any]]) -> dict[str, Any] |
         return None
     value = actors.get(actor_id) or {}
     return {"actor_id": actor_id, "name": value.get("name"), "type": value.get("type")}
+
+
+def _triage_selection(compact: dict[str, Any]) -> tuple[list[dict[str, Any]], list[tuple]]:
+    totals: dict[int, dict[str, Any]] = {}
+    anomalies = []
+    for mechanic in compact["mechanics"]:
+        if (mechanic.get("validation_status"), mechanic.get("anomaly_detection"), mechanic.get("scope")) != (
+            "verified", "enabled", "target",
+        ):
+            continue
+        for player in mechanic["player_anomaly_summary"]:
+            total = totals.setdefault(player["actor_id"], {
+                "actor_id": player["actor_id"], "name": player["name"], "record_count": 0, "event_count": 0,
+            })
+            total["record_count"] += player["record_count"]
+            total["event_count"] += player["event_count"]
+        anomalies.extend(mechanic["anomalies"])
+    candidates = sorted(totals.values(), key=lambda p: (-p["record_count"], -p["event_count"], p["actor_id"]))[:3]
+    selected = {player["actor_id"] for player in candidates}
+    times: dict[int, set[float]] = {actor_id: set() for actor_id in selected}
+    requests = []
+    seen = set()
+    for anomaly in sorted(anomalies, key=lambda item: item["time_ms"]):
+        at_ms = anomaly["time_ms"]
+        actors = [anomaly["actor"]] if "actor" in anomaly else anomaly.get("actors", [])
+        player_ids = sorted({actor["actor_id"] for actor in actors if actor["actor_id"] in selected
+                             and (at_ms in times[actor["actor_id"]] or len(times[actor["actor_id"]]) < 3)})
+        if not player_ids:
+            continue
+        for actor_id in player_ids:
+            times[actor_id].add(at_ms)
+        key = (at_ms, tuple(player_ids))
+        if key not in seen:
+            requests.append((at_ms, player_ids, anomaly.get("outcome") == "death"))
+            seen.add(key)
+    return candidates, requests
 
 
 def compact_mechanic_review(review: dict[str, Any]) -> dict[str, Any]:

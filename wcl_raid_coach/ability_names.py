@@ -4,13 +4,13 @@ import csv
 import hashlib
 import json
 import re
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
 from .errors import DatasetError
+from .diagnostics import copy_response_body, measured, network_attempt
 from .storage import atomic_write_compact_json, atomic_write_json, read_json
 
 
@@ -20,6 +20,7 @@ METADATA_NAME = "ability-names.zhCN.meta.json"
 MIN_COMPLETE_ROWS = 400_000
 
 
+@measured("ability_mapping_initialization")
 def ensure_ability_names(data_root: Path) -> dict[str, Any]:
     root = data_root.expanduser()
     mapping_path = root / MAPPING_NAME
@@ -99,14 +100,14 @@ def _read_existing(mapping_path: Path, metadata_path: Path) -> dict[str, Any] | 
 
 def _download(directory: Path) -> tuple[Path, str, str]:
     request = Request(WAGO_URL, headers={"User-Agent": "wcl-raid-coach ability names"})
-    with urlopen(request, timeout=120) as response:
+    with network_attempt("WagoSpellName", 0) as measurement, urlopen(request, timeout=120) as response:
         source_file = response.headers.get_filename()
         match = re.fullmatch(r"SpellName\.(\d+(?:\.\d+)+)\.csv", source_file or "")
         if match is None:
             raise ValueError("Wago response does not identify a SpellName client build.")
         path = directory / source_file
         with path.open("wb") as handle:
-            shutil.copyfileobj(response, handle)
+            copy_response_body(response, handle, measurement)
     return path, source_file, match.group(1)
 
 

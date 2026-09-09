@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterable, Protocol
 
 from .errors import ApiError, DatasetError, InputError, RevisionChangedError
+from .diagnostics import count, measured, stage
 from .models import ReportRef
 from .storage import atomic_write_gzip_json, atomic_write_json, directory_size, read_json, sha256_file
 
@@ -68,14 +69,15 @@ def _file_lock(
     deadline = time.monotonic() + timeout_seconds
     acquired = False
     try:
-        while not acquired:
-            try:
-                _try_file_lock(descriptor, shared=shared)
-                acquired = True
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise DatasetError(unavailable_message)
-                time.sleep(0.05)
+        with stage("dataset_lock_wait"):
+            while not acquired:
+                try:
+                    _try_file_lock(descriptor, shared=shared)
+                    acquired = True
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise DatasetError(unavailable_message)
+                    time.sleep(0.05)
         yield
     finally:
         try:
@@ -248,11 +250,11 @@ class DatasetStore:
             yield
 
     @contextmanager
-    def content_names_lock(self) -> Iterator[None]:
+    def content_names_lock(self, *, timeout_seconds: float = 300) -> Iterator[None]:
         lock_path = self.data_root / ".locks" / "content-names.lock"
         with _file_lock(
             lock_path,
-            timeout_seconds=300,
+            timeout_seconds=timeout_seconds,
             unavailable_message=f"Timed out waiting for content-name lock: {lock_path}",
         ):
             yield
@@ -981,6 +983,7 @@ def _read_bundle_manifest(path: Path) -> dict[str, Any]:
     return manifest
 
 
+@measured("query")
 def query_bundle(
     manifest_path: Path,
     *,
@@ -995,29 +998,27 @@ def query_bundle(
 ) -> dict[str, Any]:
     if limit <= 0 or limit > 10_000:
         raise InputError("Query limit must be between 1 and 10000.")
-    manifest, events_path = validate_complete_bundle(manifest_path)
+    manifest, events_path = _complete_bundle_inputs(manifest_path)
     returned: list[dict[str, Any]] = []
     matched = 0
-    with gzip.open(events_path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            event = json.loads(line)
-            if cursor is not None and event["sequence"] <= cursor:
-                continue
-            if event_types and event["type"] not in event_types:
-                continue
-            if source_id is not None and (event.get("source") or {}).get("actor_id") != source_id:
-                continue
-            if target_id is not None and (event.get("target") or {}).get("actor_id") != target_id:
-                continue
-            if ability_id is not None and event.get("ability_id") != ability_id:
-                continue
-            if from_ms is not None and event["fight_time_ms"] < from_ms:
-                continue
-            if to_ms is not None and event["fight_time_ms"] > to_ms:
-                continue
-            matched += 1
-            if len(returned) < limit:
-                returned.append(event)
+    for event in _validated_events(manifest, events_path):
+        if cursor is not None and event["sequence"] <= cursor:
+            continue
+        if event_types and event["type"] not in event_types:
+            continue
+        if source_id is not None and (event.get("source") or {}).get("actor_id") != source_id:
+            continue
+        if target_id is not None and (event.get("target") or {}).get("actor_id") != target_id:
+            continue
+        if ability_id is not None and event.get("ability_id") != ability_id:
+            continue
+        if from_ms is not None and event["fight_time_ms"] < from_ms:
+            continue
+        if to_ms is not None and event["fight_time_ms"] > to_ms:
+            continue
+        matched += 1
+        if len(returned) < limit:
+            returned.append(event)
     truncated = matched > len(returned)
     return {
         "ok": True,
@@ -1031,7 +1032,16 @@ def query_bundle(
     }
 
 
+@measured("complete_bundle_validation")
 def validate_complete_bundle(manifest_path: Path) -> tuple[dict[str, Any], Path]:
+    manifest, events_path = _complete_bundle_inputs(manifest_path)
+    for _ in _validated_events(manifest, events_path):
+        pass
+    return manifest, events_path
+
+
+@measured("bundle_input_validation")
+def _complete_bundle_inputs(manifest_path: Path) -> tuple[dict[str, Any], Path]:
     manifest = _read_bundle_manifest(manifest_path)
     schema_version = manifest.get("schema_version")
     if type(schema_version) is not int or schema_version != BUNDLE_SCHEMA_VERSION:
@@ -1088,9 +1098,15 @@ def validate_complete_bundle(manifest_path: Path) -> tuple[dict[str, Any], Path]
     ) != (index_identity.get("code"), index_identity.get("revision")):
         raise DatasetError("Complete Bundle and Report Index belong to different Report Revisions.")
     events_path = _validate_bundle_file(manifest_path, manifest)
+    return manifest, events_path
+
+
+def _validated_events(manifest: dict[str, Any], events_path: Path) -> Iterator[dict[str, Any]]:
+    # Exhaust this internal iterator before publishing any accumulated result.
     observed = 0
     canonical_digest = hashlib.sha256()
     try:
+        count("canonical_event_passes")
         with gzip.open(events_path, "rb") as handle:
             for line in handle:
                 canonical_digest.update(line)
@@ -1100,19 +1116,43 @@ def validate_complete_bundle(manifest_path: Path) -> tuple[dict[str, Any], Path]
                     raise DatasetError("Canonical Event stream contains invalid JSON.") from exc
                 if not isinstance(event, dict) or event.get("sequence") != observed:
                     raise DatasetError("Canonical Event stream sequence is malformed.")
+                if (
+                    type(event.get("sequence")) is not int
+                    or not isinstance(event.get("type"), str)
+                    or not isinstance(event.get("fields"), dict)
+                    or not _finite_event_number(event.get("fight_time_ms"))
+                    or any(
+                        value is not None and (
+                            not isinstance(value, dict)
+                            or value.get("actor_id") is not None and type(value.get("actor_id")) is not int
+                        )
+                        for value in (event.get("source"), event.get("target"))
+                    )
+                ):
+                    raise DatasetError("Canonical Event stream fields are malformed.")
+                amount = event["fields"].get("amount")
+                if isinstance(amount, (int, float)) and not _finite_event_number(amount):
+                    raise DatasetError("Canonical Event amount is not finite.")
                 observed += 1
+                yield event
     except (OSError, EOFError, zlib.error) as exc:
         raise DatasetError("Complete Bundle compressed event stream is invalid.") from exc
     if observed != manifest.get("event_count"):
         raise DatasetError("Canonical Event stream count does not match the manifest.")
     if canonical_digest.hexdigest() != manifest.get("canonical_events_sha256"):
         raise DatasetError("Canonical Event stream failed content hash validation.")
-    return manifest, events_path
 
 
 def _json_sha256(value: Any) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def _finite_event_number(value: Any) -> bool:
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _normalize_ranking_partitions(value: Any) -> list[dict[str, Any]]:

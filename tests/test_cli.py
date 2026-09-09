@@ -318,24 +318,54 @@ class CliTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "credentials_unavailable")
 
-    def test_query_ensures_ability_names_and_returns_their_location(self) -> None:
-        args = create_parser().parse_args(["query", "/tmp/manifest.json"])
-        names = {
-            "mapping_path": "/tmp/ability-names.zhCN.json",
-            "metadata_path": "/tmp/ability-names.zhCN.meta.json",
-            "locale": "zhCN",
-            "build": "12.1.0.69587",
-            "ability_count": 2,
-        }
+    def test_query_works_without_mappings_or_network(self) -> None:
+        from tests.test_analysis import AnalysisTests
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, _ = AnalysisTests().make_bundle(Path(directory))
+            args = create_parser().parse_args(["--data-root", directory, "query", str(manifest)])
+            with patch("wcl_raid_coach.ability_names.urlopen", side_effect=AssertionError("No display download")):
+                result = run(args)
+            self.assertEqual(result["matched"], 5)
+            self.assertNotIn("ability_names", result)
 
-        with (
-            patch("wcl_raid_coach.__main__.ensure_ability_names", return_value=names) as ensure,
-            patch("wcl_raid_coach.__main__.query_bundle", return_value={"events": []}),
-        ):
-            result = run(args)
+    def test_inspect_and_batch_prepare_do_not_download_names(self) -> None:
+        from tools.benchmark import Transport, command
+        from tests.test_api import isolated_schedule
+        from wcl_raid_coach.config import Credentials
+        from wcl_raid_coach.diagnostics import collect
+        transport = Transport()
+        transport.report["fights"][2]["inProgress"] = False
+        with tempfile.TemporaryDirectory() as directory, isolated_schedule(), patch(
+            "wcl_raid_coach.api.urlopen", side_effect=transport
+        ), patch("wcl_raid_coach.__main__.resolve_credentials", return_value=Credentials("test", "test", "fixture")), patch(
+            "wcl_raid_coach.ability_names.urlopen", side_effect=AssertionError("No display download")
+        ), patch("wcl_raid_coach.content_names.urlopen", side_effect=AssertionError("No display download")):
+            root = Path(directory)
+            result = command(root, "inspect", "https://www.warcraftlogs.com/reports/AbC123")
+            self.assertIsNone(result["content_names"])
+            self.assertNotIn("ability_names", result)
+            self.assertEqual(result["fight_choices"][0]["name"], "Test Boss")
+            with collect() as metrics:
+                prepared = command(root, "prepare", "https://www.warcraftlogs.com/reports/AbC123", "--fight", "1", "--fight", "3")
+            self.assertEqual(len(prepared["bundles"]), 2)
+            self.assertEqual(metrics.snapshot()["network"]["ReportIndex"]["attempts"], 1)
+            self.assertNotIn("ability_names", prepared)
 
-        ensure.assert_called_once_with(args.data_root.resolve())
-        self.assertEqual(result["ability_names"], names)
+    def test_inspect_returns_choices_while_content_mapping_lock_is_busy(self):
+        from tools.benchmark import Transport, command
+        from tests.test_api import isolated_schedule
+        from wcl_raid_coach.dataset import DatasetStore
+        from wcl_raid_coach.errors import DatasetError
+
+        with tempfile.TemporaryDirectory() as temporary, isolated_schedule(), patch(
+            "wcl_raid_coach.api.urlopen", side_effect=Transport()
+        ), patch("wcl_raid_coach.__main__.resolve_credentials"), patch.object(
+            DatasetStore, "content_names_lock", side_effect=DatasetError("busy")
+        ) as lock:
+            result = command(Path(temporary), "inspect", "https://www.warcraftlogs.com/reports/AbC123")
+        self.assertIsNone(result["content_names"])
+        self.assertTrue(result["fight_choices"])
+        lock.assert_called_once_with(timeout_seconds=0)
 
     def test_coach_resolve_creates_a_confirmable_unholy_guide_task(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

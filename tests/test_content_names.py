@@ -64,12 +64,16 @@ class ContentNamesTests(unittest.TestCase):
                 patch("wcl_raid_coach.content_names.MIN_NPC_COUNT", 9),
             ):
                 result = ensure_content_names(Path(temporary))
+                with patch("wcl_raid_coach.content_names.urlopen", side_effect=AssertionError("No download")):
+                    self.assertEqual(ensure_content_names(Path(temporary), allow_download=False), result)
                 mapping = load_content_names(Path(result["mapping_path"]))
                 malformed = mapping | {"npcs": dict(mapping["npcs"])}
                 malformed["npcs"]["²"] = malformed["npcs"].pop("6000")
                 Path(result["mapping_path"]).write_text(json.dumps(malformed), encoding="utf-8")
                 with self.assertRaises(DatasetError):
                     load_content_names(Path(result["mapping_path"]))
+                with patch("wcl_raid_coach.content_names.urlopen", side_effect=AssertionError("No download")):
+                    self.assertIsNone(ensure_content_names(Path(temporary), allow_download=False))
                 conflicting = mapping | {
                     "npcs": dict(mapping["npcs"]),
                     "npc_names_by_encounter": {

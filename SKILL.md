@@ -14,318 +14,58 @@ metadata:
 
 # WCL 团队副本教练
 
-只使用 Warcraft Logs 官方 GraphQL API 建立日志事实。使用当前、有来源的资料解释事实。使用用户当前使用的语言回答。
+使用用户当前语言回答。先定位同时包含本文件和 `wcl_raid_coach/` 的 `<SKILL_ROOT>`；每条 bundled CLI 命令从该目录运行。数据、缓存与宿主选择的可写 `<WORK_DIR>` 位于 Skill 根目录之外。尖括号是待替换参数。CLI stdout 始终是 JSON。
 
-先定位本文件所在的目录并记为 `<SKILL_ROOT>`；该目录必须同时包含 `SKILL.md` 和 `wcl_raid_coach/`。每次都在同一条 shell 命令中先进入该目录，再运行 bundled CLI；不得先从当前工作目录尝试，也不得假设 Skill 已全局安装。CLI 始终向标准输出写入 JSON，持久数据和缓存不得写入 Skill 根目录。需要暂存 Profile 或聚合输入时，由宿主选择 Skill 根目录之外可写的 `<WORK_DIR>`；命令中的尖括号表示应替换的路径或参数，不是字面值。
+## 路由与首次动作
 
-## 1. 路由请求
+只读取命中工作流的文档；不要预先加载所有 references。
 
-将用户请求归入一个主要工作流：
+| 请求 | 首次动作与必读文档 |
+| --- | --- |
+| 使用帮助：如何使用、能做什么、how to use | 直接输出下方菜单，不运行 CLI、不访问 WCL |
+| 报告数据，缺少数字 fight | `inspect` 列出 Boss Attempt/参与者，等待明确选择 |
+| 报告数据，已明确选择 | 直接 `prepare`；同一报告多个选择使用一次批量命令 |
+| 机制复盘 | 先读[机制与优先复核](references/workflow-mechanics.md)，数字 fight 用 `coach mechanics`，裸报告列出选择 |
+| 谁是战犯、谁失误最大、优先复核候选 | 先读[机制与优先复核](references/workflow-mechanics.md)，数字 fight 直接 `coach triage` |
+| 个人复盘 | 先读[个人复盘](references/workflow-personal.md)；明确 attempt/player 后立即 `coach personal-workflow-init`，早于所有 retrieval/Profile synthesis |
+| 当前团本多 Boss 专精攻略 | 先读[攻略](references/workflow-guide.md)，`coach resolve` 后展示解析身份并等待确认 |
+| 混合请求 | 先个人复盘；仅在用户明确要求时追加同 Boss 通用攻略 |
 
-- **报告数据**：用户要求下载、准备或查询一份 WCL Report 的团队事实。
-- **机制复盘**：用户要求检查一份 WCL Report 中单个 Boss Attempt 的首领机制处理结果，但不要求个人表现评价。
-- **优先复核候选**：用户问“谁是战犯”、谁失误最大或要求快速归因时，先做紧凑机制复盘，再对最多 3 名候选建立 Focused Evidence Window；只能给出优先复核顺序，不能裁决责任，也不是完整个人复盘。
-- **个人复盘**：用户提供 WCL URL，并要求评价一个玩家在一个 Boss Attempt 中的表现。
-- **通用攻略**：用户没有提供个人日志，要求当前 Retail 团本中某专精打一个或多个 Boss 的攻略。
-- **混合请求**：先完成个人复盘；用户明确要求通用打法时，再附同一 Boss 的通用原则。个人结论和群体结论必须分开。
-- **使用帮助**：用户询问如何使用、能做什么或索要使用示例。
+## 使用帮助
 
-不支持 Mythic+、Classic、私有报告和历史团本通用攻略。同一 WCL Report 同时包含团本与 Mythic+ 时，只列出和准备其中的团本 Boss Attempt；不得因存在 Mythic+ fight 而拒绝整份报告，也不得把 Mythic+ fight 静默当作团本。不得把不支持的请求静默改成其他工作流。
+说明需要用户自己的 WCL API 凭据，仅支持 Retail 团本公开或未列出报告；提醒不要在对话粘贴 secret。简短列出以下菜单后结束：
 
-### 使用帮助
+- 报告数据：“列出这份报告的 Boss Attempt 和参与者：<WCL_URL>”
+- 机制复盘：“复核这场机制处理：<WCL_URL_WITH_NUMERIC_FIGHT>”
+- 优先复核候选：“快速看看谁最值得复核：<WCL_URL_WITH_NUMERIC_FIGHT>”
+- 个人复盘：“复盘我的表现，角色是 <角色名>：<WCL_URL>”
+- 通用攻略：“给我邪恶死亡骑士打当前团本 H7、H8 的攻略。”
 
-只根据随包文档回答，不访问 WCL 或运行 CLI。使用用户当前使用的语言，先用一句话说明需要用户自己的 WCL API 凭据、仅支持 Retail 团本的公开或未列出报告，并提醒用户不要在对话中粘贴 secret；再简短列出以下能力和自然语言示例，输出菜单即结束：
+## 环境与数据
 
-- **报告数据**：“帮我看看这份 WCL 报告里有哪些 Boss Attempt 和参与者：<WCL_URL>”
-- **机制复盘**：“复核这场 Boss Attempt 的机制处理：<WCL_URL_WITH_NUMERIC_FIGHT>”
-- **优先复核候选**：“快速看看这场谁最值得优先复核：<WCL_URL_WITH_NUMERIC_FIGHT>”
-- **个人复盘**：“复盘我在这场 Boss Attempt 的表现，角色是 <角色名>：<WCL_URL_WITH_NUMERIC_FIGHT>”
-- **通用攻略**：“给我一份邪恶死亡骑士打当前团本 H7 和 H8 的攻略。”
-
-## 2. 检查环境
-
-首次访问 WCL 前运行：
+首次访问 WCL 前运行；凭据或存储不可用时读[配置](references/setup.md)。用户已选定个人复盘对象时，先初始化 workflow 再运行任何网络检查。
 
 ```bash
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach doctor
 ```
 
-普通用户只需通过 Agent 宿主的私密环境配置提供 `WCL_CLIENT_ID` 和 `WCL_CLIENT_SECRET`。不得询问、输出、记录或持久化 client secret/access token。凭据不可用或需要确认存储位置时阅读[凭据与存储配置](references/setup.md)。
-
-## 3. 报告数据
-
-建立整个团队的 Report Index：
-
 ```bash
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach inspect "<WCL_URL>"
-```
-
-没有数字 fight 时，展示 Boss Attempt 与参与者选择并等待用户确认。不得自动选择最后一场、击杀场或 URL source hint。Encounter Designator 只用于解释用户选择，不能代替数字 fight ID。
-
-准备用户明确选择的 Boss Attempt：
-
-```bash
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach prepare "<WCL_URL_WITH_NUMERIC_FIGHT>"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach prepare "<WCL_URL>" --fight <ID_1> --fight <ID_2>
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach query "<MANIFEST_PATH>" --type damage --source-id <ACTOR_ID>
 ```
 
-只有 `complete: true`、到达显式 `nextPageTimestamp: null`、通过哈希检查且没有跨 Report Revision 的 Complete Bundle 才能进入持久化的个人复盘、Benchmark 或 Guide 分析。机制复盘使用第 4 节的临时证据路径。
-
-按需查询 Canonical Event：
-
-```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach query "<MANIFEST_PATH>" --type damage --source-id 10
-```
-
-## 4. 机制复盘
-
-Mechanic Review 当前只覆盖 The Venomous Abyss（WCL zone `53`）的官方 8 个团本首领：Nek'zali、Entombed Sentinels、Vashnik、The Lost Explorers、Sszorak、The Twin Fangs、The Coiled Altar 和 Ula'tek，难度为 Normal、Heroic 或 Mythic。Nymrissa Wavecaller（encounter `3379`）是世界首领，必须排除。
-
-裸报告 URL 或只给 Encounter Designator 时列出候选 Boss Attempt，等待用户选择数字 fight。不得自动选择击杀、最后一次或全部尝试：
-
-```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_REPORT_URL>" --encounter H2
-```
-
-用户确认数字 fight 后直接分析 URL 中明确的 Boss Attempt：
-
-```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>"
-```
-
-用户只需要当前对话中的快速机制结论，或询问“谁是战犯”时，优先使用紧凑输出，避免把原始 WCL payload 和宠物噪声放入模型上下文：
-
-```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>" --compact
-```
-
-紧凑输出保留机制计数、玩家异常和团队异常中的玩家，通过字段白名单排除任意原始 WCL payload，汇总被抑制的宠物/NPC 异常记录，并把每条机制的玩家异常展示限制为 20 条。完整候选统计在 `mechanics[].player_anomaly_summary[]`；样本中的时间和玩家分别位于 `mechanics[].anomalies[].time_ms` 以及 `.actor.actor_id` 或 `.actors[].actor_id`。它不改变底层 Mechanic Evidence Set，也不能把异常提升为责任或灭团因果。
-
-若紧凑结果提供了候选玩家和异常时间，按 fight-relative 毫秒建立该玩家前后默认 10 秒的 Focused Evidence Window：
-
-```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach evidence "<WCL_URL_WITH_NUMERIC_FIGHT>" --at-ms <TIME_MS> --player-id <ACTOR_ID> --expected-identity <EVIDENCE_IDENTITY>
-```
-
-`<EVIDENCE_IDENTITY>` 必须原样取自紧凑结果的 `evidence_identity`，它同时绑定 WCL Report、Report Revision 和数字 fight ID；不匹配时丢弃旧候选并重新执行紧凑阶段。可用 `--window-ms` 调整前后窗口，并可重复 `--player-id`，但最多 3 名且必须共享同一异常时间；不同时间的候选必须分别调用，不能共用一个 `--at-ms`。该命令只接受 Boss Attempt 参与者；每个玩家单独完整分页，使用 WCL `targetID` 请求参数并在本地再次按报告 actor ID 过滤。结果用 `actors` 和 `abilities` 解释事件中的 ID；`events` 最多返回 200 条，死亡/战复优先，其余按距锚点由近到远选择，完整计数见 `evidence.matched_event_count`，截断见 `evidence.truncated`。它不请求资源、不落盘，也不创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点。
-
-候选策略必须确定且可复核：只考虑 `validation_status: verified`、`anomaly_detection: enabled` 且 `scope: target` 的玩家异常；跨机制按 actor 汇总 `player_anomaly_summary[].record_count` 和 `event_count`，依次降序排序，再按 `actor_id` 升序，最多选择 3 名。对选中玩家，按其异常的 `time_ms` 升序逐个取证；达到 3 个不同异常时间后停止。只有同一条异常 `actors[]` 中共享相同 `time_ms` 的并列玩家才能合并到一次命令。`scope: team` 只能报告为团队事实，其中玩家保持并列，不参与个人候选排名，也不得从同一事件强行选一人。异常本身的 `outcome: death` 使用其 `time_ms`；否则先以异常 `time_ms` 取证，若窗口内发现死亡且需补充死亡前事件，再以该死亡 `fight_time_ms` 重跑一次窄窗口。若没有已验证的 target-scope 玩家异常，明确回答“快速路径未找到规则集确认的优先复核候选”，不得把无异常解释为处理正确，也不得任意选择玩家。
-
-最终回答依次给出：Report Revision 与数字 fight ID、击杀或灭团；已验证的机制命中与时间；Focused Evidence Window 中按时间排序的事实；已观察到的团队同时事件；未建立的因果边界。使用“优先复核候选”“并列”或“无受支持候选”，不得使用“责任已确认”。`evidence.truncated: true` 时必须披露输出为有界样本。Focused Evidence Window 只支持当前目标收到的事件，团队影响只能复述 Mechanic Review 已直接观察到的团队异常，否则写“未建立”。
-
-只有用户要求完整个人表现评价、Benchmark、Guide，或确实需要全场 Canonical Event 时才进入第 3 节 `prepare` 建立 Complete Bundle，再按第 5 节使用返回的 manifest 和 Report Index；不得为了优先复核候选默认下载 Complete Bundle。
-
-用户要求正式报告或 HTML 时，不要从 stdout 重抄字段，也不要先保存完整 Mechanic Review 结果；必须在同一采集进程直接运行：
-
-```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach mechanics "<WCL_URL_WITH_NUMERIC_FIGHT>" --report --locale zh-CN
-```
-
-英文交付使用 `--locale en`。向用户交付 JSON stdout 中的短摘要和 `report.html_path` 链接，并保留 `source.path`、`source.sha256`、`report.document_id`、`report.html_sha256` 与 `report.index_path` 供复核。
-
-击杀和灭团均可分析，但 Boss Attempt 必须已完成；`fight=last` 不够明确，必须拒绝。`--encounter` 与 URL 数字 fight 同时存在时，两者必须匹配。
-
-该命令用当前 Mechanic Ruleset 的 ability ID 和 `death`、`interrupt`、`dispel` 建立服务端过滤表达式，固定 Boss Attempt 起止时间，完整分页到 `nextPageTimestamp: null`，并在结束后再次校验 Report Revision。Mechanic Evidence Set 只驻留进程内，不得创建 Report Index、Raw Page、Fight Bundle、manifest 或检查点，也不得称为 Complete Bundle 或 Canonical Event 集。
-
-输出必须保留规则集版本、来源和 `selection_policy: latest`。`latest` 指当前安装包随附规则，不按报告发生时间回放历史热修规则，也不会运行时在线更新。机制名称使用规则集内版本化的中英文名称，不触发本地 Wago mapping 初始化。
-
-每条机制展示规则定义的触发、成功和失败事件计数；无法客观判断时值为 `null`。只有当前难度标记为 `verified` 的事件模式才能产生异常；`event_pattern_unverified` 和 observation 规则只列观察事实。没有匹配事件不等于机制处理正确。普通内存输出可以展开用于当前分析的原始 WCL 事件证据；`--report` 来源只能保留参与者和扁平最小证据摘录，必须删除完整事件范围、`raw_event`、`raw_events`、光环应用对象和任意 WCL payload。异常只表示事件模式命中，不表示玩家责任、表现评价或灭团因果；最终裁决交给人。
-
-### 正式 HTML 交付
-
-Mechanic Review 的正式交付必须使用上面的 `coach mechanics ... --report`，由同一进程完成采集、净化来源持久化、Report Document 组装、来源校验和 HTML 渲染。只有分页明确结束且 Report Revision 前后一致后才允许写入；净化、校验或首次渲染失败时不留下新来源，重复内容复用 content-addressed 不可变来源。不得用下面的通用 renderer 绕过该边界。
-
-其他已构造的 Report Document 可调用：
-
-```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach render "<WORK_DIR>/report.document.json"
-```
-
-候选选择、澄清、进度、错误、数据查询和局部追问仍直接使用文本。用户说“直接回答”或“不要报告”时不生成 HTML；用户明确说“生成报告”或“导出 HTML”时必须生成。对话中交付短摘要和 `html_path` 的可点击链接。
-
-Report Document 只能包含对应类型允许的结构化字段，不得包含调用方 HTML、CSS 或 JavaScript；`source_artifacts` 必须记录来源 artifact 路径和 SHA-256。Mechanic Review 只保留结论、计数和扁平最小证据摘录，不得复制完整 Mechanic Evidence Set；Personal Review 建议必须来自下面的 Coaching Advice 门禁；Raid Guide 不得补写 Snapshot 中不存在的 rotation、天赋、装备、阶段策略或具体建议。
-
-## 5. 个人复盘
-
-裸报告 URL 先执行 `inspect`，让用户明确选择一个 Boss Attempt 和一个参与者。完整 URL 仍须确认 URL 中的 fight/source 指向预期对象。
-
-Boss Attempt 和玩家一经确认，立即用包含数字 `fight` 和 `source` 的已选 URL 初始化 canonical workflow；这一步必须早于目标 Complete Bundle retrieval、Ranking Candidate discovery 和 Profile retrieval/synthesis，且不需要 Analysis、Complete Bundle、Ranking Cohort 或 Profile：
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-workflow-init "https://www.warcraftlogs.com/reports/<REPORT_CODE>#fight=<FIGHT_ID>&source=<ACTOR_ID>"
-```
-
-首次结果预期为 `blocked`、`retrieval: in_progress`、`agent_synthesis: unavailable` 和 `personal_analysis: null`；保存其 `workflow_path`。随后检索或创建所需 Ranking Cohort 与两个 Profile、准备目标及候选 Complete Bundle，并计算个人日志事实：
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach review "<MANIFEST_PATH>" --index "<REPORT_INDEX_PATH>" --source-id <ACTOR_ID> --partition-id <PARTITION_ID>
-```
-
-`coach review` 只产生结构化日志事实。优先复用同 encounter、difficulty、class、spec、partition 且 Profile ID/source 一致的现有 Encounter Benchmark；已有的 3 到 10 个 Reference Samples 全部立即使用，不为凑到 10 个而等待或补样本。3 到 9 个为低置信度，10 个为正常置信度；`coach candidates` 的上限是 10。没有可复用 Benchmark 时，Personal Review 以 3 个通过 Complete Bundle、硬条件和 Encounter Profile eligibility 的 Reference Samples 为目标。Ranking Candidate 不是 Reference Sample；候选被拒后只在预算允许时补下一个。
-
-计时从上述 selection 后的初始化 workflow 开始。CLI 用系统 monotonic clock 生成起点、累计 elapsed 和内部 stage timings；公开 CLI 没有原始 timing 参数。Ranking Candidate discovery、Profile retrieval/synthesis、Complete Bundle retrieval 和进程外 Agent 建议合成都发生在初始化与后续调用之间，其墙钟间隔会保守计入 elapsed；monotonic clock 倒退或 wall-minus-monotonic baseline 超出 tolerance 时停止目标判定。持久化的 session marker 只用于本地诊断，不参与严格相等比较。workflow 的 `retrieval` 在上述 artifact 尚未齐备时为 `in_progress`，Agent synthesis 尚不可观测时为 `unavailable`，玩家及 Profile 齐备后为 `in_progress`；finalization 将其标为 `unavailable`。因此即使总 elapsed 小于 180/30 秒，最终 `target_met` 仍为 `null`。`wcl_network_measurement` 仍为 `not_measured`。
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-workflow "<PERSONAL_ANALYSIS_PATH>" --cohort "<COHORT_PATH>" --encounter-profile "<ENCOUNTER_PROFILE>" --specialization-profile "<SPECIALIZATION_PROFILE>" --reference-analysis "<REFERENCE_ANALYSIS>" --benchmark "<EXISTING_BENCHMARK>" --previous-workflow "<INITIAL_OR_LATEST_WORKFLOW>" --progress "<CHECKPOINT_PATH>"
-```
-
-`personal-workflow` 每次调用都必须传入初始化或最新 canonical workflow。CLI 将 Personal Analysis 的 WCL Report、Boss Attempt 和 actor 与初始化的 `selected_identity` 精确绑定，再验证 Cohort、Profiles、Reference Samples 和 Benchmark 身份。候选失败时用稳定身份记录，例如 `--rejection ABC123:7:42=player_death`。`coach candidates` 达到目标时保留最后一次查询的完整去重页，同页剩余候选可按稳定身份继续消费。每次返回下一候选前，CLI 都先按 20 秒校验/渲染预留检查预算。不要启动新的可选工作后再检查。已在途 WCL 请求和限流等待不能取消，可能越过目标；完成后再次调用 workflow 会记录实际 elapsed 并停止后续调度。只有 Ranking Cohort 的分页 metadata 明确证明无更多页时才记录 `ranking_page_exhausted`，否则候选用尽会记录 `ranking_cohort_refresh_required`。`completion_state` 为 `acquiring` 时只处理 `next_ranking_candidate`；为 `comparison_ready` 时运行 `coach compare` 和完整报告；为 `partial_ready` 时不得创建 Benchmark/Comparison。
-
-`--progress` 只按路径和 SHA-256 保留 Raw Page/checkpoint 等进度引用，不把它声明为 Complete Bundle。目标 Personal Analysis 或其 Complete Bundle 不可用时，workflow 输出 `blocked`、`player_evidence_incomplete` 和 `personal_analysis: null`；不得运行报告命令。重复调用通过前序 workflow 恢复 Reference Sample 路径和稳定候选状态，不得用样本数或拒绝数推算候选 cursor。monotonic 非倒退和 wall-minus-monotonic baseline tolerance 无法证明连续性时保留这些进度，记录 `timing_continuity_unavailable` 并停止新的可选采集，而不是伪造连续 elapsed。
-
-运行 `coach benchmark` 建立 Encounter Benchmark，再运行 `coach compare` 保存精确 Comparison 后，正式交付不得手工重写身份、指标或正文。comparison-ready workflow 交付时把 `--workflow <COMPARISON_READY_WORKFLOW>` 与两个 artifact 一起传入；`--workflow` 是 assembler、renderer 和 delivery 的必需来源。三处都会重新读取 workflow 绑定的 Ranking Cohort、两个 Profile、Benchmark 及每个 Reference Sample Complete Bundle 的路径和哈希，并用 `verify_benchmark_for_cohort` 重建精确 Benchmark；证据在 workflow 创建后变化即拒绝。CLI 在 HTML/index 存在后完成 content-addressed delivery finalization，返回 status、elapsed 和 `target_met`。content-addressed artifact 仅在规范文件字节与 SHA-256 完全一致时复用，解析对象相同但字节不同也拒绝覆盖。直接把三个 artifact 组装为 Personal Review Report Document 并渲染自包含 HTML：
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-report "<PERSONAL_ANALYSIS_PATH>" "<ENCOUNTER_BENCHMARK_PATH>" "<COMPARISON_PATH>" --workflow "<COMPARISON_READY_WORKFLOW>" --advice "<WORK_DIR>/advice-draft.json" --encounter-profile "<WORK_DIR>/encounter-profile.json" --specialization-profile "<WORK_DIR>/specialization-profile.json" --locale zh-CN
-```
-
-英文交付使用 `--locale en`。命令会重新校验 schema `4`/`3`/`3`，从 Complete Bundle 重算 Personal Analysis，从 Analysis 与 Benchmark 重算并精确核对 Comparison，再校验建议和派生完整文档。向用户交付短摘要和 `report.html_path`，并保留 `advice.advice_id`、`report.document_id`、`report.html_sha256` 与 `report.index_path` 供复核。不需要建议时省略 `--advice`，相应维度是 Not Evaluated，不是通过。
-
-若 workflow 以 0 到 2 个合格 Reference Samples 结束，使用明确 partial 路径：
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-report "<PERSONAL_ANALYSIS_PATH>" --workflow "<PARTIAL_READY_WORKFLOW>" --encounter-profile "<ENCOUNTER_PROFILE>" --specialization-profile "<SPECIALIZATION_PROFILE>" --advice "<WORK_DIR>/advice-draft.json" --locale zh-CN
-```
-
-partial 报告从 workflow 深度重验 Ranking Cohort、Reference Sample Complete Bundle evidence、资格结果及所有 artifact hash，并由此推导 0 到 2 的合格样本数；不接受调用方整数。它仍重算玩家 Complete Bundle 事实并校验两个 Profile，显式输出 `comparison.status: unavailable`，且不创建 Benchmark/Comparison。Advice 可以省略；存在时，经验型 Advice 只能引用已校验 Profile 来源，事件支持 Advice 只能引用 Personal Analysis 事实。玩家 Complete Bundle 不完整时不能走 partial 报告。
-
-Personal Review 必须保留精确 Report Revision、Boss Attempt、actor、完整比较硬条件、Benchmark ID、样本数、置信度、总量、双方时长、每分钟伤害/治疗及各自有效 Reference Sample 数。每分钟值只在分母有效时生成；不得声称它校正存活、停手、阶段、天赋、装备或任务分配差异。
-
-关键动作只使用 Benchmark `key_action_*` 字段。Specialization Profile 必须以 `action_type: "player_cast"` 显式声明；所有 Reference Sample 均为零次时仍保留零中位数。不得回退使用原始 `casts_median`，也不得把 `automatic`、`internal`、`owned_actor`、WCL synthetic Melee ID `1` 或 Birth 等内部事件写成玩家应增加施放的动作。Encounter Profile 的非空目标列表使用 `target_id_type: "npc_game_id"`；report-local actor ID 必须迁移为 NPC gameID 后重建 Profile、Benchmark 和 Comparison。已有全部本地 artifact 和 mapping 时可离线重建，缺失数据时先完成采集。普通事实技能未命中中文 mapping 时可回退 WCL 原名；建议中的 Spell 必须按 ability ID 命中已校验的 zhCN mapping，否则停止中文报告并披露建议不可用。样本中位数只描述观察结果，不是推荐次数。
-
-### Coaching Advice 草稿
-
-当前 Agent 从已校验 artifact 和当前 Profile 来源合成草稿，不调用新的模型服务。草稿只能使用以下形状；正文使用报告 locale，不自行翻译 Spell 名称：
-
-```json
-{
-  "schema_version": 2,
-  "locale": "zh-CN",
-  "items": [{
-    "dimension": "output",
-    "evidence_class": "event_supported",
-    "action": {"kind": "use_ability", "ability_id": 12345},
-    "conditions": ["effective_window", "mechanic_safe"],
-    "verification_goal": "check_ability_usage",
-    "ability_ids": [12345],
-    "fact_references": [{"source": "comparison", "path": "/metrics/cast_count_deltas/12345", "value": -2}],
-    "guidance_references": [{"profile_kind": "specialization", "source_index": 0}]
-  }]
-}
-```
-
-`dimension` 只接受 `output`、`survival`、`mechanics`、`team_contribution`；`evidence_class` 只接受 `event_supported` 或 `experience_based`。`action.kind`、`conditions` 和 `verification_goal` 只能使用 schema `2` 的有限结构化枚举，CLI 按 locale 生成文案，因此不存在可验证的责任、因果、保证提升或中位数处方自由文本槽位；这不是自然语言语义审查。任何带 ability ID 的动作都必须绑定 Specialization Profile 中同 ID 的 `action_type: "player_cast"` 声明，包括经验型 Advice。事件支持项必须引用维度相关的明确事实白名单；能力动作只能使用同 ability ID 的 direct-player `player_cast`/`key_action` 字段。按技能 damage/healing、`automatic`、`internal`、`owned_actor` 和宠物聚合只供审计，不得支持建议。生存只使用死亡字段；团队贡献使用打断、总治疗或资源事件。Personal Review 当前没有 Mechanic Review 来源，因此机制维度不得使用 `event_supported`；只能在当前 Profile 指导支持时使用明确标为有条件的 `experience_based`。经验型项必须引用当前 Benchmark Profile 来源。两个本地 Profile 的路径、哈希、Profile ID 和 sources 必须与 Benchmark 一致。事实引用逐值精确核对；指导引用按 Profile kind 和零基 source index 解析，Agent 不重抄来源摘要。
-
-建议 artifact 按内容地址保存在 `outputs/advice/`，workflow 及 index 在 `outputs/personal-workflows/`，delivery/finalization 在 `outputs/personal-deliveries/`，Report Document/index 在 `outputs/reports/`。这些 Artifact 写入后不覆盖也不因后续失败删除；组装、renderer 或 delivery finalization 失败可能保留不可变的 content-addressed 孤儿 artifact，必须依据引用关系和保留策略由明确的人工或专用回收命令处理。Report Document 只接受 schema `2`；旧 schema `1` 的静态 HTML 可查看但不可重渲染，必须从当前 Analysis、Benchmark、Comparison source artifacts 重新运行 `personal-report`。
-
-## 6. 通用攻略
-
-例如用户说“给我一个邪 DK 打 H7 H8 的攻略”，先解析请求：
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach resolve --spec "邪 DK" --encounter H7 --encounter H8
-```
-
-该命令使用 WCL 官方元数据解析唯一当前 Retail 团本、Heroic 难度、原始 encounter 顺序和默认 ranking partition。向用户展示 Boss 名称、encounter ID、难度、partition 和规范专精；用户确认前不得发现排名或下载候选事件。
-
-确认任务：
-
-```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach confirm "<TASK_ID>"
-```
-
-H7 与 H8 是两个 Encounter Benchmark。不得混合它们的 cohort、分析或样本数量。
-
-### 准备 Profiles
-
-每个攻略需要：
-
-- 一个匹配 game version/partition/class/spec 的 Specialization Profile。
-- 每个 Boss 一个匹配 game version/partition/encounter/difficulty 的 Encounter Profile。
-
-资料优先级：Blizzard/WCL 官方资料；维护中的职业社区、专精指南和模拟文档；Wowhead/Icy Veins 交叉验证。Profile 保存 URL、标题、访问时间、引用摘要和内容哈希，不保存整篇第三方文章。
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach profile "<WORK_DIR>/profile.json"
-```
-
-Encounter Profile 必须声明优先目标与排除目标。Profile 缺失或校验失败时，可以展示排名候选，但禁止生成稳定高分打法 benchmark。
-
-### 发现近期高分候选
-
-每个 Boss 分别运行：
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach candidates --game-version <GAME_VERSION> --encounter-id <ENCOUNTER_ID> --difficulty-id <DIFFICULTY_ID> --partition-id <PARTITION_ID> --class-name DeathKnight --spec-name Unholy
-```
-
-默认只使用最近 14 天且身份完整的候选。Ranking Candidate 不是 Reference Sample。目标为每个 Boss 10 个有效样本；3 到 9 个只能给低置信度聚合；少于 3 个只能做个案观察，不能生成稳定打法。
-
-排名结果不包含 source ID 时，CLI 通过候选报告的官方 actor/fight metadata 按角色名、服务器、职业和专精唯一补全；无法唯一补全的候选必须拒绝。
-
-候选必须逐一：
-
-1. `inspect` 并验证 encounter、difficulty、partition、class 和 spec。
-2. `prepare` 为候选 Boss Attempt 建立 Complete Bundle。
-3. `coach review` 生成分析。
-4. 根据 Encounter Profile 检查死亡、优先目标伤害和排除目标伤害。
-
-正文匿名使用“样本 N（排名/分数）”，但保留公开 WCL 链接供审计。
-
-### 聚合和生成攻略
-
-每个 Boss 分别聚合：
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach benchmark "<WORK_DIR>/analysis-1.json" "<WORK_DIR>/analysis-2.json" "<WORK_DIR>/analysis-3.json" --cohort "<WORK_DIR>/cohort.json" --encounter-profile "<WORK_DIR>/encounter-profile.json" --specialization-profile "<WORK_DIR>/specialization-profile.json" --output "<WORK_DIR>/benchmark.json"
-```
-
-最后将多个独立 benchmark 合并成不可变 Guide Snapshot：
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach guide "<WORK_DIR>/h7-benchmark.json" "<WORK_DIR>/h8-benchmark.json" --spec-display-name "邪恶死亡骑士"
-```
-
-正式交付时，不要手工重写 Boss 章节。把上一步返回的唯一 Guide Snapshot JSON 直接组装为 `raid_guide` Report Document 并渲染自包含 HTML：
-
-```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach guide-report "<GUIDE_SNAPSHOT_JSON_PATH>"
-```
-
-该命令重新校验 Snapshot 内容 ID 和 Markdown hash，保留精确 Snapshot ID 与来源文件 SHA-256，并只从各自章节派生 encounter/Benchmark/Profile 身份、样本数、置信度、指标、本地化技能、机制锚点和来源。不得跨 Boss 移动或合并字段；不得补写 Snapshot 中没有的 rotation、天赋、装备、阶段策略、建议或可实现目标。向用户交付短摘要和返回的 `report.html_path` 链接。
-
-输出包括与用户语言一致的 Markdown 和 JSON 索引。当前 bundled Guide Snapshot renderer 只生成中文 Markdown；英文请求生成最终 Guide Snapshot 前必须明确告知这一限制，不得把中文 artifact 伪装成英文结果。报告必须区分：
-
-- **日志事实**：Complete Bundle 直接计算的事实。
-- **资料结论**：当前 Profile 来源支持的规则或机制。
-- **推断**：事实与资料结合后的建议，必须说明置信度。
-
-### Spell 名称输出门禁
-
-生成中文攻略前必须确保 `ability-names.zhCN.json` 已从 Wago Tools 初始化并通过 metadata 哈希检查。所有由 `ability_id` 确认的 Spell 在中文 Markdown 和中文对话正文中必须使用该 mapping 的中文名称；不得根据英文名自行翻译，也不得把裸数字 ID 或英文 SpellName 写入中文正文。该门禁不适用于只使用随包规则名称的 Mechanic Review。
-
-机制名称必须通过 Encounter Profile 的具体 `ability_id` 关联，不得按英文名称反查。若机制 Spell ID 缺少 zhCN mapping，停止生成最终攻略并返回结构化错误；不得静默回退为英文。JSON 索引可以保留 `ability_id`、WCL 原始名称和 mapping build 作为审计信息。
-
-输出前逐项检查机制锚点、技能统计、首次施放时间和实战建议中引用的 Spell，确保正文使用中文名称。无法确认是 Spell 的阶段描述或资料术语，必须标记为机制描述，不得伪装成 SpellName。
-
-Encounter 和 NPC 名称使用独立的 `content-names.zhCN.json`。该 mapping 只覆盖当前团本 Normal、Heroic、Mythic 和配置的 8 个 Mythic+ 地图，并保留 Wago Encounter/NPC ID、英文原名及客户端 build。Encounter 命中 mapping 时正文使用中文名；NPC 中文名只能作为所属 Encounter 内的展示 enrichment，不得按名称推断 WCL actor 身份。未命中时保留 WCL 原名，不得自行翻译。
-
-## 7. 限流与恢复
-
-API 点数低于 15% 或 50 点的较高者时停止。持久化采集遇到 `wcl_rate_limit` 时保留 Complete Bundle 检查点和已完成 Boss 章节，不降低证据要求。Mechanic Review 没有检查点，限流或中断后必须重新运行。使用以下命令查看任务：
-
-```bash
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach status
-```
-
-多 Boss 请求允许 `partial`：已完成章节可以交付，未完成章节必须显示阻塞原因，不能用低证据内容填充。
-
-## 8. 使用边界
-
-- 仅支持 Retail 团队副本；Mythic+ 留待后续版本。
-- 仅支持公开和未列出 WCL Report。
-- 官方 WCL API only；不抓取 WCL 网页或私有端点。
-- 个人复盘、Benchmark 和 Guide 统一使用 Complete Bundle，不维护另一套按玩家下载的持久事件缓存；Mechanic Review 只使用临时 Mechanic Evidence Set。
-- 没有独立 Encounter Profile 或版本化 Mechanic Ruleset 时，不判断 padding、机制责任或可规避伤害。
-- Mechanic Review 的顶层 `judgment` 和 `causal_attribution` 必须始终为 `null`。
-- 坦克和治疗建议必须先满足相应的生存/治疗 guardrail；证据不足时停止建议。
-- 不建立持久玩家历史；只分析当前请求明确提供的报告。
+已明确选择时省略独立 inspect；批量 prepare 共享一次报告元数据查询，仅包含用户明确选择。inspect/prepare/query 不初始化展示映射，不返回 `ability_names`；inspect 使用有效本地 content mapping，否则保留 WCL 原名并返回 `content_names: null`。
+
+## 必须保留的边界
+
+- 只用官方 OAuth/WCL v2 GraphQL 建立日志事实。凭据由宿主私密配置提供；不请求、打印、记录或持久化 secret/access token。
+- 仅支持 Retail 团本、公开/未列出报告。混合 Mythic+ 报告仅选择团本 Boss Attempt；不支持 Classic、私有报告、历史团本通用攻略，不静默转换请求。
+- 无数字 fight 时等待明确选择；不自动选最后一次、击杀场、全部尝试或 source hint。Encounter Designator 不是数字 fight ID。个人复盘还须明确参与者。
+- Personal Review/Benchmark/Guide 只用 Complete Bundle：显式 `nextPageTimestamp: null`、Boss Attempt 范围、完整 hash 校验及单一 Report Revision。Mechanic Review/triage 仅用进程内证据；不建立持久玩家历史或额外玩家事件缓存。
+- 个人复盘选定后立即初始化计时；复用 Benchmark 必须连同绑定的原 Ranking Cohort、Profiles 和 Complete Bundles 深度验证。先查本地兼容 artifact，再刷新排名。初始目标 3 个合格 Reference Samples，已有 3–10 个立即使用。
+- 机制异常不证明责任或灭团因果。judgment/causal_attribution 为 null；团队事实保持并列。没有当前 Profile/规则证据不判断 padding、责任或可规避伤害；坦克/治疗建议遵守相应生存/治疗 guardrail。
+- 中文建议和攻略 Spell 必须命中已校验的 zhCN mapping，不自行翻译。普通数据可保留 WCL 原名，机制名称使用随包规则。未知维度明确未评估。
+- 限流遵循同一 OS 用户的共享调度，保留至少 15% 或 50 点的较高者。失败保留已有持久进度；临时机制证据无 checkpoint，需重跑。多 Boss 可交付已完成章节并披露 blocker。
+- 正式交付使用 `personal-report`、`guide-report` 或 `mechanics --report` 的确定性来源校验和渲染；对话给短摘要与 HTML 链接。选择、进度、错误、查询和追问使用文本；用户明确不要报告时遵从。详细 schema 仅在构造 artifact 时读[数据契约](references/data-contract.md)，API/恢复问题读[API 说明](references/wcl-api.md)。

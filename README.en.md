@@ -166,9 +166,15 @@ The CLI always writes JSON to standard output, including structured domain error
 
 ## Encounter Designators And Name Mappings
 
+The Agent entrypoint loads [mechanics/triage](references/workflow-mechanics.en.md), [Personal Review](references/workflow-personal.en.md), and [guides](references/workflow-guide.en.md) on demand. Personal Review initializes timing before searching compatible local Benchmarks with their bound original Cohorts/Profiles, then deeply validates reuse of existing three-to-ten samples. Multi-Boss guides reuse current shared Specialization Profiles and eligible completed chapters, acquiring only missing work. Detailed fields and provenance rules are read from the data contract when needed.
+
+For priority candidates, run `python -m wcl_raid_coach coach triage "<WCL_URL_WITH_NUMERIC_FIGHT>"`. One process reuses its client and report metadata, returning compact `mechanics`, ordered `candidates`, `windows`, and `coverage`. Only verified/enabled/target player anomalies qualify, with at most three players and three distinct anomaly times per player. Only players in the same anomaly share a window. A missing ten-second pre-death interval triggers one supplemental death window. No supported candidate returns `no_supported_candidate` without focused requests. Team facts remain tied; judgment/causal_attribution are null. Evidence remains in memory, with Report Revision checks across phases; failure never returns a successful combined result. Coverage discloses suppressed compact anomaly records and truncated windows. This is not a Personal Review.
+
 The Skill understands Encounter Designators such as `PT6`, `H6`, and `M6`. The prefixes mean Normal, Heroic, and Mythic; the number is the one-based position in WCL's original `zone.encounters` list. A designator identifies only a difficulty and encounter. When a report has multiple matching Boss Attempts, the Skill lists explicit fight IDs and waits for a choice instead of selecting a kill, the latest attempt, or every attempt.
 
-On the first `inspect`, `prepare`, `query`, or Guide generation, the CLI downloads the current Retail zhCN `SpellName` CSV from Wago Tools and creates a complete `ability-names.zhCN.json` plus metadata in the data directory. A valid existing JSON is reused without network access. A mapping may be used only when the ID also occurs in the Report Index `abilities[].gameID`. Guide and Skill user-facing text must use the mapped Chinese SpellName and must not translate names ad hoc; final guide generation stops when a mechanic Spell ID has no Chinese mapping. Chinese names are current-client display enrichment and do not modify the Report Index. Mechanic Review does not initialize this local mapping; it uses the Chinese and English mechanic names shipped in the versioned Mechanic Ruleset.
+`inspect`, `prepare`, and `query` do not download display mappings or return `ability_names`. `inspect` uses a valid existing content mapping; when absent or corrupt, it displays original WCL names and returns `content_names: null`. With explicit numeric fight selections, run prepare directly; multiple selections in one WCL Report can use `prepare "<WCL_URL>" --fight 1 --fight 3` and share one report metadata query.
+
+For outputs needing names, such as Guide generation, the CLI downloads the current Retail zhCN `SpellName` CSV from Wago Tools and creates a complete `ability-names.zhCN.json` plus metadata in the data directory. A valid existing JSON is reused without network access. A mapping may be used only when the ID also occurs in the Report Index `abilities[].gameID`. Chinese Guide and Skill user-facing text must use the mapped Chinese SpellName and must not translate names ad hoc; final guide generation stops when a mechanic Spell ID has no Chinese mapping. Chinese names are current-client display enrichment and do not modify the Report Index. Mechanic Review does not initialize this local mapping; it uses the Chinese and English mechanic names shipped in the versioned Mechanic Ruleset.
 
 The CLI separately maintains `content-names.zhCN.json`, generated from `Map`, `DungeonEncounter`, `JournalEncounter`, and `JournalEncounterCreature` tables from one Wago client build. Its scope is limited to the current raid on Normal, Heroic, and Mythic plus the configured eight Mythic+ maps. Original WCL English names and IDs remain audit data. Wago does not provide a reliable direct link to WCL NPC `gameID`, so localized NPC names are encounter-scoped display enrichment and cannot be used as event identity.
 
@@ -257,7 +263,7 @@ Destructive operations require `--confirm`. Clearing the cache preserves canonic
 
 Ability names are first downloaded from `https://wago.tools/db2/SpellName/csv?locale=zhCN`. The CLI records the client build, source filename, and SHA-256 from a response such as `SpellName.12.1.0.69587.csv`. Delete `ability-names.zhCN.json` and `ability-names.zhCN.meta.json` from the data directory to download them again on the next relevant command. A download failure returns a structured `dataset_error`.
 
-The Encounter/NPC mapping uses the current map scope declared in the package and requires all Wago source tables to have the same client build. Delete `content-names.zhCN.json` and `content-names.zhCN.meta.json` to rebuild it on the next `inspect`, `coach resolve`, or `coach guide`. An incomplete download, mismatched build, or missing current map returns a structured `dataset_error`.
+The Encounter/NPC mapping uses the current map scope declared in the package and requires all Wago source tables to have the same client build. Delete `content-names.zhCN.json` and `content-names.zhCN.meta.json` to rebuild it on the next `coach resolve` or `coach guide` requiring names; inspect only uses valid local mappings. An incomplete download, mismatched build, or missing current map returns a structured `dataset_error`.
 
 ```bash
 make check
@@ -290,3 +296,13 @@ Documentation map:
 The icon uses original golden-dog, inn, and time-portal shapes. It contains no Warcraft Logs, Blizzard, or in-game logos or character art.
 
 This project is not affiliated with Warcraft Logs or Blizzard Entertainment. Follow the Warcraft Logs API terms and rate-limit requirements.
+## Optional performance diagnostics
+
+Place `--diagnostics` before the subcommand to emit numeric diagnostic JSON on stderr; the existing stdout JSON and domain-error contracts are preserved. For example:
+
+```bash
+python -m wcl_raid_coach --diagnostics inspect 'https://www.warcraftlogs.com/reports/REPORT_CODE'
+```
+
+Diagnostics count WCL/Wago attempts, retries, received response-body bytes and network duration by operation, plus mapping initialization, Complete Bundle validation, player analysis, report assembly/generation and lock waiting. They contain no credentials or event content and do not change Personal Review elapsed/`target_met` semantics. See [measurement boundaries](references/performance.en.md).
+WCL requests coordinate quota and HTTP 429 cooldown across processes belonging to the same OS user. Changing workspace or data/cache roots does not bypass cooldown. Coordination state lives in `~/.wcl-report-data/api/` and contains no credentials; see [setup](references/setup.en.md).

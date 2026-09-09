@@ -28,6 +28,9 @@ EVIDENCE_EXCERPT_FIELDS = {
 MECHANIC_REVIEW_SOURCE_SCHEMA_VERSION = 1
 
 
+from .diagnostics import measured
+
+
 def validate_comparison_workflow(*args: Any, **kwargs: Any) -> dict[str, Any]:
     from .personal_workflow import validate_comparison_workflow as validate
 
@@ -40,6 +43,7 @@ def validate_partial_workflow(*args: Any, **kwargs: Any) -> int:
     return validate(*args, **kwargs)
 
 
+@measured("report_assembly")
 def assemble_personal_review_document(
     analysis_path: Path,
     benchmark_path: Path,
@@ -186,6 +190,7 @@ def assemble_personal_review_document(
     return document
 
 
+@measured("report_assembly")
 def assemble_partial_personal_review_document(
     analysis_path: Path,
     encounter_profile_path: Path,
@@ -485,6 +490,7 @@ def validate_mechanic_review_source(value: Any) -> dict[str, Any]:
     }
 
 
+@measured("report_assembly")
 def assemble_mechanic_review_document(
     value: Any, source_path: Path, *, locale: str = "zh-CN"
 ) -> dict[str, Any]:
@@ -767,6 +773,7 @@ def _json_file_bytes(value: Any) -> bytes:
     return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
+@measured("report_assembly")
 def assemble_raid_guide_document(snapshot: Any, snapshot_path: Path) -> dict[str, Any]:
     try:
         return _assemble_raid_guide_document(snapshot, snapshot_path)
@@ -980,6 +987,7 @@ def _validate_guide_document(document: dict[str, Any], common: dict[str, Any]) -
     }
 
 
+@measured("report_generation")
 def render_report_document(
     value: Any, output_dir: Path, *, workflow_registry_dir: Path | None = None
 ) -> dict[str, Any]:

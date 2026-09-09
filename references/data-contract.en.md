@@ -69,7 +69,7 @@ Each gzip JSONL row has this envelope:
 
 Actor and ability names live in `report.json`; IDs are event identity. Localized names are display data and must not be used as keys.
 
-`ability-names.zhCN.json` in the data directory is current-client display enrichment kept outside the Report Index. When `inspect`, `prepare`, or `query` first needs it and the file is absent, the CLI downloads the complete zhCN `SpellName` table from Wago Tools; metadata records the client build, source, and hash. It may be applied only when a Canonical Event `ability_id` also matches Report Index `abilities[].gameID`. A hit still retains the WCL name, ability ID, and mapping build provenance; a miss uses the WCL name. Mapping updates do not alter Report Revision facts or Complete Bundle identity.
+`ability-names.zhCN.json` in the data directory is current-client display enrichment kept outside the Report Index. `inspect`, `prepare`, and `query` neither initialize display mappings nor return `ability_names`. Inspect applies only a valid existing content mapping, returning its metadata when used; an absent or corrupt mapping retains WCL names and returns `content_names: null`. Outputs requiring names initialize the complete zhCN `SpellName` table from Wago Tools; metadata records the client build, source, and hash. It may be applied only when a Canonical Event `ability_id` also matches Report Index `abilities[].gameID`. A hit still retains the WCL name, ability ID, and mapping build provenance; ordinary data display uses the WCL name on a miss. Chinese advice and formal outputs retain their strict naming requirements below. Mapping updates do not alter Report Revision facts or Complete Bundle identity.
 
 `content-names.zhCN.json` is separate current-content display enrichment limited to the current raid on Normal, Heroic, and Mythic and the configured eight Mythic+ maps. Maps and encounters use Wago IDs; each NPC record contains its `JournalEncounterCreature` ID, encounter, English name, and Chinese name. Wago data does not provide a reliable direct link to WCL NPC `gameID`, so the English-name index may be used only for display within encounter context and must not replace actor ID. Metadata records the shared client build, sources, and mapping hash for all Wago tables. Mapping updates do not modify a Report Index or Complete Bundle.
 
@@ -80,6 +80,8 @@ WCL event JSON is not frozen. New keys are counted under `unknown_fields`; their
 Guide Snapshot Markdown must display Chinese SpellName and encounter names from verified Wago zhCN mappings; the JSON index may retain IDs, original WCL names, and mapping builds for audit.
 
 ## Query Contract
+
+Query and player analysis validate and calculate in one Canonical Event decompression/JSON pass. Results return only after final count/hash verification. Reaching the limit still validates the remainder; malformed fields produce domain errors. Assembly, renderer and delivery each revalidate independently without a persistent trusted-validation cache.
 
 `query` streams the gzip file and returns at most `limit` rows. `matched` counts all matching rows after the input cursor. When `truncated` is true, `next_cursor` is the final returned sequence and can be passed to the next call.
 
@@ -110,6 +112,8 @@ A Focused Evidence Window requests no resources and creates no Report Index, Raw
 The SHA-256 of the validated formatted JSON file bytes addresses the source at `outputs/mechanic-reviews/<sha256>.json`; an artifact lock and atomic write coordinate publication. Existing identical content is reused, while an identity mismatch is never overwritten. Persistence is not invoked when pagination does not reach explicit null, the Report Revision changes, or collection fails. Sanitization, source validation, or initial HTML rendering failure removes a newly created source so no misleading partial source remains.
 
 ## Report Document
+
+`coach triage` accepts only an explicit numeric fight and combines compact Mechanic Review, deterministic candidate order, and necessary Focused Evidence Windows in memory. Verified/enabled/target complete player_anomaly_summary record/event counts are aggregated and sorted descending, then actor ID ascending, selecting at most three players. Times come from displayed compact anomalies, at most three distinct times per player; only players in the same anomaly can share a window. Missing ten-second pre-death coverage triggers one supplemental death window. Output includes `mechanics`, `candidates`, `windows`, `coverage`, and `status`; no candidate yields `no_supported_candidate`. Coverage discloses suppressed compact records, time limits, and window truncation. Team facts never enter individual ranking; judgment/causal_attribution remain null. No Report Index, Raw Page, Fight Bundle, manifest, checkpoint, or persistent event cache is created. Any phase failure rejects the combined result.
 
 A Report Document is presentation input, not evidence-layer data. Schema `2` is the only accepted Report Document schema. Existing schema `1` static HTML remains viewable, but schema `1` documents cannot be rerendered; rerun `personal-report` from current Analysis, Benchmark, and Comparison source artifacts to produce schema `2`. Unknown schemas are rejected.
 

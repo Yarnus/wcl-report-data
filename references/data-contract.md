@@ -67,7 +67,7 @@ gzip JSONL 中的每一行使用以下结构：
 
 actor 和 ability 名称保存在 `report.json`；ID 才是事件身份。已本地化的名称仅用于展示，不能用作键。
 
-数据目录中的 `ability-names.zhCN.json` 是独立于 Report Index 的当前客户端展示 enrichment。`inspect`、`prepare` 或 `query` 首次需要它但文件不存在时，CLI 从 Wago Tools 下载完整 zhCN `SpellName` 表；metadata 记录客户端 build、来源和哈希。只有 Canonical Event 的 `ability_id` 同时匹配 Report Index `abilities[].gameID` 时才可应用；命中时仍须保留 WCL 名称、ability ID 和 mapping build 来源，未命中时使用 WCL 名称。mapping 更新不得改变 Report Revision 事实或 Complete Bundle 身份。
+数据目录中的 `ability-names.zhCN.json` 是独立于 Report Index 的当前客户端展示 enrichment。`inspect`、`prepare`、`query` 不初始化展示映射，也不返回 `ability_names`。inspect 仅应用有效的已有 content mapping，缺失或损坏时保留 WCL 原名并返回 `content_names: null`；命中时返回所用映射的 metadata。需要名称的输出才从 Wago Tools 初始化完整 zhCN `SpellName` 表；metadata 记录客户端 build、来源和哈希。只有 Canonical Event 的 `ability_id` 同时匹配 Report Index `abilities[].gameID` 时才可应用；命中时仍须保留 WCL 名称、ability ID 和 mapping build 来源，普通数据展示未命中时使用 WCL 名称。中文建议和正式输出继续遵守下文的严格名称要求。mapping 更新不得改变 Report Revision 事实或 Complete Bundle 身份。
 
 `content-names.zhCN.json` 是单独的当前内容展示 enrichment，只覆盖当前团本的 Normal、Heroic、Mythic 和配置的 8 个 Mythic+ 地图。Map 和 Encounter 以 Wago ID 记录；NPC 记录包含 `JournalEncounterCreature` ID、所属 Encounter 及中英文名。由于 Wago 数据没有提供到 WCL NPC `gameID` 的可靠直连，英文名索引仅可在 Encounter 上下文中用于展示，不得代替 actor ID。metadata 必须记录所有 Wago 表的相同客户端 build、来源和 mapping 哈希；更新 mapping 不得改写 Report Index 或 Complete Bundle。
 
@@ -78,6 +78,8 @@ Guide Snapshot 的 Markdown 展示必须使用已校验 Wago zhCN mapping 的中
 ## 查询契约
 
 `query` 以流式方式读取 gzip 文件，最多返回 `limit` 行。`matched` 统计输入游标之后的所有匹配行。`truncated` 为 true 时，`next_cursor` 是最后一条已返回事件的 sequence，可用于下一次查询。
+
+query和玩家分析在一次Canonical Event解压/JSON遍历中校验并计算；结果仅在文件末尾count/hash校验成功后返回。达到limit仍校验剩余事件，畸形字段返回领域错误。assembly、renderer和delivery各自重新验证，不使用持久可信校验缓存。
 
 时间过滤使用 `fight_time_ms`，上下界均包含在结果中。
 
@@ -106,6 +108,8 @@ Focused Evidence Window 不请求资源，不创建 Report Index、Raw Page、Fi
 校验后的来源按格式化 JSON 文件字节的 SHA-256 写入 `outputs/mechanic-reviews/<sha256>.json`，通过 artifact lock 和原子写入协调；已有同身份内容必须复用，身份不匹配时拒绝覆盖。分页未到达显式 null、Report Revision 变化或采集失败时不会调用持久化。净化、来源校验或首次 HTML 渲染失败时删除本次新建的来源，因此不会留下误导性的部分来源。
 
 ## Report Document
+
+`coach triage` 仅接受明确数字 fight，把紧凑 Mechanic Review、确定性候选顺序和必要 Focused Evidence Windows 组合为进程内结果。按 verified/enabled/target 的完整 player_anomaly_summary 累计 record/event counts 降序、actor ID 升序取最多 3 人；异常时间来自紧凑展示记录，每人最多 3 个不同时间，仅同一异常中的玩家可共享一次窗口。死亡前 10 秒覆盖不足时补一次死亡窗口。返回 `mechanics`、`candidates`、`windows`、`coverage` 与 `status`；无候选为 `no_supported_candidate`。coverage 披露紧凑记录抑制、每人时间上限和窗口截断。团队不参与个人排序，judgment/causal_attribution 均为 null。不创建 Report Index、Raw Page、Fight Bundle、manifest、checkpoint 或持久事件缓存；任一阶段失败拒绝整个结果。
 
 Report Document 是展示层输入，不是证据层数据。当前唯一接受的 Report Document schema 是 `2`。已生成的 schema `1` 静态 HTML 仍可查看，但 schema `1` 文档不得重新渲染；必须从当前 Analysis、Benchmark、Comparison source artifacts 重新运行 `personal-report` 生成 schema `2` 文档。未知 schema 拒绝。
 

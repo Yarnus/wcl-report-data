@@ -17,6 +17,8 @@ Client credentials can read public and unlisted reports when the code is known. 
 
 ## Queries
 
+Explicit selections within one WCL Report should use one batch `prepare`, sharing one Report Index query; each Boss Attempt still checks its Report Revision after collection. The WclClient used by one candidate discovery reuses actor/fight metadata in memory by `(report_code, fight_id)`. Each candidate still independently matches character, server, class, and specialization, rejecting ambiguous identities. This cache is not persisted and does not establish Complete Bundle eligibility or Report Revision validity.
+
 Report indexing fetches the report revision, archive status, Retail game version, master actors and abilities, fight participation metadata, report difficulty metadata, ranking partition `id`, `name`, `compactName`, and `default`, and WCL zone encounter order. Strictly validated and normalized `zone.partitions` are persisted in the immutable Report Index for Personal Analysis comparison identity resolution. `zone.encounters` is returned only as current `inspect` selection metadata and is not persisted in existing immutable Report Indices.
 
 General-guide resolution uses `worldData.zones` for the current unfrozen Retail raid zone, original encounter order, difficulties, and default partition. Exactly one current zone, one Heroic difficulty, and one default partition must exist; otherwise resolution stops rather than guessing.
@@ -49,11 +51,17 @@ A Focused Evidence Window uses a separate `Report.events` query over a short ran
 
 ## Rate Limits
 
-The client retries transient connection failures and HTTP 500, 502, 503, and 504 responses with exponential backoff. HTTP 429 opens a process-local circuit breaker immediately.
+`coach triage` uses one WclClient, one full report metadata query, and its in-memory token. It checks Report Revision after Mechanic Review, before each Focused Evidence Window, and again after that window's pagination. Windows retain targetID filtering, fixed ranges, explicit null termination, and local participant filtering. API failure, shared cooldown, or a revision change rejects the combined result without persisting event evidence.
+
+The client retries transient connection failures and HTTP 500, 502, 503, and 504 responses with exponential backoff. Every OAuth, quota probe, GraphQL and retry HTTP attempt passes the same OS user's file lock. HTTP 429 immediately opens the process-local circuit breaker and publishes shared cooldown, blocking new requests from other workspaces or data roots.
 
 Before WCL data queries, the client preserves at least 15 percent or 50 API points, whichever is larger. Report indexing reserves 500 points because its cost scales with report metadata.
 
 Event and revision requests reserve the full retry budget and refresh the rate snapshot in the same GraphQL response. Persistent collection retains Raw Pages and checkpoints after a safe-reserve stop. Mechanic Review writes nothing and must restart.
+
+The shared gate additionally debits a conservative 500 points for each Report Index HTTP attempt or 10 for other GraphQL attempts; failures without a new quota observation retain the debit. OAuth has no assumed point cost. Valid shared snapshots satisfy quota initialization without duplicate probes; diagnostic quota observations count only actual API responses. Other clients can still consume quota, so this cannot guarantee zero server-side 429 responses.
+
+Cooldown uses valid `Retry-After` seconds or HTTP date first, then reliable future quota reset information, otherwise 60 seconds. Active cooldown returns `wcl_rate_limit` immediately without sleeping through a quota window; errors provide shared cooldown or known reset Unix times. After expiry, probes run under the file lock; successful observations are reused by other processes and another 429 reinstates cooldown. Ordinary queries after stale observations or interrupted requests require a `doctor` refresh first. Corrupt state and clock-continuity anomalies return domain errors and never automatically restore a full budget.
 
 The WCL client secret is used only for OAuth and does not establish local Artifact identity. Ranking Cohorts and Encounter Benchmarks use SHA-256 content IDs over canonical JSON; Complete Bundles hash the Report Index, Raw Pages, compressed event file, and Canonical Event content. These Artifacts are supported only for local generation and consumption; hashes do not authenticate origin or resist a local process that can edit both artifact and index. Personal Review's 180/30-second targets use monotonic and wall-clock measurements within a cooperative local workspace; `wcl_network_measurement` is `not_measured`, so this is not a WCL network benchmark.
 
@@ -64,3 +72,6 @@ The Report Revision is checked after the final event page. A changed revision pr
 Archived metadata may remain visible while events are inaccessible. A Fight Bundle or Mechanic Review is allowed only when WCL reports archived events as accessible to the current API client.
 
 Run `coach personal-workflow-init` immediately after Boss Attempt/player selection and before target Complete Bundle retrieval, Ranking Candidate discovery, and Profile retrieval/synthesis. Initialization persists only selected report/fight/actor identity and the internal clock origin. Later `coach personal-workflow --previous-workflow` calls bind Analysis, Ranking Cohort, and Profiles to that identity; elapsed includes invocation gaps and therefore covers candidate, Profile, and Agent work. WCL network time remains `not_measured`; Agent synthesis cannot be timed separately, so finalization marks it `unavailable` and final `target_met` is `null`.
+## Optional request diagnostics
+
+The global `--diagnostics` option separately measures HTTP attempts, received body bytes and monotonic network duration for OAuth, quota probes, GraphQL and retries in this invocation. First/last valid quota snapshots are observations and cannot exclude consumption by other clients. This does not change workflow `wcl_network_measurement` or `target_met`; see [measurement boundaries](performance.en.md).

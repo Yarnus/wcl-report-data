@@ -162,9 +162,15 @@ CLI 始终向标准输出写入 JSON，领域错误也会返回结构化 JSON。
 
 ## Encounter Designator 与名称映射
 
+Agent 入口按需加载[机制/triage](references/workflow-mechanics.md)、[个人复盘](references/workflow-personal.md)和[攻略](references/workflow-guide.md)。个人复盘先初始化计时，再搜索绑定原 Cohort/Profiles 的本地兼容 Benchmark；深度验证后复用已有3–10样本。多 Boss 攻略复用当前有效公共 Specialization Profile与合格已完成章节，只获取缺失部分。详细字段与来源规则在数据契约中按需读取。
+
+优先复核候选使用 `python -m wcl_raid_coach coach triage "<WCL_URL_WITH_NUMERIC_FIGHT>"`。CLI 在同一进程复用客户端和报告元数据，输出紧凑 `mechanics`、有序 `candidates`、`windows` 与 `coverage`；只考虑 verified/enabled/target 玩家异常，最多 3 人、每人 3 个不同异常时间。同一异常中的并列玩家才能共享窗口。缺少死亡前 10 秒覆盖时补一次死亡窗口。无受支持候选时返回 `no_supported_candidate`，不请求 focused events。团队事实保持并列；judgment/causal_attribution 为 null。全过程保持临时内存证据和阶段前后的 Report Revision 校验，失败不返回成功的合并结果。coverage 明确记录紧凑异常展示抑制和窗口截断；不代表完整个人复盘。
+
 Skill 能理解 `PT6`、`H6`、`M6` 形式的 Encounter Designator。前缀分别表示 Normal、Heroic、Mythic，数字表示 WCL `zone.encounters` 原始列表中的一基位置。Designator 只确定难度和 encounter；同一报告有多次匹配 Boss Attempt 时，Skill 必须列出明确的 fight ID 等待选择，不能自动选择击杀、最后一次或全部尝试。
 
-首次运行 `inspect`、`prepare`、`query` 或生成 Guide 时，CLI 会从 Wago Tools 下载当前 Retail zhCN `SpellName` CSV，并在数据目录生成完整的 `ability-names.zhCN.json` 及 metadata；已有有效 JSON 时不会再次联网。只有 ID 同时存在于 Report Index 的 `abilities[].gameID` 时才可使用 mapping。Guide 和 Skill 面向用户的正文必须使用 mapping 中的中文 SpellName，不得自行直译；机制 Spell ID 缺少中文 mapping 时停止生成最终攻略。中文名是当前客户端展示 enrichment，不改写 Report Index。Mechanic Review 不初始化该本地 mapping；它使用版本化 Mechanic Ruleset 随附的中英文机制名称。
+`inspect`、`prepare`、`query` 不下载展示名称映射，也不返回 `ability_names`。`inspect` 使用有效的已有 content mapping；缺失或损坏时展示 WCL 原名，返回 `content_names: null`。已明确数字 fight 时直接 prepare；同一 WCL Report 的多个明确选择可使用 `prepare "<WCL_URL>" --fight 1 --fight 3`，共享一次报告元数据查询。
+
+生成 Guide 等需要名称的输出时，CLI 从 Wago Tools 下载当前 Retail zhCN `SpellName` CSV，在数据目录生成完整的 `ability-names.zhCN.json` 及 metadata；已有有效 JSON 时不会再次联网。只有 ID 同时存在于 Report Index 的 `abilities[].gameID` 时才可使用 mapping。Guide 和 Skill 面向用户的中文正文必须使用 mapping 中的中文 SpellName，不得自行直译；机制 Spell ID 缺少中文 mapping 时停止生成最终攻略。中文名是当前客户端展示 enrichment，不改写 Report Index。Mechanic Review 不初始化该本地 mapping；它使用版本化 Mechanic Ruleset 随附的中英文机制名称。
 
 CLI 另行维护 `content-names.zhCN.json`，从同一 Wago 客户端 build 的 `Map`、`DungeonEncounter`、`JournalEncounter` 和 `JournalEncounterCreature` 中生成 Encounter/NPC 中英文映射。它只包含当前团队副本的 Normal、Heroic、Mythic 三个难度，以及当前配置的 8 个 Mythic+ 地图。WCL 原始英文名和 ID 继续作为审计数据；Wago 未提供 WCL NPC `gameID` 的可靠直连，因此 NPC 中文名只作为所属 Encounter 内的展示 enrichment，不能作为事件身份。
 
@@ -251,7 +257,7 @@ python -m wcl_raid_coach cache clear --confirm
 
 技能名称首次使用时固定从 `https://wago.tools/db2/SpellName/csv?locale=zhCN` 下载。CLI 依据响应文件名（例如 `SpellName.12.1.0.69587.csv`）保存客户端 build、来源文件和 SHA-256。删除数据目录中的 `ability-names.zhCN.json` 和 `ability-names.zhCN.meta.json` 后，下次相关命令会重新下载；无法下载时返回结构化 `dataset_error`。
 
-Encounter/NPC mapping 使用代码中声明的当前地图范围，并要求所有 Wago 来源表具有同一客户端 build。删除 `content-names.zhCN.json` 和 `content-names.zhCN.meta.json` 后，下次 `inspect`、`coach resolve` 或 `coach guide` 会重新生成；下载不完整、build 不一致或当前地图缺失时返回结构化 `dataset_error`。
+Encounter/NPC mapping 使用代码中声明的当前地图范围，并要求所有 Wago 来源表具有同一客户端 build。删除 `content-names.zhCN.json` 和 `content-names.zhCN.meta.json` 后，下次需要名称的 `coach resolve` 或 `coach guide` 会重新生成；inspect 仍仅使用本地有效映射。下载不完整、build 不一致或当前地图缺失时返回结构化 `dataset_error`。
 
 ```bash
 make check
@@ -285,3 +291,13 @@ git diff --check
 - [原创图标](assets/timewarp-inn-dog.svg)
 
 图标使用原创的大黄狗、旅馆和时空传送门造型，不包含 Warcraft Logs、Blizzard 或游戏内 Logo 与角色素材。本项目与 Warcraft Logs 或 Blizzard Entertainment 没有关联。使用时请遵守 Warcraft Logs API 访问规则和限流要求。
+## 可选性能诊断
+
+在子命令前加 `--diagnostics`，将数值诊断 JSON 输出到 stderr；原有 stdout JSON 与领域错误契约保持不变。例如：
+
+```bash
+python -m wcl_raid_coach --diagnostics inspect 'https://www.warcraftlogs.com/reports/REPORT_CODE'
+```
+
+诊断按操作统计 WCL/Wago 请求次数、重试、收到的响应正文字节、网络耗时，以及名称映射、Complete Bundle 校验、玩家分析、报告组装/生成和锁等待。它不包含凭据或事件内容，不改变 Personal Review 的 elapsed/`target_met` 语义。测量边界见[性能诊断说明](references/performance.md)。
+同一 OS 用户的 WCL 请求会跨进程协调额度与 HTTP 429 冷却；更换 workspace 或 data/cache root 不会绕过冷却。协调状态位于 `~/.wcl-report-data/api/`，不保存凭据；详见[配置说明](references/setup.md)。
