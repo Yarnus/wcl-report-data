@@ -23,6 +23,9 @@ CN 报告链接可直接作为输入，并会规范化为全球站报告链接�
 
 排名候选通过官方 `Encounter.characterRankings` 查询，并传入精确 encounter、difficulty、partition、class 和 spec，使用 `externalBuffs: Exclude` 排除 major external buffs。返回的排名 JSON 仍是不可信输入。WCL 排名通常不返回 source ID；CLI 必须通过候选报告的 actor/fight metadata 唯一补全后，候选才能进入内容寻址的近期 Ranking Cohort。
 
+Personal Review 的排名发现与样本资格是两个阶段：Ranking Candidate 只有在 Complete Bundle、硬条件和 Encounter Profile eligibility 均通过后才成为 Reference Sample。新建 Personal Review 以 3 个 Reference Samples 为交付目标，拒绝候选后按 Cohort 中的稳定 `report_code:fight_id:source_id` 身份补位；Raid Guide 和底层 `coach candidates` 的默认目标仍为 10。Ranking Cohort 保留最后一次已查询的完整去重页，并记录真实已查询页范围、WCL `hasMorePages`、`target_reached`、本地 `truncated` 和派生的 `exhausted`；因此达到目标后的同页候选无需重新请求即可补位。只有 `hasMorePages` 非 true 且结果未截断时才能证明 page exhaustion。预算关闭、已证明的 page exhaustion、API failure 或 WCL 429 断路器会在下一项可选工作前停止调度，但不会取消已在途请求或破坏 Raw Page/checkpoint。
+交付的 finalization artifact 记录从 workflow 选择开始、经过验证/锁/持久化直到 HTML 和 index 哈希确认后的 elapsed、`target_met` 与 `completion_status`；session marker 或 monotonic 连续性无法确认时保留进度但停止可选采集。
+
 战斗难度 ID 只能通过该报告返回的 `zone.difficulties { id name }` 解释。不同 WCL 上下文中的 ID 可能不同，因此不能使用硬编码的全局枚举。
 
 WCL 的 `translate: true` 会把 Report master ability 名称统一为英文，不能指定目标 locale。当前 zhCN 显示名来自首次使用时由 Wago Tools 下载、带客户端 build 来源的完整本地 mapping；WCL GraphQL `gameData.ability` 没有 locale 参数，只返回英文名。
@@ -48,10 +51,12 @@ Focused Evidence Window 使用独立的 `Report.events` 查询，范围是显式
 
 执行 WCL 数据查询前，客户端至少保留 15% 或 50 个 API 点数，取两者中较大值。Report Index 查询的成本会随报告元数据增长，因此预留 500 点。事件和 revision 请求为完整重试预算预留点数，并在同一 GraphQL 响应中刷新限流快照。持久化采集因安全预留而停止后会保留 Raw Page 和检查点；Mechanic Review 不落盘，必须从头重试。
 
-WCL client secret 只用于 OAuth，不参与本地 Artifact 身份。Ranking Cohort 和 Encounter Benchmark 使用规范 JSON 的 SHA-256 内容 ID；Complete Bundle 使用 Report Index、Raw Page、压缩事件文件和 Canonical Event 内容 hash。它们只支持本地生成和消费，hash 不认证来源。
+WCL client secret 只用于 OAuth，不参与本地 Artifact 身份。Ranking Cohort 和 Encounter Benchmark 使用规范 JSON 的 SHA-256 内容 ID；Complete Bundle 使用 Report Index、Raw Page、压缩事件文件和 Canonical Event 内容 hash。它们只支持本地生成和消费，hash 不认证来源，也不能抵抗可同时修改 artifact 与 index 的本地进程。Personal Review 的 180/30 秒是协作式本地 workspace 内的 monotonic/wall-clock 测量，`wcl_network_measurement` 为 `not_measured`，不是 WCL 网络 benchmark。
 
 ## Revision 与归档
 
 最后一个事件页完成后会再次检查 Report Revision。revision 已变化时不能发布 Fight Bundle，也不能返回 Mechanic Review 结果。持久化采集的下一次调用会创建或使用新的 revision 目录；Mechanic Review 重新采集临时证据。
 
 归档报告的元数据可能仍然可见，但事件不可访问。只有 WCL 明确表示当前 API 客户端可以访问归档事件时，才能创建 Fight Bundle 或执行 Mechanic Review。
+
+Personal Review 在选定 Boss Attempt/玩家后立即运行 `coach personal-workflow-init`，早于目标 Complete Bundle retrieval、Ranking Candidate discovery 和 Profile retrieval/synthesis；初始化只持久化所选 report/fight/actor 身份及内部 clock origin。后续 `coach personal-workflow --previous-workflow` 将 Analysis、Ranking Cohort 和 Profiles 绑定到该身份，调用间隔计入 elapsed，所以总 elapsed 覆盖候选/Profile/Agent 工作。WCL 网络仍标为 `not_measured`；Agent synthesis 无法单独计时，finalization 将其标为 `unavailable`，最终 `target_met` 为 `null`。

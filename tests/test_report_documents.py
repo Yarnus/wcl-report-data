@@ -15,6 +15,7 @@ from wcl_raid_coach.comparison import compare_player
 from wcl_raid_coach.errors import InputError
 from wcl_raid_coach.guides import create_guide_snapshot
 from wcl_raid_coach.report_documents import (
+    _render_personal_html,
     assemble_personal_review_document,
     create_mechanic_review_report,
     assemble_raid_guide_document,
@@ -93,7 +94,7 @@ def mechanic_document(source_root: Path | None = None) -> dict:
         if source_root is not None else {"path": "/work/mechanic-review.json", "sha256": "a" * 64}
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "document_type": "mechanic_review",
         "locale": "zh-CN",
         "title": "石棺哨兵机制复盘",
@@ -167,6 +168,7 @@ def personal_document(source_root: Path | None = None) -> dict:
         for kind, character in (
             ("personal_analysis", "a"), ("encounter_benchmark", "b"), ("comparison", "c"),
             ("ability_names", "d"), ("ability_names_metadata", "e"),
+            ("personal_review_workflow", "f"),
         )
     }
     if source_root is not None:
@@ -175,6 +177,7 @@ def personal_document(source_root: Path | None = None) -> dict:
         index_value["fights"][0] |= {
             "name": "石棺哨兵", "kill": False, "boss_percentage": 32.7,
         }
+        index_value["abilities"].append({"gameID": 2, "name": "Ability", "type": 1, "icon": "spell"})
         index.write_text(json.dumps(index_value), encoding="utf-8")
         manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
         manifest_value["report_index_sha256"] = hashlib.sha256(
@@ -183,11 +186,18 @@ def personal_document(source_root: Path | None = None) -> dict:
         manifest.write_text(json.dumps(manifest_value), encoding="utf-8")
         analysis = analyze_player(manifest, index, 10, partition_id=2)
         benchmark = identify_benchmark({
-            "schema_version": 2, "cohort_id": "c" * 64,
+            "schema_version": 3, "cohort_id": "c" * 64,
             "identity": analysis["comparison_identity"], "sample_count": 3,
+            "reference_samples": [{}, {}, {}],
             "confidence": "low", "stable_pattern_claims_allowed": True,
-            "metrics": {"damage_total_median": 200, "casts_median": {"1": 2},
-                        "first_cast_ms_median": {"1": 80}},
+            "metrics": {"damage_total_median": 200, "key_action_casts_median": {"2": 2},
+                        "key_action_first_cast_ms_median": {"2": 80},
+                        "key_action_casts_per_minute_median": {"2": 120},
+                        "key_action_rate_sample_count": {"2": 3},
+                        "duration_ms_median": 1000, "duration_ms_min": 1000,
+                        "duration_ms_max": 1000, "rate_sample_count": 3,
+                        "damage_per_minute_median": 12000,
+                        "healing_per_minute_median": 0, "healing_rate_sample_count": 3},
         })
         comparison = compare_player(analysis, benchmark)
         sources = {
@@ -200,8 +210,11 @@ def personal_document(source_root: Path | None = None) -> dict:
             "build": "12.1.0.69587", "mapping_sha256": mapping["sha256"],
         })
         sources |= {"ability_names": mapping, "ability_names_metadata": metadata}
+        sources["personal_review_workflow"] = _write_source(
+            source_root, "workflow.json", {"schema_version": 2}
+        )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "document_type": "personal_review",
         "locale": "zh-CN",
         "title": "Player · 个人复盘",
@@ -232,28 +245,47 @@ def personal_document(source_root: Path | None = None) -> dict:
             "benchmark_id": benchmark["benchmark_id"] if source_root is not None else "b" * 64,
             "sample_count": 3,
             "confidence": "low",
+            "unmatched_context": ["survival", "downtime", "phases", "talents", "gear", "assignments"],
         },
         "metrics": {
+            "duration_ms": 1000.0,
             "damage_total": 150,
             "healing_total": 0,
+            "damage_per_minute": 9000.0,
+            "healing_per_minute": 0.0,
             "interrupts": 1,
             "deaths": 1,
             "resource_events": 0,
             "damage_total_delta": -50,
+            "reference_damage_total_median": 200.0,
+            "damage_per_minute_delta": -3000.0,
+            "healing_per_minute_delta": 0.0,
+            "reference_duration_ms_median": 1000.0,
+            "reference_duration_ms_min": 1000.0,
+            "reference_duration_ms_max": 1000.0,
+            "reference_rate_sample_count": 3,
+            "reference_damage_per_minute_median": 12000.0,
+            "reference_healing_rate_sample_count": 3,
+            "reference_healing_per_minute_median": 0.0,
         },
         "abilities": [
             {
-                "ability_id": 1,
+                "ability_id": 2,
                 "name": "Ability",
                 "wcl_name": "Ability",
                 "ability_names_build": None,
-                "player_casts": 1,
+                "player_casts": 0,
                 "median_casts": 2.0,
-                "player_first_cast_ms": 100,
+                "player_first_cast_ms": None,
                 "median_first_cast_ms": 80.0,
+                "player_casts_per_minute": 0.0,
+                "median_casts_per_minute": 120.0,
+                "casts_per_minute_delta": -120.0,
+                "rate_sample_count": 3,
             }
         ],
-        "scope_note": "仅展示已校验日志事实和同硬条件样本比较；不提供机制归因、死亡原因、建议或可实现提升声明。",
+        "advice": [],
+        "scope_note": "日志事实与引用由 CLI 校验；建议正文正确性仍需人工判断，不构成责任、因果或保证提升。",
     }
 
 
@@ -264,25 +296,26 @@ def raid_guide_document(source_root: Path | None = None) -> dict:
     specialization_profile_id = "a94c" + "0" * 60
     if source_root is not None:
         benchmark = identify_benchmark({
-            "schema_version": 2, "cohort_id": "c" * 64, "identity": EXPECTED | {"game_version": "12.1"},
+            "schema_version": 3, "cohort_id": "c" * 64, "identity": EXPECTED | {"game_version": "12.1"},
             "encounter_profile_id": encounter_profile_id,
             "specialization_profile_id": specialization_profile_id,
             "sources": {"encounter": [{"title": "Source <title>", "url": "https://example.com/encounter", "quote_summary": "机制来源摘要。"}], "specialization": []},
             "sample_count": 3, "confidence": "low", "stable_pattern_claims_allowed": True,
-            "mechanic_anchors": [{"ability_id": 1, "name": "Mechanic", "observed_anchor_ms": 18000}],
-            "metrics": {"damage_total_median": 266800000, "casts_median": {"1": 1},
-                        "first_cast_ms_median": {"1": 1300}, "damage_by_target_median": {"20": 188200000}},
+            "reference_samples": [{}, {}, {}],
+            "mechanic_anchors": [{"ability_id": 2, "name": "Mechanic", "observed_anchor_ms": 18000}],
+            "metrics": {"damage_total_median": 266800000, "key_action_casts_median": {"2": 1},
+                        "key_action_first_cast_ms_median": {"2": 1300}, "damage_by_npc_median": {"20": 188200000}},
         })
         snapshot = create_guide_snapshot(
             [benchmark], specialization_name="邪恶死亡骑士", output_dir=source_root / "guides",
-            ability_names={"1": "亡者大军"}, ability_names_build="12.1.0.69587",
+            ability_names={"2": "亡者大军"}, ability_names_build="12.1.0.69587",
             encounter_names={"1007": {"map_id": 3004, "name_en": "Boss 7", "name_zh": "中文首领七"}},
             content_names_build="12.1.0.69587", content_names_sha256="d" * 64,
         )
         snapshot_id = snapshot["snapshot_id"]
         source = {"path": snapshot["index_path"], "sha256": sha256_file(Path(snapshot["index_path"]))}
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "document_type": "raid_guide",
         "locale": "zh-CN",
         "title": "邪恶死亡骑士高分日志战术手册",
@@ -335,6 +368,55 @@ def raid_guide_document(source_root: Path | None = None) -> dict:
 
 
 class ReportDocumentTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.workflow_validation = patch(
+            "wcl_raid_coach.report_documents.validate_comparison_workflow"
+        )
+        self.workflow_validation.start()
+        self.addCleanup(self.workflow_validation.stop)
+
+    def test_complete_personal_assembler_requires_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            refs = {
+                item["kind"]: Path(item["path"])
+                for item in personal_document(Path(temporary))["source_artifacts"]
+            }
+            with self.assertRaisesRegex(TypeError, "workflow_path"):
+                assemble_personal_review_document(
+                    refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
+                    ability_names_path=refs["ability_names"],
+                    ability_names_metadata_path=refs["ability_names_metadata"],
+                )
+
+    def test_complete_personal_document_requires_workflow_source(self) -> None:
+        document = personal_document()
+        document["source_artifacts"] = [
+            item for item in document["source_artifacts"]
+            if item["kind"] != "personal_review_workflow"
+        ]
+        with self.assertRaisesRegex(InputError, "source artifacts are incomplete"):
+            validate_report_document(document)
+
+    def test_renderer_rejects_fixed_legacy_personal_review_shape(self) -> None:
+        document = {
+            "schema_version": 1,
+            "document_type": "personal_review",
+            "locale": "zh-CN",
+            "title": "Spoofed title",
+            "subtitle": "Legacy report",
+            "source_artifacts": [],
+            "identity": {"report_code": "ABC", "report_revision": 1, "fight_id": 1, "encounter_name": "Boss", "difficulty_name": "Mythic", "duration_ms": 1, "outcome": "kill", "boss_percentage": 0},
+            "player": {"actor_id": 1, "name": "Spoofed player", "class_name": "DeathKnight", "spec_name": "Unholy", "item_level": 1, "anonymous": False},
+            "comparison": {"game_version": "12.1", "partition_id": 2, "encounter_id": 1, "difficulty_id": 4, "class_name": "DeathKnight", "spec_name": "Unholy", "benchmark_id": "0" * 64, "sample_count": 3, "confidence": "low"},
+            "metrics": {"damage_total": 999999, "healing_total": 0, "interrupts": 0, "deaths": 0, "resource_events": 0, "damage_total_delta": 999999},
+            "abilities": [],
+            "scope_note": "Legacy fields are not current source evidence.",
+        }
+        for field, value in (("title", "Spoofed title"), ("player", document["player"]), ("metrics", document["metrics"])):
+            document[field] = value
+            with self.assertRaisesRegex(InputError, "cannot be rerendered.*personal-report"):
+                render_report_document(document, Path("reports"))
+
     def test_assembles_real_shaped_personal_artifacts_through_html_and_index(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -342,7 +424,7 @@ class ReportDocumentTests(unittest.TestCase):
             refs = {item["kind"]: Path(item["path"]) for item in source_document["source_artifacts"]}
             index_path = Path(json.loads(refs["personal_analysis"].read_text(encoding="utf-8"))["evidence"]["index_path"])
             index = json.loads(index_path.read_text(encoding="utf-8"))
-            index["abilities"].append({"gameID": 2, "name": "Fallback Ability", "type": 1, "icon": "spell"})
+            index["abilities"].append({"gameID": 3, "name": "Fallback Ability", "type": 1, "icon": "spell"})
             index_path.write_text(json.dumps(index), encoding="utf-8")
             manifest_path = Path(json.loads(refs["personal_analysis"].read_text(encoding="utf-8"))["evidence"]["manifest_path"])
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -352,15 +434,17 @@ class ReportDocumentTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             analysis = analyze_player(manifest_path, index_path, 10, partition_id=2)
             benchmark = json.loads(refs["encounter_benchmark"].read_text(encoding="utf-8"))
-            benchmark["metrics"]["casts_median"]["2"] = 3
-            benchmark["metrics"]["first_cast_ms_median"]["2"] = 250
+            benchmark["metrics"]["key_action_casts_median"]["3"] = 3
+            benchmark["metrics"]["key_action_first_cast_ms_median"]["3"] = 250
+            benchmark["metrics"]["key_action_casts_per_minute_median"]["3"] = 180
+            benchmark["metrics"]["key_action_rate_sample_count"]["3"] = 3
             benchmark = identify_benchmark(benchmark)
             comparison = compare_player(analysis, benchmark)
             refs["personal_analysis"].write_text(json.dumps(analysis), encoding="utf-8")
             refs["encounter_benchmark"].write_text(json.dumps(benchmark), encoding="utf-8")
             refs["comparison"].write_text(json.dumps(comparison), encoding="utf-8")
             mapping_path = refs["ability_names"]
-            mapping_path.write_text(json.dumps({"1": "本地化技能"}), encoding="utf-8")
+            mapping_path.write_text(json.dumps({"2": "本地化技能"}), encoding="utf-8")
             metadata_path = refs["ability_names_metadata"]
             metadata_path.write_text(json.dumps({
                 "build": "12.1.0.69587", "mapping_sha256": sha256_file(mapping_path),
@@ -368,11 +452,13 @@ class ReportDocumentTests(unittest.TestCase):
 
             document = assemble_personal_review_document(
                 refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
+                workflow_path=refs["personal_review_workflow"],
+                workflow_registry_dir=root / "personal-workflows",
                 ability_names_path=mapping_path,
                 ability_names_metadata_path=metadata_path,
                 locale="zh-CN",
             )
-            result = render_report_document(document, root / "outputs" / "reports")
+            result = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "personal-workflows")
             report_index = json.loads(Path(result["index_path"]).read_text(encoding="utf-8"))
             html = Path(result["html_path"]).read_text(encoding="utf-8")
 
@@ -381,33 +467,37 @@ class ReportDocumentTests(unittest.TestCase):
             self.assertEqual(document["comparison"]["game_version"], "12.1")
             self.assertEqual(document["abilities"], [
                 {
-                    "ability_id": 1, "name": "本地化技能", "wcl_name": "Ability",
-                    "ability_names_build": "12.1.0.69587", "player_casts": 1,
-                    "median_casts": 2.0, "player_first_cast_ms": 100.0,
+                    "ability_id": 2, "name": "本地化技能", "wcl_name": "Ability",
+                    "ability_names_build": "12.1.0.69587", "player_casts": 0,
+                    "median_casts": 2.0, "player_first_cast_ms": None,
                     "median_first_cast_ms": 80.0,
+                    "player_casts_per_minute": 0.0, "median_casts_per_minute": 120.0,
+                    "casts_per_minute_delta": -120.0, "rate_sample_count": 3,
                 },
                 {
-                    "ability_id": 2, "name": "Fallback Ability", "wcl_name": "Fallback Ability",
+                    "ability_id": 3, "name": "Fallback Ability", "wcl_name": "Fallback Ability",
                     "ability_names_build": None, "player_casts": 0,
                     "median_casts": 3.0, "player_first_cast_ms": None,
                     "median_first_cast_ms": 250.0,
+                    "player_casts_per_minute": 0.0, "median_casts_per_minute": 180.0,
+                    "casts_per_minute_delta": -180.0, "rate_sample_count": 3,
                 },
             ])
             self.assertIn("本地化技能", html)
             self.assertIn("Fallback Ability", html)
             self.assertIn("Actor 10", html)
             self.assertIn(benchmark["benchmark_id"][:12], html)
-            self.assertIn("Spell 1", html)
+            self.assertIn("Spell 2", html)
             self.assertEqual(report_index["document"], validate_report_document(document))
-            self.assertEqual(result, render_report_document(document, root / "outputs" / "reports"))
+            self.assertEqual(result, render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "personal-workflows"))
             serialized = json.dumps(report_index["document"])
-            for forbidden in ("recommendation", "advice", "death_cause", "mechanic_attribution", "achievable_improvement"):
+            for forbidden in ("recommendation", "death_cause", "mechanic_attribution", "achievable_improvement"):
                 self.assertNotIn(forbidden, serialized)
 
             changed = json.loads(json.dumps(document))
             changed["abilities"][0]["name"] = "调用方伪造名称"
             with self.assertRaisesRegex(InputError, "ability claims"):
-                render_report_document(changed, root / "other-reports")
+                render_report_document(changed, root / "other-reports", workflow_registry_dir=root / "personal-workflows")
 
     def test_personal_assembler_rejects_mismatched_or_malformed_sources(self) -> None:
         mutations = (
@@ -428,6 +518,8 @@ class ReportDocumentTests(unittest.TestCase):
                 with self.assertRaisesRegex(InputError, message):
                     assemble_personal_review_document(
                         refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
+                        workflow_path=refs["personal_review_workflow"],
+                        workflow_registry_dir=root / "personal-workflows",
                         ability_names_path=refs["ability_names"],
                         ability_names_metadata_path=refs["ability_names_metadata"], locale="en",
                     )
@@ -440,6 +532,8 @@ class ReportDocumentTests(unittest.TestCase):
             with self.assertRaisesRegex(InputError, "valid UTF-8 JSON"):
                 assemble_personal_review_document(
                     refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
+                    workflow_path=refs["personal_review_workflow"],
+                    workflow_registry_dir=root / "personal-workflows",
                     ability_names_path=refs["ability_names"],
                     ability_names_metadata_path=refs["ability_names_metadata"], locale="en",
                 )
@@ -515,6 +609,7 @@ class ReportDocumentTests(unittest.TestCase):
             self.assertEqual(index["document"]["document_id"], result["document_id"])
             self.assertEqual(index["render"]["html_sha256"], result["html_sha256"])
             self.assertEqual(index["render"]["renderer_schema_version"], 1)
+            self.assertEqual(index["document"]["schema_version"], 2)
             self.assertIn("&lt;img src=x onerror=alert(1)&gt;", html)
             self.assertNotIn("<img src=x", html)
             self.assertNotIn("<script", html.lower())
@@ -630,7 +725,7 @@ class ReportDocumentTests(unittest.TestCase):
                 mutate(source)
                 source_ref |= _write_source(root, f"changed-{kind}.json", source)
                 with self.assertRaisesRegex(InputError, message):
-                    render_report_document(document, root / "reports")
+                    render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
         document = personal_document()
         document["source_artifacts"] = [
@@ -644,21 +739,21 @@ class ReportDocumentTests(unittest.TestCase):
             document = personal_document(root)
             document["player"]["name"] = "Other"
             with self.assertRaisesRegex(InputError, "player"):
-                render_report_document(document, root / "reports")
+                render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             document = personal_document(root)
             document["player"]["anonymous"] = True
             with self.assertRaisesRegex(InputError, "player"):
-                render_report_document(document, root / "reports")
+                render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             document = personal_document(root)
             document["identity"]["fight_id"] = 8
             with self.assertRaisesRegex(InputError, "Boss Attempt"):
-                render_report_document(document, root / "reports")
+                render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
     def test_personal_review_converts_recomputation_parser_errors_to_input_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -666,7 +761,7 @@ class ReportDocumentTests(unittest.TestCase):
             document = personal_document(root)
             with patch("wcl_raid_coach.comparison.analyze_player", side_effect=KeyError("secret-field")):
                 with self.assertRaisesRegex(InputError, "could not be verified"):
-                    render_report_document(document, root / "reports")
+                    render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
     def test_rejects_stale_analysis_schema_and_snapshot_identity_mismatches(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -677,7 +772,7 @@ class ReportDocumentTests(unittest.TestCase):
             analysis["schema_version"] = 2
             analysis_ref |= _write_source(root, "schema-2-analysis.json", analysis)
             with self.assertRaisesRegex(InputError, "unsupported schema version"):
-                render_report_document(document, root / "reports")
+                render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
         mutations = (
             (lambda document: document.__setitem__("snapshot_id", "0" * 64), "Snapshot"),
@@ -789,13 +884,36 @@ class ReportDocumentTests(unittest.TestCase):
 
     def test_renders_personal_review_without_inventing_claims(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            result = render_report_document(personal_document(Path(temporary)), Path(temporary) / "reports")
+            result = render_report_document(personal_document(Path(temporary)), Path(temporary) / "reports", workflow_registry_dir=Path(temporary) / "personal-workflows")
             html = Path(result["html_path"]).read_text(encoding="utf-8")
 
         self.assertIn("Player", html)
         self.assertIn("Ability", html)
         self.assertIn("不是可实现提升值", html)
+        for text in (
+            "伤害总量", "治疗量", "玩家时长", "参考时长中位数", "参考时长范围",
+            "参考伤害总量中位数",
+            "玩家每分钟伤害", "参考每分钟伤害中位数", "每分钟伤害差值", "伤害速率有效样本",
+            "玩家每分钟治疗", "参考每分钟治疗中位数", "每分钟治疗差值", "治疗速率有效样本",
+            "3/3", "每分钟：玩家 0 / 参考中位数 120 / 差值 -120 / 3 个有效 Reference Samples",
+            "存活", "停手时间", "阶段", "天赋", "装备", "任务分配",
+            "每分钟归一化不会校正这些差异", "样本中位数只描述观察结果，不是推荐动作",
+        ):
+            self.assertIn(text, html)
         self.assertNotIn("<script", html.lower())
+
+        unavailable = personal_document()
+        unavailable["metrics"] |= {
+            "duration_ms": None, "damage_per_minute": None, "healing_per_minute": None,
+            "damage_per_minute_delta": None, "healing_per_minute_delta": None,
+            "reference_damage_per_minute_median": None, "reference_healing_per_minute_median": None,
+            "reference_rate_sample_count": 0, "reference_healing_rate_sample_count": 0,
+        }
+        unavailable["abilities"][0] |= {
+            "player_casts_per_minute": None, "median_casts_per_minute": None,
+            "casts_per_minute_delta": None, "rate_sample_count": 0,
+        }
+        self.assertIsNone(validate_report_document(unavailable)["metrics"]["damage_per_minute"])
 
         document = personal_document()
         document["recommendations"] = ["Use cooldowns earlier"]
@@ -806,6 +924,146 @@ class ReportDocumentTests(unittest.TestCase):
         document["comparison"]["spec_name"] = "Frost"
         with self.assertRaisesRegex(InputError, "do not match"):
             validate_report_document(document)
+
+    def test_personal_review_always_expands_four_dimensions_before_comparison_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = render_report_document(personal_document(Path(temporary)), Path(temporary) / "reports", workflow_registry_dir=Path(temporary) / "personal-workflows")
+            html = Path(result["html_path"]).read_text(encoding="utf-8")
+
+        dimensions = ("output", "survival", "mechanics", "team_contribution")
+        self.assertEqual(html.count('class="panel coaching-dimension"'), 4)
+        for dimension in dimensions:
+            marker = f'id="dimension-{dimension}"'
+            self.assertIn(marker, html)
+            self.assertLess(html.index(marker), html.index("完整比较明细"))
+            self.assertNotIn(f'<details id="dimension-{dimension}"', html)
+        self.assertIn("0/4 个维度含 Advice", html)
+        self.assertGreaterEqual(html.count("未评估"), 4)
+        self.assertIn("低置信度；应谨慎解释有限样本", html)
+
+    def test_populated_personal_review_colocates_advice_conditions_goals_and_evidence(self) -> None:
+        document = personal_document()
+        fact = {"source": "personal_analysis", "path": "/metrics/damage_total", "value": 150}
+        guidance = {
+            "profile_kind": "specialization", "profile_id": "f" * 64,
+            "title": "Current guide", "url": "https://example.com/guide",
+            "accessed_at": "2026-09-08T00:00:00+00:00", "quote_summary": "Current conditional guidance.",
+            "content_hash": "e" * 64,
+        }
+        document["advice"] = [
+            {
+                "dimension": "output", "evidence_class": "event_supported",
+                "action": {"kind": "review_fact", "ability_id": None},
+                "conditions": ["next_attempt"], "verification_goal": "check_event_fact",
+                "abilities": [], "fact_references": [fact], "guidance_references": [],
+            },
+            {
+                "dimension": "survival", "evidence_class": "event_supported",
+                "action": {"kind": "review_fact", "ability_id": None},
+                "conditions": ["next_attempt"], "verification_goal": "check_event_fact",
+                "abilities": [],
+                "fact_references": [{"source": "personal_analysis", "path": "/metrics/deaths", "value": 1}],
+                "guidance_references": [],
+            },
+            {
+                "dimension": "mechanics", "evidence_class": "experience_based",
+                "action": {"kind": "observe_pattern", "ability_id": None},
+                "conditions": ["mechanic_safe"], "verification_goal": "compare_next_attempt",
+                "abilities": [], "fact_references": [], "guidance_references": [guidance],
+            },
+            {
+                "dimension": "team_contribution", "evidence_class": "event_supported",
+                "action": {"kind": "review_fact", "ability_id": None},
+                "conditions": ["next_attempt"], "verification_goal": "check_event_fact",
+                "abilities": [],
+                "fact_references": [{"source": "personal_analysis", "path": "/metrics/interrupts", "value": 2}],
+                "guidance_references": [],
+            },
+        ]
+        canonical = validate_report_document(document)
+        html = _render_personal_html(canonical, {"complete_bundle": True, "hard_conditions": True})
+
+        self.assertIn("4/4 个维度含 Advice", html)
+        self.assertEqual(html.count("复核所选事实"), 3)
+        self.assertEqual(html.count("下一次 Boss Attempt 检查引用的事件事实"), 3)
+        self.assertIn("事件支持", html)
+        self.assertIn("经验性且有条件", html)
+        self.assertIn("personal_analysis/metrics/damage_total", html)
+        self.assertIn("Current guide", html)
+        self.assertEqual(html.count("<details>"), 4)
+
+    def test_same_dimension_advice_items_keep_their_content_adjacent(self) -> None:
+        document = personal_document()
+        document["advice"] = [
+            {
+                "dimension": "output", "evidence_class": "event_supported",
+                "action": {"kind": "review_fact", "ability_id": None},
+                "conditions": [condition], "verification_goal": goal, "abilities": [],
+                "fact_references": [{"source": "personal_analysis", "path": path, "value": value}],
+                "guidance_references": [],
+            }
+            for condition, goal, path, value in (
+                ("effective_window", "check_event_fact", "/metrics/damage_total", 150),
+                ("target_available", "compare_next_attempt", "/metrics/healing_total", 0),
+            )
+        ]
+        html = _render_personal_html(validate_report_document(document), {"complete_bundle": True, "hard_conditions": True})
+        first = html[html.index('id="dimension-output-advice-1"'):html.index('id="dimension-output-advice-2"')]
+        second = html[html.index('id="dimension-output-advice-2"'):html.index('<div class="dimension-limit"')]
+
+        self.assertIn("存在有效输出窗口时", first)
+        self.assertIn("personal_analysis/metrics/damage_total", first)
+        self.assertNotIn("目标可用时", first)
+        self.assertIn("目标可用时", second)
+        self.assertIn("personal_analysis/metrics/healing_total", second)
+        self.assertNotIn("personal_analysis/metrics/damage_total", second)
+
+    def test_unassessed_and_unavailable_dimensions_are_explicitly_not_evaluated(self) -> None:
+        document = personal_document()
+        document["source_artifacts"] = [
+            {"kind": kind, "path": f"/work/{kind}.json", "sha256": character * 64}
+            for kind, character in (
+                ("personal_analysis", "a"), ("encounter_profile", "b"),
+                ("specialization_profile", "c"), ("personal_review_workflow", "d"),
+                ("ability_names", "e"), ("ability_names_metadata", "f"),
+            )
+        ]
+        document["comparison"] = {
+            "status": "unavailable", "reason": "insufficient_reference_samples",
+            "qualified_sample_count": 2,
+        }
+        document["metrics"] |= {
+            "damage_total_delta": None, "reference_damage_total_median": None,
+            "damage_per_minute_delta": None, "healing_per_minute_delta": None,
+            "reference_duration_ms_median": None, "reference_duration_ms_min": None,
+            "reference_duration_ms_max": None, "reference_rate_sample_count": 0,
+            "reference_damage_per_minute_median": None,
+            "reference_healing_rate_sample_count": 0,
+            "reference_healing_per_minute_median": None,
+        }
+        document["abilities"] = []
+        canonical = validate_report_document(document)
+        html = _render_personal_html(canonical, {"complete_bundle": True, "hard_conditions": False})
+
+        self.assertEqual(html.count('class="panel coaching-dimension"'), 4)
+        self.assertIn("比较: 未评估", html)
+        self.assertIn("2/3 个合格 Reference Samples", html)
+        self.assertIn("当前未创建 Benchmark 或 Comparison artifact", html)
+        self.assertNotIn("Comparison artifact 不产生", html)
+        self.assertIn("任务分配评估</small><b class=\"\">未评估", html)
+
+        document["locale"] = "en"
+        english = _render_personal_html(validate_report_document(document), {"complete_bundle": True, "hard_conditions": False})
+        self.assertIn("no Benchmark or Comparison artifact was created", english)
+        self.assertNotIn("The Comparison artifact does not produce", english)
+
+    def test_theme_controls_have_localized_accessible_names(self) -> None:
+        for locale, names in (("en", ("Auto", "Light", "Dark")), ("zh-CN", ("自动", "浅色", "深色"))):
+            document = personal_document()
+            document["locale"] = locale
+            html = _render_personal_html(validate_report_document(document), {"complete_bundle": True, "hard_conditions": True})
+            for theme, name in zip(("auto", "light", "dark"), names):
+                self.assertIn(f'<label for="theme-{theme}" aria-label="{name}" title="{name}">', html)
 
     def test_renders_raid_guide_from_snapshot_fields_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -827,11 +1085,11 @@ class ReportDocumentTests(unittest.TestCase):
             root = Path(temporary)
             benchmarks = []
             for encounter_id, ability_id, target_id, amount, source_name, cohort_id in (
-                (1007, 1, 70, 7000, "Boss Seven source", "c" * 64),
+                (1007, 11, 70, 7000, "Boss Seven source", "c" * 64),
                 (1008, 2, 80, 8000, "Boss Eight source", "d" * 64),
             ):
                 benchmarks.append(identify_benchmark({
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "cohort_id": cohort_id,
                     "identity": EXPECTED | {"game_version": "12.1", "encounter_id": encounter_id},
                     "encounter_profile_id": f"{encounter_id:064x}",
@@ -845,6 +1103,7 @@ class ReportDocumentTests(unittest.TestCase):
                         "specialization": [],
                     },
                     "sample_count": 3,
+                    "reference_samples": [{}, {}, {}],
                     "confidence": "low",
                     "stable_pattern_claims_allowed": True,
                     "mechanic_anchors": [{
@@ -854,16 +1113,16 @@ class ReportDocumentTests(unittest.TestCase):
                     }],
                     "metrics": {
                         "damage_total_median": amount,
-                        "casts_median": {str(ability_id): ability_id},
-                        "first_cast_ms_median": {str(ability_id): ability_id * 100},
-                        "damage_by_target_median": {str(target_id): amount - 1},
+                        "key_action_casts_median": {str(ability_id): ability_id},
+                        "key_action_first_cast_ms_median": {str(ability_id): ability_id * 100},
+                        "damage_by_npc_median": {str(target_id): amount - 1},
                     },
                 }))
             snapshot = create_guide_snapshot(
                 benchmarks,
                 specialization_name="邪恶死亡骑士",
                 output_dir=root / "guides",
-                ability_names={"1": "技能一", "2": "技能二"},
+                ability_names={"11": "技能一", "2": "技能二"},
                 ability_names_build="12.1.0.69587",
                 encounter_names={
                     "1007": {"map_id": 3004, "name_en": "Boss Seven", "name_zh": "首领七"},
@@ -897,7 +1156,7 @@ class ReportDocumentTests(unittest.TestCase):
             self.assertEqual((chapters[0]["sample_count"], chapters[0]["confidence"]), (3, "low"))
             self.assertEqual(chapters[0]["damage_total_median"], 7000.0)
             self.assertEqual(chapters[1]["target_damage"], [{"target_id": 80, "median_amount": 7999.0}])
-            self.assertEqual(chapters[0]["abilities"], [{"name": "技能一", "median_casts": 1.0, "median_first_cast_ms": 100.0}])
+            self.assertEqual(chapters[0]["abilities"], [{"name": "技能一", "median_casts": 11.0, "median_first_cast_ms": 1100.0}])
             self.assertEqual(chapters[1]["abilities"], [{"name": "技能二", "median_casts": 2.0, "median_first_cast_ms": 200.0}])
             self.assertEqual(chapters[0]["mechanic_anchors"], [{"name": "技能一", "observed_anchor_ms": 1007.0}])
             self.assertEqual(chapters[0]["sources"][0]["title"], "Boss Seven source")

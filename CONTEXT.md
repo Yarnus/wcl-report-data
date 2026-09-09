@@ -67,8 +67,28 @@ A normalized user goal for report data, a Personal Review, or a Raid Guide.
 _Avoid_: Prompt, command
 
 **Personal Review**:
-An evaluation of one player in one Boss Attempt against a comparable Encounter Benchmark.
+An evaluation of one player in one Boss Attempt. It uses a comparable Encounter Benchmark when at least three qualified Reference Samples exist; otherwise it explicitly limits delivery to validated player facts and sourced conditional advice without comparison.
 _Avoid_: Raid Guide, player history
+
+**Personal Review Workflow**:
+A content-addressed orchestration record of stable candidate progress, deeply validated reuse, monotonic measured timings, completion state, blockers, and hashed progress references for one Personal Review. It does not replace or claim Complete Bundle checkpoints.
+_Avoid_: Encounter Benchmark, hard real-time guarantee
+
+**Comparison Difference**:
+An observed difference between a Personal Analysis and an Encounter Benchmark. It is not automatically an error, recommendation, or achievable gain.
+_Avoid_: mistake, improvement target
+
+**Improvement Advice**:
+An action proposal with cited evidence, applicability conditions, and a next-Boss-Attempt verification goal. Reference validation does not certify the proposal as correct or guarantee improvement.
+_Avoid_: verdict, guaranteed gain
+
+**Experience-based Advice**:
+Improvement Advice supported by current-version sourced guidance but not fully established by the current Boss Attempt's events. Its applicability is explicitly conditional.
+_Avoid_: log fact, proven cause
+
+**Not Evaluated**:
+A dimension with insufficient evidence, guidance, or analysis coverage. It does not mean that no problem occurred.
+_Avoid_: passed, no issue
 
 **Raid Guide**:
 Current-Retail encounter guidance for one specialization, supported by one or more Encounter Benchmarks and current sources.
