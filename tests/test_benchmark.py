@@ -27,4 +27,5 @@ class BenchmarkTests(unittest.TestCase):
                         self.assertEqual(network[operation]["attempts"], 1)
                     self.assertEqual(network["ReportRevision"]["attempts"], 3)
                 self.assertGreater(result["wall_seconds"], 0)
-                self.assertGreater(result["cpu_seconds"], 0)
+                # Short scenarios can finish within one Windows CPU clock tick.
+                self.assertGreaterEqual(result["cpu_seconds"], 0)
