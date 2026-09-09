@@ -15,6 +15,9 @@ from .analysis import ANALYSIS_SCHEMA_VERSION, analyze_player, is_finite_number,
 from .storage import sha256_file
 
 
+REFERENCE_SAMPLE_MAX = 10
+
+
 def extract_ranking_candidates(payload: Any, *, now: datetime | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ApiError("WCL ranking payload must be an object.")
@@ -78,19 +81,68 @@ def extract_ranking_candidates(payload: Any, *, now: datetime | None = None) -> 
     }
 
 
-def identify_cohort(cohort: dict[str, Any]) -> dict[str, Any]:
-    identified = dict(cohort)
+def identify_cohort(cohort: Any) -> dict[str, Any]:
+    identified = _validate_cohort_shape(cohort)
     identified.pop("cohort_id", None)
     identified.pop("signature", None)
     return identified | {"cohort_id": _content_id(identified)}
 
 
-def verify_cohort(cohort: dict[str, Any]) -> None:
+def verify_cohort(cohort: Any) -> None:
+    cohort = _validate_cohort_shape(cohort)
     if type(cohort.get("schema_version")) is not int or cohort["schema_version"] != 2 or "signature" in cohort:
         raise InputError("Ranking Cohort uses an unsupported schema version; discover candidates again.")
     cohort_id = cohort.get("cohort_id")
     if not isinstance(cohort_id, str) or cohort_id != identify_cohort(cohort)["cohort_id"]:
         raise InputError("Ranking Cohort content ID is missing or invalid.")
+
+
+def _validate_cohort_shape(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise InputError("Ranking Cohort must be a JSON object.")
+    cohort = dict(value)
+    if "filters" in cohort and not isinstance(cohort["filters"], dict):
+        raise InputError("Ranking Cohort filters must be a JSON object.")
+    if "pagination" in cohort:
+        pagination = cohort["pagination"]
+        if not isinstance(pagination, dict):
+            raise InputError("Ranking Cohort pagination must be a JSON object.")
+        for field in ("first_page", "last_page", "next_page", "resume_page"):
+            if field in pagination and not _positive_int(pagination[field]):
+                raise InputError(f"Ranking Cohort pagination {field} must be a positive integer.")
+        for field in ("has_more_pages", "truncated", "target_reached", "exhausted"):
+            if field in pagination and type(pagination[field]) is not bool:
+                raise InputError(f"Ranking Cohort pagination {field} must be boolean.")
+        first = pagination.get("first_page")
+        last = pagination.get("last_page")
+        if (first is None) != (last is None) or first is not None and first > last:
+            raise InputError("Ranking Cohort pagination page range is invalid.")
+        exhausted = pagination.get("exhausted")
+        has_more = pagination.get("has_more_pages")
+        truncated = pagination.get("truncated")
+        if (
+            exhausted is True and (
+                has_more is not False or truncated is not False or first is None
+            )
+            or has_more is False and truncated is False and exhausted is False
+        ):
+            raise InputError("Ranking Cohort pagination state is inconsistent.")
+        next_pages = [pagination[field] for field in ("next_page", "resume_page") if field in pagination]
+        if (
+            len(set(next_pages)) > 1
+            or next_pages and last is not None and next_pages[0] <= last
+            or next_pages and exhausted is True
+        ):
+            raise InputError("Ranking Cohort pagination continuation metadata is invalid.")
+    for field in (
+        "eligible_recent_candidates", "unverified_recency_candidates", "rejected_candidates",
+    ):
+        if field in cohort and (
+            not isinstance(cohort[field], list)
+            or any(not isinstance(item, dict) for item in cohort[field])
+        ):
+            raise InputError(f"Ranking Cohort {field} must be a JSON array of objects.")
+    return cohort
 
 
 def identify_benchmark(benchmark: dict[str, Any]) -> dict[str, Any]:
@@ -108,6 +160,15 @@ def verify_benchmark(benchmark: dict[str, Any]) -> None:
     benchmark_id = benchmark.get("benchmark_id")
     if not isinstance(benchmark_id, str) or benchmark_id != identify_benchmark(benchmark)["benchmark_id"]:
         raise InputError("Encounter Benchmark content ID is missing or invalid.")
+    sample_count = benchmark.get("sample_count")
+    reference_samples = benchmark.get("reference_samples")
+    if (
+        type(sample_count) is not int
+        or not 3 <= sample_count <= REFERENCE_SAMPLE_MAX
+        or not isinstance(reference_samples, list)
+        or sample_count != len(reference_samples)
+    ):
+        raise InputError("Encounter Benchmark must contain 3 to 10 matching Reference Samples.")
 
 
 def verify_benchmark_for_cohort(
@@ -124,7 +185,7 @@ def verify_benchmark_for_cohort(
     samples = benchmark.get("reference_samples")
     if (
         not isinstance(samples, list)
-        or len(samples) < 3
+        or not 3 <= len(samples) <= REFERENCE_SAMPLE_MAX
         or benchmark.get("sample_count") != len(samples)
         or not isinstance(benchmark.get("identity"), dict)
     ):
@@ -237,6 +298,8 @@ def build_benchmark(
     )
     if len(accepted) < 3:
         raise InputError("Fewer than three Reference Samples passed Encounter Profile eligibility.")
+    if len(accepted) > REFERENCE_SAMPLE_MAX:
+        raise InputError("Encounter Benchmark exceeds the maximum of 10 qualified Reference Samples.")
     role = specialization_role(str(expected.get("class_name")), str(expected.get("spec_name")))
 
     casts: set[str] = set()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import unittest
 import tempfile
 from pathlib import Path
@@ -115,14 +117,83 @@ class CohortTests(unittest.TestCase):
         with self.assertRaisesRegex(InputError, "Ranking Cohort content ID"):
             verify_benchmark(benchmark)
 
+    def test_cohort_rejects_malformed_nested_containers_with_recomputed_id(self) -> None:
+        malformed = (
+            ("filters", None), ("filters", []),
+            ("pagination", None), ("pagination", []),
+            ("eligible_recent_candidates", None), ("eligible_recent_candidates", {}),
+            ("unverified_recency_candidates", [None]),
+            ("rejected_candidates", [[]]),
+        )
+        for field, value in malformed:
+            with self.subTest(field=field, value=value):
+                body = {"schema_version": 2, field: value}
+                cohort_id = hashlib.sha256(json.dumps(
+                    body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode()).hexdigest()
+                with self.assertRaises(InputError):
+                    verify_cohort(body | {"cohort_id": cohort_id})
+                with self.assertRaises(InputError):
+                    identify_cohort(body)
+
+    def test_cohort_rejects_malformed_pagination_scalars(self) -> None:
+        for field, value in (
+            ("first_page", 0), ("last_page", True),
+            ("has_more_pages", None), ("truncated", []),
+            ("target_reached", 1), ("exhausted", "false"),
+        ):
+            with self.subTest(field=field, value=value), self.assertRaises(InputError):
+                identify_cohort({"schema_version": 2, "pagination": {field: value}})
+
+    def test_cohort_rejects_inconsistent_pagination_with_recomputed_id(self) -> None:
+        invalid = (
+            {"first_page": 2, "last_page": 1},
+            {"first_page": 1},
+            {"exhausted": True},
+            {"first_page": 1, "last_page": 1, "truncated": False, "exhausted": True},
+            {"first_page": 1, "last_page": 1, "has_more_pages": False, "exhausted": True},
+            {"has_more_pages": True, "truncated": False, "exhausted": True},
+            {"has_more_pages": False, "truncated": False, "exhausted": False},
+            {"last_page": 4, "next_page": 4},
+            {"last_page": 4, "next_page": 5, "resume_page": 6},
+            {"last_page": 4, "next_page": 5, "exhausted": True},
+        )
+        for pagination in invalid:
+            with self.subTest(pagination=pagination):
+                body = {"schema_version": 2, "pagination": pagination}
+                cohort_id = hashlib.sha256(json.dumps(
+                    body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode()).hexdigest()
+                with self.assertRaises(InputError):
+                    verify_cohort(body | {"cohort_id": cohort_id})
+
     def test_content_addressed_benchmark_rejects_edits(self) -> None:
-        benchmark = identify_benchmark({"schema_version": 3, "cohort_id": "c" * 64, "identity": dict(EXPECTED), "sample_count": 3})
+        benchmark = identify_benchmark({
+            "schema_version": 3, "cohort_id": "c" * 64,
+            "identity": dict(EXPECTED), "sample_count": 3,
+            "reference_samples": [{}, {}, {}],
+        })
         verify_benchmark(benchmark)
         self.assertRegex(benchmark["benchmark_id"], r"^[0-9a-f]{64}$")
         self.assertNotIn("signature", benchmark)
         benchmark["sample_count"] = 4
         with self.assertRaises(InputError):
             verify_benchmark(benchmark)
+
+    def test_benchmark_sample_count_requires_matching_bounded_integer(self) -> None:
+        benchmark = identify_benchmark({
+            "schema_version": 3, "cohort_id": "c" * 64,
+            "sample_count": 10, "reference_samples": [{} for _ in range(10)],
+            "confidence": "normal",
+        })
+        verify_benchmark(benchmark)
+        self.assertEqual(benchmark["confidence"], "normal")
+
+        forged = identify_benchmark(
+            benchmark | {"sample_count": 11.0, "reference_samples": [{} for _ in range(11)]}
+        )
+        with self.assertRaisesRegex(InputError, "3 to 10"):
+            verify_benchmark(forged)
 
     def test_reuse_rebuilds_benchmark_from_current_cohort_evidence(self) -> None:
         analyses = [self.analysis({
@@ -188,6 +259,17 @@ class CohortTests(unittest.TestCase):
         self.assertEqual(benchmark["confidence"], "low")
         self.assertEqual(benchmark["mechanic_anchors"], PROFILE["mechanic_anchors"])
         self.assertEqual(benchmark["cohort_id"], "c" * 64)
+
+    def test_direct_benchmark_rejects_eleven_qualified_samples(self) -> None:
+        analyses = [self.analysis({
+            "deaths": 0, "damage_total": index,
+            "damage_by_target": {"20": index}, "casts": {},
+        }, suffix=str(index)) for index in range(1, 12)]
+
+        with self.assertRaisesRegex(InputError, "maximum of 10"):
+            build_benchmark(
+                analyses, PROFILE, SPEC_PROFILE, EXPECTED, cohort_id="c" * 64
+            )
 
     def test_rejects_mixed_encounter_samples(self) -> None:
         analyses = [self.analysis({"deaths": 0, "damage_total": 100, "damage_by_target": {"20": 100}, "casts": {}}, EXPECTED | {"encounter_id": 1008}, str(index)) for index in range(1, 4)]

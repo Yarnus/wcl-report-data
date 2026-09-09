@@ -11,6 +11,7 @@ from .cohort import (
     build_benchmark,
     identify_benchmark,
     qualify_reference_samples,
+    REFERENCE_SAMPLE_MAX,
     validate_analysis_membership,
     verify_benchmark,
     verify_benchmark_for_cohort,
@@ -19,6 +20,7 @@ from .cohort import (
 from .comparison import verify_analysis_evidence
 from .errors import InputError
 from .profiles import validate_profile
+from .report_documents import validate_rendered_report_index
 from .storage import artifact_lock, atomic_write_json
 
 
@@ -50,6 +52,100 @@ HARD_CONDITION_FIELDS = (
 )
 
 
+def initialize_personal_review(
+    report_code: str,
+    fight_id: int,
+    actor_id: int,
+    output_dir: Path,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    wall_clock: Callable[[], float] = time.time,
+) -> dict[str, Any]:
+    started = clock()
+    invocation_wall = wall_clock()
+    baseline = invocation_wall - started
+    if (
+        not isinstance(report_code, str)
+        or not report_code.isalnum()
+        or type(fight_id) is not int
+        or fight_id <= 0
+        or type(actor_id) is not int
+        or actor_id <= 0
+        or not _nonnegative(started)
+        or not _finite(invocation_wall)
+        or not _finite(baseline)
+    ):
+        raise InputError("Personal Review selected identity is invalid.")
+    measured_at, measured_baseline = _clock_sample(clock, wall_clock)
+    continuity_available = (
+        measured_at >= started
+        and abs(measured_baseline - baseline) <= CLOCK_BASELINE_TOLERANCE_SECONDS
+    )
+    result = {
+        "schema_version": 2,
+        "artifact_type": "personal_review_workflow",
+        "selected_identity": {
+            "report_code": report_code,
+            "fight_id": fight_id,
+            "actor_id": actor_id,
+        },
+        "workflow_started_monotonic_seconds": started,
+        "clock": {
+            "wall_minus_monotonic_seconds": baseline,
+            "session_marker": _clock_session_marker(invocation_wall, started),
+            "baseline_tolerance_seconds": CLOCK_BASELINE_TOLERANCE_SECONDS,
+            "continuity_available": continuity_available,
+            "clock_source": _clock_source(clock, wall_clock),
+        },
+        "completion_state": "blocked",
+        "report_available": False,
+        "player_evidence_complete": False,
+        "comparison_available": False,
+        "reference_sample_target": REFERENCE_SAMPLE_TARGET,
+        "qualified_reference_samples": 0,
+        "candidate_progress": [],
+        "next_ranking_candidate": None,
+        "blockers": ["player_evidence_incomplete", "profile_unavailable", "comparison_unavailable"],
+        "budget": {
+            "target_seconds": FIRST_DELIVERY_TARGET_SECONDS,
+            "elapsed_seconds": measured_at - started,
+            "validation_render_reserve_seconds": VALIDATION_RENDER_RESERVE_SECONDS,
+            "optional_acquisition_open": (
+                continuity_available
+                and measured_at - started < FIRST_DELIVERY_TARGET_SECONDS - VALIDATION_RENDER_RESERVE_SECONDS
+            ),
+            "kind": "measured_soft_target",
+        },
+        "stage_timings_seconds": {"selection": 0.0},
+        "stage_progress": {
+            "retrieval": "in_progress",
+            "agent_synthesis": "unavailable",
+            "validation": "pending",
+            "rendering": "pending",
+        },
+        "artifacts": {
+            "requested_personal_analysis_path": None,
+            "personal_analysis": None,
+            "ranking_cohort": None,
+            "encounter_profile": None,
+            "specialization_profile": None,
+            "reference_analyses": [],
+            "benchmark_reference_evidence": [],
+            "encounter_benchmark": None,
+            "previous_workflow": None,
+            "progress": [],
+        },
+        "benchmark_reused": False,
+    }
+    verify_personal_workflow(result, require_id=False)
+    persisted = _persist_result(output_dir.expanduser().resolve(), result)
+    return persisted | {
+        "invocation_timing": _workflow_invocation_timing(
+            persisted, started, baseline, FIRST_DELIVERY_TARGET_SECONDS, clock, wall_clock
+        )
+    }
+
+
 def orchestrate_personal_review(
     analysis_path: Path,
     cohort_path: Path,
@@ -61,7 +157,7 @@ def orchestrate_personal_review(
     benchmark_paths: list[Path],
     candidate_rejections: list[tuple[str, str]],
     blockers: list[str],
-    previous_workflow_path: Path | None = None,
+    previous_workflow_path: Path,
     progress_paths: list[Path] | None = None,
     clock: Callable[[], float] = time.monotonic,
     wall_clock: Callable[[], float] = time.time,
@@ -91,27 +187,26 @@ def orchestrate_personal_review(
         raise InputError("Ranking Cohort hard-condition filters are incomplete.")
 
     previous, previous_ref = _load_previous(previous_workflow_path, cohort_ref, output_dir)
-    if previous:
-        previous_started = previous["workflow_started_monotonic_seconds"]
-        previous_clock = _object(previous.get("clock"), "Personal Review workflow clock")
-        previous_baseline = previous_clock.get("wall_minus_monotonic_seconds")
-        if (
-            previous_clock.get("continuity_available") is not True
-            or previous_clock.get("session_marker") != _clock_session_marker(
-                invocation_wall, invocation_started
-            )
-            or previous_started > invocation_started
-            or not _finite(previous_baseline)
-            or abs(previous_baseline - baseline) > CLOCK_BASELINE_TOLERANCE_SECONDS
-        ):
-            blockers = blockers + ["timing_continuity_unavailable"]
-        else:
-            started = previous_started
-            baseline = previous_baseline
-            current_stages = stages
-            stages = dict(previous["stage_timings_seconds"])
-            for name, duration in current_stages.items():
-                stages[name] = stages.get(name, 0.0) + duration
+    previous_started = previous["workflow_started_monotonic_seconds"]
+    previous_clock = _object(previous.get("clock"), "Personal Review workflow clock")
+    previous_baseline = previous_clock.get("wall_minus_monotonic_seconds")
+    if (
+        previous_clock.get("continuity_available") is not True
+        or previous_clock.get("session_marker") != _clock_session_marker(
+            invocation_wall, invocation_started
+        )
+        or previous_started > invocation_started
+        or not _finite(previous_baseline)
+        or abs(previous_baseline - baseline) > CLOCK_BASELINE_TOLERANCE_SECONDS
+    ):
+        blockers = blockers + ["timing_continuity_unavailable"]
+    else:
+        started = previous_started
+        baseline = previous_baseline
+        current_stages = stages
+        stages = dict(previous["stage_timings_seconds"])
+        for name, duration in current_stages.items():
+            stages[name] = stages.get(name, 0.0) + duration
     reference_paths = _merge_reference_paths(previous, reference_analysis_paths)
     if previous:
         previous_benchmark = (previous.get("artifacts") or {}).get("encounter_benchmark")
@@ -139,6 +234,7 @@ def orchestrate_personal_review(
     player_evidence_complete = analysis is not None
     if analysis is not None:
         _timed(stages, "player_evidence", clock, lambda: verify_analysis_evidence(analysis))
+        _verify_selected_analysis_identity(analysis, previous["selected_identity"])
         analysis_identity = _object(analysis.get("comparison_identity"), "Personal Analysis comparison identity")
         if any(analysis_identity.get(field) != expected.get(field) for field in analysis_identity):
             raise InputError("Personal Analysis does not match the current Ranking Cohort.")
@@ -271,6 +367,7 @@ def orchestrate_personal_review(
     result = {
         "schema_version": 2,
         "artifact_type": "personal_review_workflow",
+        "selected_identity": previous["selected_identity"],
         "workflow_started_monotonic_seconds": started,
         "clock": {
             "wall_minus_monotonic_seconds": baseline,
@@ -298,7 +395,7 @@ def orchestrate_personal_review(
         "stage_timings_seconds": dict(sorted(stages.items())),
         "stage_progress": {
             "retrieval": "completed" if report_available and state != "acquiring" else "in_progress",
-            "agent_synthesis": "pending",
+            "agent_synthesis": "in_progress" if report_available else "unavailable",
             "validation": "pending",
             "rendering": "pending",
         },
@@ -351,6 +448,7 @@ def verify_personal_workflow(value: Any, *, require_id: bool = True) -> dict[str
     artifacts = workflow.get("artifacts")
     clock_state = workflow.get("clock")
     stage_progress = workflow.get("stage_progress")
+    _verify_selected_identity(workflow.get("selected_identity"))
     if (
         not isinstance(stages, dict)
         or "selection" not in stages
@@ -387,7 +485,7 @@ def verify_personal_workflow(value: Any, *, require_id: bool = True) -> dict[str
         raise InputError("Personal Review workflow first-delivery budget is invalid.")
     if type(workflow.get("benchmark_reused")) is not bool:
         raise InputError("Personal Review workflow Benchmark reuse state is invalid.")
-    if stage_progress["agent_synthesis"] != "pending" or stage_progress["validation"] != "pending" or stage_progress["rendering"] != "pending":
+    if stage_progress["agent_synthesis"] not in ("in_progress", "unavailable") or stage_progress["validation"] != "pending" or stage_progress["rendering"] != "pending":
         raise InputError("Personal Review workflow stage progress is invalid.")
     if workflow.get("player_evidence_complete") is True and "player_evidence" not in stages:
         raise InputError("Personal Review workflow player evidence timing is missing.")
@@ -408,7 +506,7 @@ def verify_personal_workflow(value: Any, *, require_id: bool = True) -> dict[str
         raise InputError("Personal Review workflow availability state is invalid.")
     count = workflow.get("qualified_reference_samples")
     progress = workflow.get("candidate_progress")
-    if type(count) is not int or count < 0 or not isinstance(progress, list):
+    if type(count) is not int or not 0 <= count <= REFERENCE_SAMPLE_MAX or not isinstance(progress, list):
         raise InputError("Personal Review workflow Reference Sample progress is invalid.")
     for item in progress:
         if (
@@ -435,11 +533,12 @@ def validate_partial_workflow(
     analysis_path: Path,
     encounter_profile_path: Path,
     specialization_profile_path: Path,
+    workflow_registry_dir: Path,
 ) -> int:
     workflow_path = workflow_path.expanduser().resolve()
     workflow, _ = _read_snapshot(workflow_path, "Personal Review workflow")
     workflow = verify_personal_workflow(workflow)
-    _verify_registered_workflow(workflow_path, workflow)
+    _verify_registered_workflow(workflow_path, workflow, registry_dir=workflow_registry_dir)
     if (
         workflow.get("completion_state") != "partial_ready"
         or workflow.get("comparison_available") is not False
@@ -499,12 +598,15 @@ def validate_comparison_workflow(
     workflow_path: Path,
     analysis_path: Path,
     benchmark_path: Path,
+    workflow_registry_dir: Path,
 ) -> dict[str, Any]:
     workflow_path = workflow_path.expanduser().resolve()
     with artifact_lock(workflow_path):
         workflow, workflow_ref = _read_snapshot(workflow_path, "Personal Review workflow")
     workflow = verify_personal_workflow(workflow)
-    _verify_registered_workflow(workflow_path, workflow, workflow_ref)
+    _verify_registered_workflow(
+        workflow_path, workflow, workflow_ref, registry_dir=workflow_registry_dir
+    )
     if (
         workflow.get("completion_state") != "comparison_ready"
         or workflow.get("comparison_available") is not True
@@ -580,12 +682,22 @@ def finalize_personal_review_delivery(
         claimed_html_sha256 = report["html_sha256"]
     except (KeyError, TypeError) as exc:
         raise InputError("Personal Review delivery report is incomplete.") from exc
-    html_ref = _binary_snapshot_ref(html_path, "Personal Review HTML")
+    try:
+        html_bytes = html_path.read_bytes()
+    except OSError as exc:
+        raise InputError("Personal Review HTML is missing or unreadable.") from exc
+    html_ref = {
+        "path": str(html_path),
+        "sha256": hashlib.sha256(html_bytes).hexdigest(),
+    }
     if html_ref["sha256"] != claimed_html_sha256:
         raise InputError("Personal Review HTML hash does not match the rendered report.")
     index, index_ref = _read_snapshot(index_path, "Personal Review report index")
-    render = index.get("render") if isinstance(index, dict) else None
-    document = index.get("document") if isinstance(index, dict) else None
+    validated_report = validate_rendered_report_index(
+        index, html_bytes, html_path.name,
+        output_dir.expanduser().resolve() / "personal-workflows",
+    )
+    document = validated_report["document"]
     workflow_source = next(
         (
             item for item in document.get("source_artifacts", [])
@@ -594,11 +706,11 @@ def finalize_personal_review_delivery(
         None,
     ) if isinstance(document, dict) else None
     if (
-        not isinstance(render, dict)
-        or not isinstance(document, dict)
-        or document.get("document_id") != document_id
-        or render.get("html_sha256") != claimed_html_sha256
-        or render.get("html_file") != html_path.name
+        validated_report["document_id"] != document_id
+        or validated_report["document_schema_version"] != report.get("document_schema_version")
+        or validated_report["renderer_schema_version"] != report.get("renderer_schema_version")
+        or validated_report["html_sha256"] != claimed_html_sha256
+        or index_path != html_path.with_suffix(".json")
         or workflow_source != {"kind": "personal_review_workflow", **workflow_ref}
     ):
         raise InputError("Personal Review delivery artifacts do not match the workflow and report.")
@@ -611,7 +723,8 @@ def finalize_personal_review_delivery(
         }
         try:
             validate_comparison_workflow(
-                workflow_path, sources["personal_analysis"], sources["encounter_benchmark"]
+                workflow_path, sources["personal_analysis"], sources["encounter_benchmark"],
+                output_dir.expanduser().resolve() / "personal-workflows",
             )
         except KeyError as exc:
             raise InputError("Personal Review delivery comparison sources are incomplete.") from exc
@@ -627,10 +740,12 @@ def finalize_personal_review_delivery(
                 sources["personal_analysis"],
                 sources["encounter_profile"],
                 sources["specialization_profile"],
+                output_dir.expanduser().resolve() / "personal-workflows",
             )
         except KeyError as exc:
             raise InputError("Personal Review delivery partial sources are incomplete.") from exc
 
+    _verify_refs_current([html_ref, index_ref])
     completed, current_baseline = _clock_sample(clock, wall_clock)
     session_marker = _clock_session_marker_from_baseline(current_baseline)
     clock_state = _object(workflow.get("clock"), "Personal Review workflow clock")
@@ -788,10 +903,10 @@ def _optional_profile(path: Path, kind: str) -> tuple[dict[str, Any] | None, dic
 
 
 def _load_previous(
-    path: Path | None, cohort_ref: dict[str, str], output_dir: Path
-) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
-    if path is None:
-        return None, None
+    path: Path, cohort_ref: dict[str, str], output_dir: Path
+) -> tuple[dict[str, Any], dict[str, str]]:
+    if not isinstance(path, Path):
+        raise InputError("Personal Review workflow requires --previous-workflow from initialization.")
     path = path.expanduser().resolve()
     if path.parent != (output_dir / "personal-workflows").resolve() or path.name == "index.json":
         raise InputError("Previous Personal Review workflow must use the registered workflow artifact location.")
@@ -799,7 +914,7 @@ def _load_previous(
     previous = verify_personal_workflow(previous)
     _verify_registered_workflow(path, previous, previous_ref)
     ref = (previous.get("artifacts") or {}).get("ranking_cohort")
-    if ref != cohort_ref:
+    if ref is not None and ref != cohort_ref:
         raise InputError("Previous Personal Review workflow belongs to a different Ranking Cohort.")
     return previous, previous_ref
 
@@ -925,6 +1040,33 @@ def _verify_profile_identity(encounter: dict[str, Any], specialization: dict[str
             raise InputError(f"Specialization Profile {field} does not match the Ranking Cohort.")
 
 
+def _verify_selected_identity(value: Any) -> dict[str, Any]:
+    identity = _object(value, "Personal Review selected identity")
+    if (
+        set(identity) != {"report_code", "fight_id", "actor_id"}
+        or not isinstance(identity.get("report_code"), str)
+        or not identity["report_code"].isalnum()
+        or type(identity.get("fight_id")) is not int
+        or identity["fight_id"] <= 0
+        or type(identity.get("actor_id")) is not int
+        or identity["actor_id"] <= 0
+    ):
+        raise InputError("Personal Review selected identity is invalid.")
+    return identity
+
+
+def _verify_selected_analysis_identity(analysis: dict[str, Any], selected: Any) -> None:
+    selected = _verify_selected_identity(selected)
+    identity = _object(analysis.get("identity"), "Personal Analysis identity")
+    player = _object(analysis.get("player"), "Personal Analysis player")
+    if (
+        identity.get("report_code") != selected["report_code"]
+        or identity.get("fight_id") != selected["fight_id"]
+        or player.get("actor_id") != selected["actor_id"]
+    ):
+        raise InputError("Personal Analysis does not match the selected WCL Report, Boss Attempt, and player.")
+
+
 def _read_snapshot(path: Path, label: str) -> tuple[dict[str, Any], dict[str, str]]:
     path = path.expanduser().resolve()
     try:
@@ -969,11 +1111,17 @@ def _snapshot_ref(path: Path) -> dict[str, str]:
 
 
 def _verify_registered_workflow(
-    path: Path, workflow: dict[str, Any], workflow_ref: dict[str, str] | None = None
+    path: Path,
+    workflow: dict[str, Any],
+    workflow_ref: dict[str, str] | None = None,
+    *,
+    registry_dir: Path | None = None,
 ) -> None:
     path = path.expanduser().resolve()
+    expected_registry = registry_dir.expanduser().resolve() if registry_dir is not None else None
     if (
-        path.parent.name != "personal-workflows"
+        (expected_registry is not None and path.parent != expected_registry)
+        or (expected_registry is None and path.parent.name != "personal-workflows")
         or path.name != f'{workflow["workflow_id"]}.json'
         or path.name == "index.json"
     ):
@@ -1009,7 +1157,7 @@ def _verify_refs_current(refs: list[dict[str, str]]) -> None:
 
 def _verify_workflow_artifacts(artifacts: dict[str, Any]) -> None:
     requested = artifacts.get("requested_personal_analysis_path")
-    if not isinstance(requested, str) or not requested:
+    if requested is not None and (not isinstance(requested, str) or not requested):
         raise InputError("Personal Review workflow requested Analysis path is invalid.")
     for field in (
         "personal_analysis", "ranking_cohort", "encounter_profile",

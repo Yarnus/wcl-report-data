@@ -22,7 +22,11 @@ from wcl_raid_coach.report_documents import (
     render_report_document,
 )
 from wcl_raid_coach.profiles import validate_profile
-from wcl_raid_coach.personal_workflow import finalize_personal_review_delivery, orchestrate_personal_review
+from wcl_raid_coach.personal_workflow import (
+    finalize_personal_review_delivery,
+    initialize_personal_review,
+    orchestrate_personal_review,
+)
 from wcl_raid_coach.storage import sha256_file
 
 
@@ -91,6 +95,15 @@ def advice_setup(root: Path) -> tuple[dict[str, Path], Path, Path, Path, Path, P
     return refs, mapping_path, metadata_path, draft_path, encounter_path, specialization_path
 
 
+def workflow_origin(analysis_path: Path, output_dir: Path) -> Path:
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    result = initialize_personal_review(
+        analysis["identity"]["report_code"], analysis["identity"]["fight_id"],
+        analysis["player"]["actor_id"], output_dir,
+    )
+    return Path(result["workflow_path"])
+
+
 def real_complete_bundle_analysis(root: Path, fight_id: int) -> tuple[Path, dict]:
     from tests.test_analysis import AnalysisTests
 
@@ -148,7 +161,10 @@ class AdviceTests(unittest.TestCase):
             cohort = identify_cohort({
                 "schema_version": 2,
                 "filters": target["comparison_identity"],
-                "pagination": {"exhausted": True},
+                "pagination": {
+                    "first_page": 1, "last_page": 1,
+                    "has_more_pages": False, "truncated": False, "exhausted": True,
+                },
                 "eligible_recent_candidates": [
                     {"report_code": value["identity"]["report_code"], "fight_id": value["identity"]["fight_id"], "source_id": 10}
                     for value in reference_analyses
@@ -171,6 +187,7 @@ class AdviceTests(unittest.TestCase):
                 target_path, cohort_path, encounter_profile, specialization_profile, data_root / "outputs",
                 reference_analysis_paths=reference_paths, benchmark_paths=[],
                 candidate_rejections=[], blockers=[],
+                previous_workflow_path=workflow_origin(target_path, data_root / "outputs"),
             )
             workflow_value = workflow["workflow"]
             benchmark_path = Path(workflow_value["artifacts"]["encounter_benchmark"]["path"])
@@ -231,6 +248,7 @@ class AdviceTests(unittest.TestCase):
                 target_path, cohort_path, encounter_profile, specialization_profile, data_root / "outputs",
                 reference_analysis_paths=[], benchmark_paths=[benchmark_path],
                 candidate_rejections=[], blockers=[],
+                previous_workflow_path=Path(workflow["workflow_path"]),
             )["workflow"]
             workflow_index = json.loads(
                 (data_root / "outputs" / "personal-workflows" / "index.json").read_text(encoding="utf-8")
@@ -377,14 +395,15 @@ class AdviceTests(unittest.TestCase):
                 draft, refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
                 root / "advice", encounter_profile, specialization_profile,
             )
-            with patch("wcl_raid_coach.report_documents.validate_comparison_workflow"):
+            with patch("wcl_raid_coach.personal_workflow.validate_comparison_workflow"):
                 document = assemble_personal_review_document(
                     refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
                     workflow_path=refs["personal_review_workflow"],
+                    workflow_registry_dir=root / "outputs" / "personal-workflows",
                     ability_names_path=mapping, ability_names_metadata_path=metadata,
                     advice_path=Path(advice["path"]), locale="zh-CN",
                 )
-                report = render_report_document(document, root / "reports")
+                report = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "outputs" / "personal-workflows")
             html = Path(report["html_path"]).read_text(encoding="utf-8")
 
         self.assertEqual(
@@ -446,13 +465,15 @@ class AdviceTests(unittest.TestCase):
                 refs["personal_analysis"], cohort_path, encounter_profile, specialization_profile,
                 root / "outputs", reference_analysis_paths=[refs["personal_analysis"]],
                 benchmark_paths=[], candidate_rejections=[], blockers=[],
+                previous_workflow_path=workflow_origin(refs["personal_analysis"], root / "outputs"),
             )
             document = assemble_partial_personal_review_document(
                 refs["personal_analysis"], encounter_profile, specialization_profile,
                 workflow_path=Path(workflow["workflow_path"]), ability_names_path=mapping,
+                workflow_registry_dir=root / "outputs" / "personal-workflows",
                 ability_names_metadata_path=metadata, locale="zh-CN",
             )
-            report = render_report_document(document, root / "reports")
+            report = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "outputs" / "personal-workflows")
             delivery = finalize_personal_review_delivery(
                 Path(workflow["workflow_path"]), report, root / "outputs",
             )
@@ -476,7 +497,10 @@ class AdviceTests(unittest.TestCase):
             analysis = json.loads(refs["personal_analysis"].read_text(encoding="utf-8"))
             cohort = identify_cohort({
                 "schema_version": 2, "filters": analysis["comparison_identity"],
-                "pagination": {"exhausted": True}, "eligible_recent_candidates": [],
+                "pagination": {
+                    "first_page": 1, "last_page": 1,
+                    "has_more_pages": False, "truncated": False, "exhausted": True,
+                }, "eligible_recent_candidates": [],
             })
             cohort_path = root / "cohort.json"
             cohort_path.write_text(json.dumps(cohort), encoding="utf-8")
@@ -484,14 +508,16 @@ class AdviceTests(unittest.TestCase):
                 refs["personal_analysis"], cohort_path, encounter_profile, specialization_profile,
                 root / "outputs", reference_analysis_paths=[], benchmark_paths=[],
                 candidate_rejections=[], blockers=[],
+                previous_workflow_path=workflow_origin(refs["personal_analysis"], root / "outputs"),
             )
             document = assemble_partial_personal_review_document(
                 refs["personal_analysis"], encounter_profile, specialization_profile,
                 workflow_path=Path(workflow["workflow_path"]), ability_names_path=mapping,
+                workflow_registry_dir=root / "outputs" / "personal-workflows",
                 ability_names_metadata_path=metadata, advice_path=Path(advice["path"]),
                 locale="zh-CN",
             )
-            report = render_report_document(document, root / "reports")
+            report = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "outputs" / "personal-workflows")
             delivery = finalize_personal_review_delivery(
                 Path(workflow["workflow_path"]), report, root / "outputs"
             )
@@ -502,12 +528,21 @@ class AdviceTests(unittest.TestCase):
             forged["workflow_id"] = hashlib.sha256(json.dumps(
                 forged, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             ).encode()).hexdigest()
-            forged_path = root / "forged-workflow.json"
+            forged_dir = root / "external" / "personal-workflows"
+            forged_dir.mkdir(parents=True)
+            forged_path = forged_dir / f'{forged["workflow_id"]}.json'
             forged_path.write_text(json.dumps(forged), encoding="utf-8")
+            forged_ref = {"path": str(forged_path.resolve()), "sha256": sha256_file(forged_path)}
+            (forged_dir / "index.json").write_text(json.dumps({
+                "schema_version": 1,
+                "artifact_type": "personal_review_workflow_index",
+                "artifacts": {forged["workflow_id"]: forged_ref},
+            }), encoding="utf-8")
             with self.assertRaisesRegex(InputError, "workflow path does not match its content ID"):
                 assemble_partial_personal_review_document(
                     refs["personal_analysis"], encounter_profile, specialization_profile,
                     workflow_path=forged_path, ability_names_path=mapping,
+                    workflow_registry_dir=root / "outputs" / "personal-workflows",
                     ability_names_metadata_path=metadata, locale="zh-CN",
                 )
 
@@ -541,6 +576,7 @@ class AdviceTests(unittest.TestCase):
             workflow_body = {
                 "schema_version": 2,
                 "artifact_type": "personal_review_workflow",
+                "selected_identity": {"report_code": "ABC", "fight_id": 7, "actor_id": 10},
                 "workflow_started_monotonic_seconds": 10.0,
                 "clock": {
                     "wall_minus_monotonic_seconds": 1_000_000.0,
@@ -566,7 +602,7 @@ class AdviceTests(unittest.TestCase):
                 },
                 "stage_timings_seconds": {"selection": 0.1, "player_evidence": 0.1},
                 "stage_progress": {
-                    "retrieval": "completed", "agent_synthesis": "pending",
+                    "retrieval": "completed", "agent_synthesis": "in_progress",
                     "validation": "pending", "rendering": "pending",
                 },
                 "artifacts": artifact_refs,
@@ -588,15 +624,15 @@ class AdviceTests(unittest.TestCase):
             }), encoding="utf-8")
 
             with (
-                patch("wcl_raid_coach.report_documents.validate_comparison_workflow"),
                 patch("wcl_raid_coach.personal_workflow.validate_comparison_workflow"),
             ):
                 document = assemble_personal_review_document(
                     refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
                     workflow_path=workflow_path, ability_names_path=mapping,
+                    workflow_registry_dir=root / "outputs" / "personal-workflows",
                     ability_names_metadata_path=metadata, locale="zh-CN",
                 )
-                report = render_report_document(document, root / "outputs" / "reports")
+                report = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "outputs" / "personal-workflows")
                 delivery = finalize_personal_review_delivery(
                     workflow_path, report, root / "outputs",
                     clock=lambda: 12.0, wall_clock=lambda: 1_000_012.0,
@@ -618,12 +654,12 @@ class AdviceTests(unittest.TestCase):
             root = Path(temporary)
             refs, mapping, metadata, _, encounter, specialization = advice_setup(root)
             analysis = json.loads(refs["personal_analysis"].read_text(encoding="utf-8"))
-            cohort = identify_cohort({"schema_version": 2, "filters": analysis["comparison_identity"], "pagination": {"exhausted": True}, "eligible_recent_candidates": []})
+            cohort = identify_cohort({"schema_version": 2, "filters": analysis["comparison_identity"], "pagination": {"first_page": 1, "last_page": 1, "has_more_pages": False, "truncated": False, "exhausted": True}, "eligible_recent_candidates": []})
             cohort_path = root / "cohort.json"
             cohort_path.write_text(json.dumps(cohort), encoding="utf-8")
-            workflow = orchestrate_personal_review(refs["personal_analysis"], cohort_path, encounter, specialization, root / "outputs", reference_analysis_paths=[], benchmark_paths=[], candidate_rejections=[], blockers=[])
-            document = assemble_partial_personal_review_document(refs["personal_analysis"], encounter, specialization, workflow_path=Path(workflow["workflow_path"]), ability_names_path=mapping, ability_names_metadata_path=metadata)
-            report = render_report_document(document, root / "reports")
+            workflow = orchestrate_personal_review(refs["personal_analysis"], cohort_path, encounter, specialization, root / "outputs", reference_analysis_paths=[], benchmark_paths=[], candidate_rejections=[], blockers=[], previous_workflow_path=workflow_origin(refs["personal_analysis"], root / "outputs"))
+            document = assemble_partial_personal_review_document(refs["personal_analysis"], encounter, specialization, workflow_path=Path(workflow["workflow_path"]), workflow_registry_dir=root / "outputs" / "personal-workflows", ability_names_path=mapping, ability_names_metadata_path=metadata)
+            report = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "outputs" / "personal-workflows")
             timing = {"clock": lambda: 10.0, "wall_clock": lambda: 1_000_000.0}
             first = finalize_personal_review_delivery(Path(workflow["workflow_path"]), report, root / "outputs", **timing)
             second = finalize_personal_review_delivery(Path(workflow["workflow_path"]), report, root / "outputs", **timing)
@@ -637,17 +673,57 @@ class AdviceTests(unittest.TestCase):
             with self.assertRaisesRegex(InputError, "Existing Personal Review delivery finalization"):
                 finalize_personal_review_delivery(Path(workflow["workflow_path"]), report, root / "outputs", **timing)
 
+    def test_delivery_rejects_tampered_index_with_stale_document_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            refs, mapping, metadata, _, encounter, specialization = advice_setup(root)
+            analysis = json.loads(refs["personal_analysis"].read_text(encoding="utf-8"))
+            cohort = identify_cohort({
+                "schema_version": 2,
+                "filters": analysis["comparison_identity"],
+                "pagination": {
+                    "first_page": 1, "last_page": 1,
+                    "has_more_pages": False, "truncated": False, "exhausted": True,
+                },
+                "eligible_recent_candidates": [],
+            })
+            cohort_path = root / "cohort.json"
+            cohort_path.write_text(json.dumps(cohort), encoding="utf-8")
+            workflow = orchestrate_personal_review(
+                refs["personal_analysis"], cohort_path, encounter, specialization,
+                root / "outputs", reference_analysis_paths=[], benchmark_paths=[],
+                candidate_rejections=[], blockers=[],
+                previous_workflow_path=workflow_origin(refs["personal_analysis"], root / "outputs"),
+            )
+            document = assemble_partial_personal_review_document(
+                refs["personal_analysis"], encounter, specialization,
+                workflow_path=Path(workflow["workflow_path"]),
+                workflow_registry_dir=root / "outputs" / "personal-workflows",
+                ability_names_path=mapping, ability_names_metadata_path=metadata,
+            )
+            report = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "outputs" / "personal-workflows")
+            index_path = Path(report["index_path"])
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index["document"]["scope_note"] = "tampered"
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+
+            with self.assertRaisesRegex(InputError, "canonical identity"):
+                finalize_personal_review_delivery(
+                    Path(workflow["workflow_path"]), report, root / "outputs"
+                )
+            self.assertFalse((root / "outputs" / "personal-deliveries").exists())
+
     def test_delivery_finalization_failure_retains_immutable_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             refs, mapping, metadata, _, encounter, specialization = advice_setup(root)
             analysis = json.loads(refs["personal_analysis"].read_text(encoding="utf-8"))
-            cohort = identify_cohort({"schema_version": 2, "filters": analysis["comparison_identity"], "pagination": {"exhausted": True}, "eligible_recent_candidates": []})
+            cohort = identify_cohort({"schema_version": 2, "filters": analysis["comparison_identity"], "pagination": {"first_page": 1, "last_page": 1, "has_more_pages": False, "truncated": False, "exhausted": True}, "eligible_recent_candidates": []})
             cohort_path = root / "cohort.json"
             cohort_path.write_text(json.dumps(cohort), encoding="utf-8")
-            workflow = orchestrate_personal_review(refs["personal_analysis"], cohort_path, encounter, specialization, root / "outputs", reference_analysis_paths=[], benchmark_paths=[], candidate_rejections=[], blockers=[])
-            document = assemble_partial_personal_review_document(refs["personal_analysis"], encounter, specialization, workflow_path=Path(workflow["workflow_path"]), ability_names_path=mapping, ability_names_metadata_path=metadata)
-            report = render_report_document(document, root / "reports")
+            workflow = orchestrate_personal_review(refs["personal_analysis"], cohort_path, encounter, specialization, root / "outputs", reference_analysis_paths=[], benchmark_paths=[], candidate_rejections=[], blockers=[], previous_workflow_path=workflow_origin(refs["personal_analysis"], root / "outputs"))
+            document = assemble_partial_personal_review_document(refs["personal_analysis"], encounter, specialization, workflow_path=Path(workflow["workflow_path"]), workflow_registry_dir=root / "outputs" / "personal-workflows", ability_names_path=mapping, ability_names_metadata_path=metadata)
+            report = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "outputs" / "personal-workflows")
             with patch("wcl_raid_coach.personal_workflow._persist_finalization", side_effect=OSError("write failed")):
                 with self.assertRaises(OSError):
                     finalize_personal_review_delivery(Path(workflow["workflow_path"]), report, root / "outputs")
@@ -677,14 +753,15 @@ class AdviceTests(unittest.TestCase):
                 root / "outputs" / "advice",
                 encounter_profile, specialization_profile,
             )
-            with patch("wcl_raid_coach.report_documents.validate_comparison_workflow"):
+            with patch("wcl_raid_coach.personal_workflow.validate_comparison_workflow"):
                 document = assemble_personal_review_document(
                     refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
                     workflow_path=refs["personal_review_workflow"],
+                    workflow_registry_dir=root / "outputs" / "personal-workflows",
                     ability_names_path=mapping, ability_names_metadata_path=metadata,
                     advice_path=Path(result["path"]), locale="zh-CN",
                 )
-                report = render_report_document(document, root / "outputs" / "reports")
+                report = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "outputs" / "personal-workflows")
             html = Path(report["html_path"]).read_text(encoding="utf-8")
 
         self.assertIn("使用所选技能", html)
@@ -873,12 +950,13 @@ class AdviceTests(unittest.TestCase):
                 "build": "12.1.0.69587", "mapping_sha256": sha256_file(mapping),
             }), encoding="utf-8")
             with (
-                patch("wcl_raid_coach.report_documents.validate_comparison_workflow"),
+                patch("wcl_raid_coach.personal_workflow.validate_comparison_workflow"),
                 self.assertRaisesRegex(InputError, "no zhCN SpellName mapping"),
             ):
                 assemble_personal_review_document(
                     refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
                     workflow_path=refs["personal_review_workflow"],
+                    workflow_registry_dir=root / "outputs" / "personal-workflows",
                     ability_names_path=mapping, ability_names_metadata_path=metadata,
                     advice_path=Path(advice["path"]), locale="zh-CN",
                 )

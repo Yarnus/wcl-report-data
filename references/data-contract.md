@@ -188,6 +188,8 @@ renderer 的信任边界不止是路径和文件 SHA-256。每个来源必须是
 
 `coach guide-report` 是 Raid Guide 的 CLI 组装路径。它只接受一个已校验 Guide Snapshot JSON artifact，不接受调用方重写章节；派生文档保留精确 Snapshot ID 与 artifact 文件 SHA-256，并按原章节复制 encounter identity、`benchmark_id`、Profile ID、样本数/置信度、指标、本地化技能、机制锚点和来源。每章必须逐项回查同一 Snapshot 章节，禁止跨 Boss 交换同值指标、技能或来源。
 
+`coach personal-workflow-init <WCL_URL_WITH_NUMERIC_FIGHT_AND_SOURCE>` 是 selection 后立即执行的计时入口。它只接受所选 WCL Report、Boss Attempt 和玩家身份，不读取 Analysis、Complete Bundle、Ranking Cohort 或 Profile，并将 `selected_identity` 与 monotonic/wall-clock 起点写入 canonical registered workflow。后续 `coach personal-workflow` 必须通过 `--previous-workflow` 续接初始化或最新 workflow；Personal Analysis 的 report code、fight ID 和 actor ID 必须匹配 `selected_identity`，Cohort 与两个 Profiles 再绑定 Analysis 的完整硬条件身份。
+
 `coach personal-workflow` 是 Agent 可重复调用的 Personal Review acquisition/reuse 控制点。schema `2` artifact 由内部 monotonic clock 生成统一起点、累计 elapsed 和 stage timings；公开 CLI 没有原始 timing 参数。workflow 原子写入 `outputs/personal-workflows/<workflow_id>.json` 并登记在同目录 artifact index；`--previous-workflow` 必须匹配该 canonical path、文件 identity 和 index，任意外部路径会被拒绝。这些检查防止误用任意路径并检测损坏，但 SHA-256 是内容身份而非生成者认证，不能抵抗可同时修改 artifact 与 index 的本地进程。前序 workflow 恢复稳定候选身份、Reference Sample、已验证 Benchmark 和 checkpoint/progress hash 引用。Ranking Cohort 保留最后一次已查询的完整去重页，并记录真实页范围、远端 `hasMorePages`、`target_reached` 和 `exhausted`，使被拒候选之后的同页身份无需重新抓取即可继续。系统重启导致 monotonic 连续性不可验证时保留进度，记录 `timing_continuity_unavailable` 并停止可选采集。每项可选工作调度前检查 20 秒预留；已在途请求可越界。API failure 必须记录 blocker 和已有 progress，并停止 optional scheduling。只有 Benchmark 的 Cohort ID 精确匹配当前 Cohort，且全部 Reference Samples 能从 Complete Bundle evidence 重算并重建出完全相同的 Benchmark，才使用 30 秒复用目标；否则使用 180 秒目标。180/30 秒测量仅在协作式本地 workspace 内可信，且不测量 WCL 网络。候选耗尽只有在 Cohort pagination metadata 证明终页时才成为 `ranking_page_exhausted`，否则为 `ranking_cohort_refresh_required`。目标 Personal Analysis/Complete Bundle 不可用时输出 `blocked` 且不声明 Personal Analysis artifact 或可生成报告。
 
 `coach personal-report <PERSONAL_ANALYSIS> <ENCOUNTER_BENCHMARK> <COMPARISON> --workflow <COMPARISON_READY_WORKFLOW> ...` 是 comparison-ready 完整路径；`coach personal-report <PERSONAL_ANALYSIS> --workflow <PARTIAL_READY_WORKFLOW> --encounter-profile <PROFILE> --specialization-profile <PROFILE> ...` 是 partial 路径。`--workflow` 是 assembler、renderer 和正式 Personal Review 交付的必需来源，不存在 artifact-only 完成交付路径。完整路径在 assembly、render 和 delivery 分别重新读取 workflow 绑定的 Cohort、Profile、Benchmark 及每个 Reference Sample Complete Bundle 快照，核对文件哈希，并通过 `verify_benchmark_for_cohort` 重建精确 Benchmark。两条 workflow 路径都会在 HTML/index 已存在后完成 finalization，并返回 content-addressed delivery artifact、status、elapsed 和 `target_met`；elapsed 从选定 workflow 起点覆盖校验、locks、持久化和渲染。timing 明确标记 `clock_source: "local_monotonic_and_wall_clock"` 与 `wcl_network_measurement: "not_measured"`；测试中的 deterministic injected clock 只验证状态，不代表实际本机墙钟耗时。delivery/finalization 写入失败时不返回 delivered；已写入的不可变 content-addressed delivery 作为孤儿保留，避免删除并发报告已引用的 artifact。只有规范文件字节及其 SHA-256 完全相同才复用 content-addressed artifact；JSON 对象解析后相同但文件字节不同也拒绝覆盖。partial 路径深度重验 workflow、Cohort、Reference Samples、玩家 Analysis 和两个 Profile，并由证据推导样本数；不接受 Benchmark/Comparison 或手填样本数。Advice schema `2` 使用有限枚举，无效或当前模式不可用的 fact source 返回 `invalid_input`。Advice 写入后不覆盖也不因组装或渲染失败删除；未被最终报告引用的内容寻址 artifact 可作为孤儿安全保留，须按引用关系和保留策略由明确的人工或专用回收命令处理。
@@ -198,13 +200,17 @@ renderer 的信任边界不止是路径和文件 SHA-256。每个来源必须是
 
 Report Document 的持久化不改变 Mechanic Evidence Set 的临时性：只允许保存 Agent 选择的结论、计数和最小证据摘录，不得保存完整过滤事件范围。
 
+Ranking Cohort pagination 的 `first_page` 和 `last_page` 必须是正整数且 `first_page <= last_page`。只有同时显式记录有效页范围、`has_more_pages: false` 和 `truncated: false` 时才可声明 `exhausted: true`；缺失任一字段的 metadata 不足以证明候选耗尽。远端无更多页且本地未截断时不得声明 `exhausted: false`。存在的 next/resume 页 metadata 必须一致、位于已查询范围之后，且不能与 exhausted 状态并存。
+
+Personal Review 的 assembly、render 和 delivery 必须按 CLI 配置的精确 data root 校验同一个 `outputs/personal-workflows` registry 及其 index；仅仅位于任意名为 `personal-workflows` 的目录中不构成 provenance。该约束仍属于协作式本地信任模型，不能抵抗能够修改配置 data root 内 artifact 与 index 的本地进程。
+
 ## 教练 Artifact
 
 个人复盘、Benchmark 和 Guide 只消费通过上述完整性检查的 Complete Bundle，不能重写 Report Index、Fight Bundle 或 Canonical Event。Mechanic Review 是非持久化例外，只消费当前进程中的 Mechanic Evidence Set。
 
 - `profiles/` 保存声明式 Specialization Profile 和 Encounter Profile。Profile 身份包括 game version 与 ranking partition；Encounter Profile 还包括 encounter 和 difficulty。Specialization ability 的可选 `action_type` 只接受 `player_cast`、`automatic`、`internal` 或 `owned_actor`；未声明不进入关键动作。Encounter eligibility 的非空目标列表必须使用 `target_id_type: "npc_game_id"`，目标是跨两个列表不重复的正整数 NPC gameID，不能使用 report-local actor ID。Profile ID 是校验后规范 JSON 的 SHA-256。
 - `cohorts/` 保存单一 encounter、difficulty、class、spec 与 partition 的 Ranking Cohort。Ranking Candidate 的 rank 和非空 score 必须是非布尔的有限 JSON 数字；规范 Cohort JSON 不接受任何 `NaN` 或无穷值。`cohort_id` 是排除自身 ID 后规范 JSON 的 SHA-256。Ranking Candidate 只有在 Complete Bundle、硬条件和 Encounter Profile eligibility 全部通过后才成为 Reference Sample。
-- Encounter Benchmark 只能聚合同一 Ranking Cohort 中至少三个不重复的 Reference Sample，且必须记录准确的 `cohort_id`。`benchmark_id` 是排除自身 ID 后规范 JSON 的 SHA-256。不同 Encounter Designator 必须使用不同 benchmark。
+- Encounter Benchmark 只能聚合同一 Ranking Cohort 中 3 至 10 个不重复的 Reference Sample，`sample_count` 必须是整数并精确等于 `reference_samples` 长度，且必须记录准确的 `cohort_id`。`benchmark_id` 是排除自身 ID 后规范 JSON 的 SHA-256。不同 Encounter Designator 必须使用不同 benchmark。
 - `tasks/` 保存 Coach Request Manifest。部分完成状态必须保留每个 encounter 的 blocker 与 artifact 引用。
 - `guides/` 保存不可变 Guide Snapshot。每个章节记录准确的 `benchmark_id` 和按 ability ID 本地化的章节技能指标；一个 snapshot 可以引用多个 Encounter Benchmark，但不能覆盖旧 snapshot。
 
@@ -216,4 +222,4 @@ Report Document 的持久化不改变 Mechanic Evidence Set 的临时性：只�
 
 ## Personal Review 计时边界
 
-Boss Attempt 和玩家选定后、获取目标 Complete Bundle 前，必须以尚不存在的 Personal Analysis 路径创建 canonical blocked workflow；后续调用通过 `--previous-workflow` 继承同一起点，跨调用墙钟间隔保守计入 elapsed。全部 3 至 9 个合格 Reference Samples 必须保留在 workflow 和 Benchmark 中。`stage_progress` 由 CLI 根据已知 artifact 推导 retrieval、Agent synthesis、validation 和 rendering 状态，不接受调用方 timing。delivery artifact 的采样边界只到 HTML/index 校验；finalization 在 delivery artifact 原子写入后重新采样，才可声明其已持久化。由于 CLI 不能直接观测 Agent synthesis 持续时间，该阶段标为 `unavailable`，最终 `target_met` 必须为 `null`，不得仅凭总 elapsed 声称 180/30 秒目标已证明。
+Boss Attempt 和玩家选定后，必须立即运行 `coach personal-workflow-init`，并早于目标 Complete Bundle retrieval、Ranking Candidate discovery 和 Profile retrieval/synthesis。后续调用通过 `--previous-workflow` 继承同一起点，跨调用墙钟间隔保守计入 elapsed，因此总 elapsed 覆盖上述工作及进程外 Agent synthesis、validation、rendering 和 HTML delivery。标准候选命令最多采集 10 个；已有的 3 至 10 个合格 Reference Samples 必须全部保留。`stage_progress.retrieval` 在候选、Profile 或玩家 evidence 未齐时为 `in_progress`；Agent synthesis 尚不可观测时为 `unavailable`，玩家和 Profiles 齐备后为 `in_progress`。delivery/finalization 因无法单独观测 Agent synthesis 持续时间而将其标为 `unavailable`，最终 `target_met` 必须为 `null`。公开 CLI 不接受原始 timing。

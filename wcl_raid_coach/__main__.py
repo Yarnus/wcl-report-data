@@ -27,13 +27,19 @@ from .models import ReportRef
 from .mechanics import MechanicReviewService, compact_mechanic_review
 from .guides import create_guide_snapshot
 from .profiles import ProfileStore
-from .personal_workflow import finalize_personal_review_delivery, orchestrate_personal_review
+from .personal_workflow import (
+    finalize_personal_review_delivery,
+    initialize_personal_review,
+    orchestrate_personal_review,
+)
 from .report_documents import (
     assemble_personal_review_document,
     assemble_partial_personal_review_document,
     assemble_raid_guide_document,
     create_mechanic_review_report,
     render_report_document,
+    validate_comparison_workflow,
+    validate_partial_workflow,
     validate_report_document,
 )
 from .storage import atomic_write_json, read_json
@@ -172,8 +178,12 @@ def create_parser() -> argparse.ArgumentParser:
     workflow.add_argument("--benchmark", type=Path, action="append", default=[])
     workflow.add_argument("--rejection", action="append", default=[], help="Candidate progress as REPORT:FIGHT:SOURCE=reason.")
     workflow.add_argument("--blocker", action="append", default=[])
-    workflow.add_argument("--previous-workflow", type=Path)
+    workflow.add_argument("--previous-workflow", type=Path, required=True)
     workflow.add_argument("--progress", type=Path, action="append", default=[], help="Preserve a checkpoint or progress artifact by path and hash.")
+    workflow_init = coach_commands.add_parser(
+        "personal-workflow-init", help="Start Personal Review timing after fight and player selection."
+    )
+    workflow_init.add_argument("url", help="WCL report URL with numeric fight and source parameters.")
     candidates = coach_commands.add_parser("candidates", help="Discover content-addressed recent ranking candidates.")
     candidates.add_argument("--encounter-id", type=int, required=True)
     candidates.add_argument("--difficulty-id", type=int, required=True)
@@ -260,6 +270,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise InputError("Personal Review requires both Benchmark and Comparison for comparison-ready delivery.")
             if partial and (not args.encounter_profile or not args.specialization_profile):
                 raise InputError("Partial Personal Review delivery requires both Profiles.")
+            workflow_registry = store.data_root / "outputs" / "personal-workflows"
+            if partial:
+                validate_partial_workflow(
+                    args.workflow, args.analysis, args.encounter_profile,
+                    args.specialization_profile, workflow_registry,
+                )
+            else:
+                validate_comparison_workflow(
+                    args.workflow, args.analysis, args.benchmark, workflow_registry
+                )
             ability_names_info = _ensure_ability_names(store)
             advice_result = None
             if args.advice:
@@ -278,6 +298,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 document = assemble_partial_personal_review_document(
                     args.analysis, args.encounter_profile, args.specialization_profile,
                     workflow_path=args.workflow,
+                    workflow_registry_dir=workflow_registry,
                     ability_names_path=Path(ability_names_info["mapping_path"]),
                     ability_names_metadata_path=Path(ability_names_info["metadata_path"]),
                     advice_path=Path(advice_result["path"]) if advice_result else None,
@@ -290,9 +311,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     ability_names_metadata_path=Path(ability_names_info["metadata_path"]),
                     advice_path=Path(advice_result["path"]) if advice_result else None,
                     workflow_path=args.workflow,
+                    workflow_registry_dir=workflow_registry,
                     locale=args.locale,
                 )
-            report = render_report_document(document, store.data_root / "outputs" / "reports")
+            report = render_report_document(
+                document, store.data_root / "outputs" / "reports",
+                workflow_registry_dir=workflow_registry,
+            )
             result = {
                 "action": "coach_personal_report",
                 "document": validate_report_document(document),
@@ -323,6 +348,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 benchmark_paths=args.benchmark, candidate_rejections=rejections,
                 blockers=args.blocker, previous_workflow_path=args.previous_workflow,
                 progress_paths=args.progress,
+            )
+        if args.coach_command == "personal-workflow-init":
+            selected = ReportRef.parse(args.url)
+            if type(selected.fight) is not int or selected.source_hint is None:
+                raise InputError("Personal Review initialization requires numeric fight and source parameters.")
+            return {"action": "coach_personal_workflow_init"} | initialize_personal_review(
+                selected.code, selected.fight, selected.source_hint, store.data_root / "outputs"
             )
         task_store = CoachTaskStore(args.data_root)
         if args.coach_command == "status":

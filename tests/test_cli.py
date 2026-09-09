@@ -12,6 +12,7 @@ from unittest.mock import patch
 from wcl_raid_coach.__main__ import create_parser, main, run
 from wcl_raid_coach.cohort import identify_benchmark
 from wcl_raid_coach.errors import InputError, RevisionChangedError
+from wcl_raid_coach.personal_workflow import initialize_personal_review
 
 
 def comparison_ready_workflow(root: Path, analysis: Path, benchmark: Path) -> Path:
@@ -26,6 +27,7 @@ def comparison_ready_workflow(root: Path, analysis: Path, benchmark: Path) -> Pa
     result = _persist_result(root / "data" / "outputs", {
         "schema_version": 2,
         "artifact_type": "personal_review_workflow",
+        "selected_identity": {"report_code": "ABC", "fight_id": 7, "actor_id": 10},
         "workflow_started_monotonic_seconds": 0.0,
         "clock": {
             "wall_minus_monotonic_seconds": 0.0,
@@ -51,7 +53,7 @@ def comparison_ready_workflow(root: Path, analysis: Path, benchmark: Path) -> Pa
         },
         "stage_timings_seconds": {"selection": 0.1, "player_evidence": 0.1, "benchmark_build": 0.1},
         "stage_progress": {
-            "retrieval": "completed", "agent_synthesis": "pending",
+            "retrieval": "completed", "agent_synthesis": "in_progress",
             "validation": "pending", "rendering": "pending",
         },
         "artifacts": {
@@ -72,12 +74,30 @@ def comparison_ready_workflow(root: Path, analysis: Path, benchmark: Path) -> Pa
 
 
 class CliTests(unittest.TestCase):
+    def test_personal_workflow_init_requires_no_analysis_cohort_or_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main([
+                    "--data-root", temporary, "coach", "personal-workflow-init",
+                    "https://www.warcraftlogs.com/reports/ABC123#fight=7&source=42",
+                ])
+            response = json.loads(output.getvalue())
+
+        self.assertEqual(status, 0, response)
+        self.assertEqual(response["workflow"]["selected_identity"], {
+            "report_code": "ABC123", "fight_id": 7, "actor_id": 42,
+        })
+        self.assertIsNone(response["workflow"]["artifacts"]["ranking_cohort"])
+        self.assertIsNone(response["workflow"]["artifacts"]["personal_analysis"])
+
     def test_personal_workflow_rejects_caller_supplied_timing_flags(self) -> None:
         with self.assertRaisesRegex(InputError, "unrecognized arguments"):
             create_parser().parse_args([
                 "coach", "personal-workflow", "analysis.json",
                 "--cohort", "cohort.json", "--encounter-profile", "encounter.json",
                 "--specialization-profile", "specialization.json",
+                "--previous-workflow", "workflow.json",
                 "--elapsed-seconds", "1", "--stage-timing", "selection=1",
             ])
 
@@ -173,6 +193,27 @@ class CliTests(unittest.TestCase):
                 "coach", "personal-report", "analysis.json", "benchmark.json", "comparison.json",
             ])
 
+    def test_personal_report_rejects_external_workflow_before_creating_artifacts_without_advice(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            external = initialize_personal_review(
+                "ABC", 7, 10, root / "external"
+            )
+            args = create_parser().parse_args([
+                "--data-root", str(root / "data"), "coach", "personal-report",
+                "analysis.json", "--workflow", external["workflow_path"],
+                "--encounter-profile", "encounter.json",
+                "--specialization-profile", "specialization.json",
+            ])
+
+            with patch("wcl_raid_coach.__main__._ensure_ability_names") as ensure_names:
+                with self.assertRaisesRegex(InputError, "workflow path"):
+                    run(args)
+
+            ensure_names.assert_not_called()
+            self.assertFalse((root / "data" / "ability-names.zhCN.json").exists())
+            self.assertFalse((root / "data" / "outputs" / "reports").exists())
+
     def test_partial_personal_report_returns_finalized_delivery_timing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -187,6 +228,7 @@ class CliTests(unittest.TestCase):
             }
             delivery = {"elapsed_seconds": 12.5, "target_met": True}
             with (
+                patch("wcl_raid_coach.__main__.validate_partial_workflow"),
                 patch("wcl_raid_coach.__main__._ensure_ability_names", return_value={"mapping_path": "names.json", "metadata_path": "metadata.json"}),
                 patch("wcl_raid_coach.__main__.assemble_partial_personal_review_document", return_value={"document": True}),
                 patch("wcl_raid_coach.__main__.validate_report_document", return_value={"document": True}),
@@ -206,6 +248,7 @@ class CliTests(unittest.TestCase):
             ])
             delivery = {"artifact": {"status": "delivered"}, "elapsed_seconds": 12.5, "target_met": True}
             with (
+                patch("wcl_raid_coach.__main__.validate_comparison_workflow"),
                 patch("wcl_raid_coach.__main__._ensure_ability_names", return_value={"mapping_path": "names.json", "metadata_path": "metadata.json"}),
                 patch("wcl_raid_coach.__main__.assemble_personal_review_document", return_value={"document": True}) as assemble,
                 patch("wcl_raid_coach.__main__.validate_report_document", return_value={"document": True}),
@@ -700,6 +743,7 @@ class CliTests(unittest.TestCase):
                                 "spec_name": "Unholy",
                             },
                             "sample_count": 3,
+                            "reference_samples": [{}, {}, {}],
                             "confidence": "low",
                             "stable_pattern_claims_allowed": True,
                             "mechanic_anchors": [{"ability_id": 2, "name": "English Mechanic", "observed_anchor_ms": 10000}],
@@ -797,7 +841,6 @@ class CliTests(unittest.TestCase):
                     "mapping_path": str(mapping_path), "metadata_path": str(metadata_path),
                     "build": "12.1.0.69587",
                 }),
-                patch("wcl_raid_coach.report_documents.validate_comparison_workflow"),
                 patch("wcl_raid_coach.personal_workflow.validate_comparison_workflow"),
                 redirect_stdout(output),
             ):
@@ -831,7 +874,6 @@ class CliTests(unittest.TestCase):
                     "mapping_path": str(mapping), "metadata_path": str(metadata),
                     "build": "12.1.0.69587",
                 }),
-                patch("wcl_raid_coach.report_documents.validate_comparison_workflow"),
                 patch("wcl_raid_coach.personal_workflow.validate_comparison_workflow"),
                 redirect_stdout(output),
             ):
@@ -897,7 +939,7 @@ class CliTests(unittest.TestCase):
                     "mapping_path": str(mapping), "metadata_path": str(metadata), "build": "12.1.0.69587",
                 }),
                 patch("wcl_raid_coach.__main__.render_report_document", side_effect=InputError("render failed")),
-                patch("wcl_raid_coach.report_documents.validate_comparison_workflow"),
+                patch("wcl_raid_coach.personal_workflow.validate_comparison_workflow"),
                 redirect_stdout(output),
             ):
                 status = main([

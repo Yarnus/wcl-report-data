@@ -188,6 +188,7 @@ def personal_document(source_root: Path | None = None) -> dict:
         benchmark = identify_benchmark({
             "schema_version": 3, "cohort_id": "c" * 64,
             "identity": analysis["comparison_identity"], "sample_count": 3,
+            "reference_samples": [{}, {}, {}],
             "confidence": "low", "stable_pattern_claims_allowed": True,
             "metrics": {"damage_total_median": 200, "key_action_casts_median": {"2": 2},
                         "key_action_first_cast_ms_median": {"2": 80},
@@ -300,6 +301,7 @@ def raid_guide_document(source_root: Path | None = None) -> dict:
             "specialization_profile_id": specialization_profile_id,
             "sources": {"encounter": [{"title": "Source <title>", "url": "https://example.com/encounter", "quote_summary": "机制来源摘要。"}], "specialization": []},
             "sample_count": 3, "confidence": "low", "stable_pattern_claims_allowed": True,
+            "reference_samples": [{}, {}, {}],
             "mechanic_anchors": [{"ability_id": 2, "name": "Mechanic", "observed_anchor_ms": 18000}],
             "metrics": {"damage_total_median": 266800000, "key_action_casts_median": {"2": 1},
                         "key_action_first_cast_ms_median": {"2": 1300}, "damage_by_npc_median": {"20": 188200000}},
@@ -451,11 +453,12 @@ class ReportDocumentTests(unittest.TestCase):
             document = assemble_personal_review_document(
                 refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
                 workflow_path=refs["personal_review_workflow"],
+                workflow_registry_dir=root / "personal-workflows",
                 ability_names_path=mapping_path,
                 ability_names_metadata_path=metadata_path,
                 locale="zh-CN",
             )
-            result = render_report_document(document, root / "outputs" / "reports")
+            result = render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "personal-workflows")
             report_index = json.loads(Path(result["index_path"]).read_text(encoding="utf-8"))
             html = Path(result["html_path"]).read_text(encoding="utf-8")
 
@@ -486,7 +489,7 @@ class ReportDocumentTests(unittest.TestCase):
             self.assertIn(benchmark["benchmark_id"][:12], html)
             self.assertIn("Spell 2", html)
             self.assertEqual(report_index["document"], validate_report_document(document))
-            self.assertEqual(result, render_report_document(document, root / "outputs" / "reports"))
+            self.assertEqual(result, render_report_document(document, root / "outputs" / "reports", workflow_registry_dir=root / "personal-workflows"))
             serialized = json.dumps(report_index["document"])
             for forbidden in ("recommendation", "death_cause", "mechanic_attribution", "achievable_improvement"):
                 self.assertNotIn(forbidden, serialized)
@@ -494,7 +497,7 @@ class ReportDocumentTests(unittest.TestCase):
             changed = json.loads(json.dumps(document))
             changed["abilities"][0]["name"] = "调用方伪造名称"
             with self.assertRaisesRegex(InputError, "ability claims"):
-                render_report_document(changed, root / "other-reports")
+                render_report_document(changed, root / "other-reports", workflow_registry_dir=root / "personal-workflows")
 
     def test_personal_assembler_rejects_mismatched_or_malformed_sources(self) -> None:
         mutations = (
@@ -516,6 +519,7 @@ class ReportDocumentTests(unittest.TestCase):
                     assemble_personal_review_document(
                         refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
                         workflow_path=refs["personal_review_workflow"],
+                        workflow_registry_dir=root / "personal-workflows",
                         ability_names_path=refs["ability_names"],
                         ability_names_metadata_path=refs["ability_names_metadata"], locale="en",
                     )
@@ -529,6 +533,7 @@ class ReportDocumentTests(unittest.TestCase):
                 assemble_personal_review_document(
                     refs["personal_analysis"], refs["encounter_benchmark"], refs["comparison"],
                     workflow_path=refs["personal_review_workflow"],
+                    workflow_registry_dir=root / "personal-workflows",
                     ability_names_path=refs["ability_names"],
                     ability_names_metadata_path=refs["ability_names_metadata"], locale="en",
                 )
@@ -720,7 +725,7 @@ class ReportDocumentTests(unittest.TestCase):
                 mutate(source)
                 source_ref |= _write_source(root, f"changed-{kind}.json", source)
                 with self.assertRaisesRegex(InputError, message):
-                    render_report_document(document, root / "reports")
+                    render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
         document = personal_document()
         document["source_artifacts"] = [
@@ -734,21 +739,21 @@ class ReportDocumentTests(unittest.TestCase):
             document = personal_document(root)
             document["player"]["name"] = "Other"
             with self.assertRaisesRegex(InputError, "player"):
-                render_report_document(document, root / "reports")
+                render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             document = personal_document(root)
             document["player"]["anonymous"] = True
             with self.assertRaisesRegex(InputError, "player"):
-                render_report_document(document, root / "reports")
+                render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             document = personal_document(root)
             document["identity"]["fight_id"] = 8
             with self.assertRaisesRegex(InputError, "Boss Attempt"):
-                render_report_document(document, root / "reports")
+                render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
     def test_personal_review_converts_recomputation_parser_errors_to_input_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -756,7 +761,7 @@ class ReportDocumentTests(unittest.TestCase):
             document = personal_document(root)
             with patch("wcl_raid_coach.comparison.analyze_player", side_effect=KeyError("secret-field")):
                 with self.assertRaisesRegex(InputError, "could not be verified"):
-                    render_report_document(document, root / "reports")
+                    render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
     def test_rejects_stale_analysis_schema_and_snapshot_identity_mismatches(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -767,7 +772,7 @@ class ReportDocumentTests(unittest.TestCase):
             analysis["schema_version"] = 2
             analysis_ref |= _write_source(root, "schema-2-analysis.json", analysis)
             with self.assertRaisesRegex(InputError, "unsupported schema version"):
-                render_report_document(document, root / "reports")
+                render_report_document(document, root / "reports", workflow_registry_dir=root / "personal-workflows")
 
         mutations = (
             (lambda document: document.__setitem__("snapshot_id", "0" * 64), "Snapshot"),
@@ -879,7 +884,7 @@ class ReportDocumentTests(unittest.TestCase):
 
     def test_renders_personal_review_without_inventing_claims(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            result = render_report_document(personal_document(Path(temporary)), Path(temporary) / "reports")
+            result = render_report_document(personal_document(Path(temporary)), Path(temporary) / "reports", workflow_registry_dir=Path(temporary) / "personal-workflows")
             html = Path(result["html_path"]).read_text(encoding="utf-8")
 
         self.assertIn("Player", html)
@@ -922,7 +927,7 @@ class ReportDocumentTests(unittest.TestCase):
 
     def test_personal_review_always_expands_four_dimensions_before_comparison_details(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            result = render_report_document(personal_document(Path(temporary)), Path(temporary) / "reports")
+            result = render_report_document(personal_document(Path(temporary)), Path(temporary) / "reports", workflow_registry_dir=Path(temporary) / "personal-workflows")
             html = Path(result["html_path"]).read_text(encoding="utf-8")
 
         dimensions = ("output", "survival", "mechanics", "team_contribution")
@@ -1098,6 +1103,7 @@ class ReportDocumentTests(unittest.TestCase):
                         "specialization": [],
                     },
                     "sample_count": 3,
+                    "reference_samples": [{}, {}, {}],
                     "confidence": "low",
                     "stable_pattern_claims_allowed": True,
                     "mechanic_anchors": [{

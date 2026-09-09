@@ -148,27 +148,27 @@ Report Document 只能包含对应类型允许的结构化字段，不得包含�
 
 裸报告 URL 先执行 `inspect`，让用户明确选择一个 Boss Attempt 和一个参与者。完整 URL 仍须确认 URL 中的 fight/source 指向预期对象。
 
-Boss Attempt 和玩家一经确认，先用尚不存在的 `<PERSONAL_ANALYSIS_PATH>` 初始化 canonical workflow；这一步必须早于目标 Complete Bundle 的 `prepare`/`review`。先解析或复用所需 Ranking Cohort 与两个 Profile，然后调用：
+Boss Attempt 和玩家一经确认，立即用包含数字 `fight` 和 `source` 的已选 URL 初始化 canonical workflow；这一步必须早于目标 Complete Bundle retrieval、Ranking Candidate discovery 和 Profile retrieval/synthesis，且不需要 Analysis、Complete Bundle、Ranking Cohort 或 Profile：
 
 ```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-workflow "<PERSONAL_ANALYSIS_PATH>" --cohort "<COHORT_PATH>" --encounter-profile "<ENCOUNTER_PROFILE>" --specialization-profile "<SPECIALIZATION_PROFILE>"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-workflow-init "https://www.warcraftlogs.com/reports/<REPORT_CODE>#fight=<FIGHT_ID>&source=<ACTOR_ID>"
 ```
 
-首次结果预期为 `blocked`、`retrieval: in_progress` 和 `personal_analysis: null`；保存其 `workflow_path`。随后准备目标 Complete Bundle 并计算个人日志事实：
+首次结果预期为 `blocked`、`retrieval: in_progress`、`agent_synthesis: unavailable` 和 `personal_analysis: null`；保存其 `workflow_path`。随后检索或创建所需 Ranking Cohort 与两个 Profile、准备目标及候选 Complete Bundle，并计算个人日志事实：
 
 ```text
 cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach review "<MANIFEST_PATH>" --index "<REPORT_INDEX_PATH>" --source-id <ACTOR_ID> --partition-id <PARTITION_ID>
 ```
 
-`coach review` 只产生结构化日志事实。优先复用同 encounter、difficulty、class、spec、partition 且 Profile ID/source 一致的现有 Encounter Benchmark；3 到 9 个 Reference Samples 的低置信度 Benchmark 可立即使用，不为凑到 10 个而补样本。没有可复用 Benchmark 时，Personal Review 以 3 个通过 Complete Bundle、硬条件和 Encounter Profile eligibility 的 Reference Samples 为目标。Ranking Candidate 不是 Reference Sample；候选被拒后只在预算允许时补下一个。
+`coach review` 只产生结构化日志事实。优先复用同 encounter、difficulty、class、spec、partition 且 Profile ID/source 一致的现有 Encounter Benchmark；已有的 3 到 10 个 Reference Samples 全部立即使用，不为凑到 10 个而等待或补样本。3 到 9 个为低置信度，10 个为正常置信度；`coach candidates` 的上限是 10。没有可复用 Benchmark 时，Personal Review 以 3 个通过 Complete Bundle、硬条件和 Encounter Profile eligibility 的 Reference Samples 为目标。Ranking Candidate 不是 Reference Sample；候选被拒后只在预算允许时补下一个。
 
-计时从上述 selection 后的首次 blocked workflow 开始。CLI 用系统 monotonic clock 生成起点、累计 elapsed 和内部 stage timings；公开 CLI 没有原始 timing 参数。后续调用必须传入 canonical previous workflow，跨调用墙钟间隔会保守计入 elapsed；系统重启或时钟连续性无法证明时停止目标判定。workflow/finalization 的 `stage_progress` 由 CLI 推导 retrieval、Agent synthesis、validation 和 rendering 状态，不接受调用方 timing。CLI 无法直接观测 Agent 建议合成持续时间，因此交付将 `agent_synthesis` 标为 `unavailable`，即使 elapsed 小于 180/30 秒也令 `target_met: null`。`wcl_network_measurement` 仍为 `not_measured`。
+计时从上述 selection 后的初始化 workflow 开始。CLI 用系统 monotonic clock 生成起点、累计 elapsed 和内部 stage timings；公开 CLI 没有原始 timing 参数。Ranking Candidate discovery、Profile retrieval/synthesis、Complete Bundle retrieval 和进程外 Agent 建议合成都发生在初始化与后续调用之间，其墙钟间隔会保守计入 elapsed；系统重启或时钟连续性无法证明时停止目标判定。workflow 的 `retrieval` 在上述 artifact 尚未齐备时为 `in_progress`，Agent synthesis 尚不可观测时为 `unavailable`，玩家及 Profile 齐备后为 `in_progress`；finalization 将其标为 `unavailable`。因此即使总 elapsed 小于 180/30 秒，最终 `target_met` 仍为 `null`。`wcl_network_measurement` 仍为 `not_measured`。
 
 ```text
-cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-workflow "<PERSONAL_ANALYSIS_PATH>" --cohort "<COHORT_PATH>" --encounter-profile "<ENCOUNTER_PROFILE>" --specialization-profile "<SPECIALIZATION_PROFILE>" --reference-analysis "<REFERENCE_ANALYSIS>" --benchmark "<EXISTING_BENCHMARK>" --previous-workflow "<PREVIOUS_WORKFLOW>" --progress "<CHECKPOINT_PATH>"
+cd "<SKILL_ROOT>" && python -m wcl_raid_coach coach personal-workflow "<PERSONAL_ANALYSIS_PATH>" --cohort "<COHORT_PATH>" --encounter-profile "<ENCOUNTER_PROFILE>" --specialization-profile "<SPECIALIZATION_PROFILE>" --reference-analysis "<REFERENCE_ANALYSIS>" --benchmark "<EXISTING_BENCHMARK>" --previous-workflow "<INITIAL_OR_LATEST_WORKFLOW>" --progress "<CHECKPOINT_PATH>"
 ```
 
-只有 selection 后的初始化调用省略 `--previous-workflow`；后续 retrieval、复用、Reference Sample 校验和 Benchmark 建立都必须传入它。候选失败时用稳定身份记录，例如 `--rejection ABC123:7:42=player_death`。`coach candidates` 达到目标时保留最后一次查询的完整去重页，同页剩余候选可按稳定身份继续消费。每次返回下一候选前，CLI 都先按 20 秒校验/渲染预留检查预算。不要启动新的可选工作后再检查。已在途 WCL 请求和限流等待不能取消，可能越过目标；完成后再次调用 workflow 会记录实际 elapsed 并停止后续调度。只有 Ranking Cohort 的分页 metadata 明确证明无更多页时才记录 `ranking_page_exhausted`，否则候选用尽会记录 `ranking_cohort_refresh_required`。`completion_state` 为 `acquiring` 时只处理 `next_ranking_candidate`；为 `comparison_ready` 时运行 `coach compare` 和完整报告；为 `partial_ready` 时不得创建 Benchmark/Comparison。
+`personal-workflow` 每次调用都必须传入初始化或最新 canonical workflow。CLI 将 Personal Analysis 的 WCL Report、Boss Attempt 和 actor 与初始化的 `selected_identity` 精确绑定，再验证 Cohort、Profiles、Reference Samples 和 Benchmark 身份。候选失败时用稳定身份记录，例如 `--rejection ABC123:7:42=player_death`。`coach candidates` 达到目标时保留最后一次查询的完整去重页，同页剩余候选可按稳定身份继续消费。每次返回下一候选前，CLI 都先按 20 秒校验/渲染预留检查预算。不要启动新的可选工作后再检查。已在途 WCL 请求和限流等待不能取消，可能越过目标；完成后再次调用 workflow 会记录实际 elapsed 并停止后续调度。只有 Ranking Cohort 的分页 metadata 明确证明无更多页时才记录 `ranking_page_exhausted`，否则候选用尽会记录 `ranking_cohort_refresh_required`。`completion_state` 为 `acquiring` 时只处理 `next_ranking_candidate`；为 `comparison_ready` 时运行 `coach compare` 和完整报告；为 `partial_ready` 时不得创建 Benchmark/Comparison。
 
 `--progress` 只按路径和 SHA-256 保留 Raw Page/checkpoint 等进度引用，不把它声明为 Complete Bundle。目标 Personal Analysis 或其 Complete Bundle 不可用时，workflow 输出 `blocked`、`player_evidence_incomplete` 和 `personal_analysis: null`；不得运行报告命令。重复调用通过前序 workflow 恢复 Reference Sample 路径和稳定候选状态，不得用样本数或拒绝数推算候选 cursor。系统重启导致 monotonic 基准中断时保留这些进度，记录 `timing_continuity_unavailable` 并停止新的可选采集，而不是伪造连续 elapsed。
 

@@ -30,6 +30,7 @@ def benchmark(encounter_id: int) -> dict:
         "specialization_profile_id": "b" * 64,
         "sources": {"encounter": [], "specialization": []},
         "sample_count": 3,
+        "reference_samples": [{}, {}, {}],
         "confidence": "low",
         "stable_pattern_claims_allowed": True,
         "mechanic_anchors": [{"ability_id": 123, "name": "Mechanic", "observed_anchor_ms": 10000}],

@@ -59,4 +59,4 @@ WCL client secret 只用于 OAuth，不参与本地 Artifact 身份。Ranking Co
 
 归档报告的元数据可能仍然可见，但事件不可访问。只有 WCL 明确表示当前 API 客户端可以访问归档事件时，才能创建 Fight Bundle 或执行 Mechanic Review。
 
-Personal Review 的 canonical workflow 在选定 Boss Attempt/玩家后、目标 Complete Bundle retrieval 前开始；后续 CLI 调用间隔计入 elapsed。WCL 网络本身仍标为 `not_measured`。CLI 无法直接观测进程外 Agent synthesis，因此该阶段为 `unavailable`，最终 `target_met` 为 `null`。
+Personal Review 在选定 Boss Attempt/玩家后立即运行 `coach personal-workflow-init`，早于目标 Complete Bundle retrieval、Ranking Candidate discovery 和 Profile retrieval/synthesis；初始化只持久化所选 report/fight/actor 身份及内部 clock origin。后续 `coach personal-workflow --previous-workflow` 将 Analysis、Ranking Cohort 和 Profiles 绑定到该身份，调用间隔计入 elapsed，所以总 elapsed 覆盖候选/Profile/Agent 工作。WCL 网络仍标为 `not_measured`；Agent synthesis 无法单独计时，finalization 将其标为 `unavailable`，最终 `target_met` 为 `null`。

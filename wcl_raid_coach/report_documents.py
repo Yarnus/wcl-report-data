@@ -16,7 +16,6 @@ from .comparison import compare_player, verify_analysis_evidence
 from .errors import InputError, WclRaidCoachError
 from .guides import verify_guide_snapshot
 from .profiles import validate_profile
-from .personal_workflow import validate_comparison_workflow, validate_partial_workflow
 from .storage import artifact_lock, atomic_write_json, atomic_write_text, read_json, sha256_file
 
 
@@ -29,6 +28,18 @@ EVIDENCE_EXCERPT_FIELDS = {
 MECHANIC_REVIEW_SOURCE_SCHEMA_VERSION = 1
 
 
+def validate_comparison_workflow(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .personal_workflow import validate_comparison_workflow as validate
+
+    return validate(*args, **kwargs)
+
+
+def validate_partial_workflow(*args: Any, **kwargs: Any) -> int:
+    from .personal_workflow import validate_partial_workflow as validate
+
+    return validate(*args, **kwargs)
+
+
 def assemble_personal_review_document(
     analysis_path: Path,
     benchmark_path: Path,
@@ -38,6 +49,7 @@ def assemble_personal_review_document(
     ability_names_metadata_path: Path,
     advice_path: Path | None = None,
     workflow_path: Path,
+    workflow_registry_dir: Path,
     locale: str = "zh-CN",
 ) -> dict[str, Any]:
     if locale not in {"zh-CN", "en"}:
@@ -63,7 +75,9 @@ def assemble_personal_review_document(
     if advice_path is not None:
         paths["coaching_advice"] = advice_path.expanduser().resolve()
     workflow_path = workflow_path.expanduser().resolve()
-    validate_comparison_workflow(workflow_path, analysis_path, benchmark_path)
+    validate_comparison_workflow(
+        workflow_path, analysis_path, benchmark_path, workflow_registry_dir
+    )
     paths["personal_review_workflow"] = workflow_path
     sources = {kind: _read_json_artifact(path, kind) for kind, path in paths.items()}
     sources["ability_names"] = ability_names
@@ -168,7 +182,7 @@ def assemble_personal_review_document(
         ),
     }
     canonical = validate_report_document(document)
-    _verify_personal_sources(canonical, sources)
+    _verify_personal_sources(canonical, sources, workflow_registry_dir)
     return document
 
 
@@ -178,6 +192,7 @@ def assemble_partial_personal_review_document(
     specialization_profile_path: Path,
     *,
     workflow_path: Path,
+    workflow_registry_dir: Path,
     ability_names_path: Path,
     ability_names_metadata_path: Path,
     advice_path: Path | None = None,
@@ -187,7 +202,8 @@ def assemble_partial_personal_review_document(
         raise InputError("Personal Review report locale must be zh-CN or en.")
     workflow_path = workflow_path.expanduser().resolve()
     qualified_sample_count = validate_partial_workflow(
-        workflow_path, analysis_path, encounter_profile_path, specialization_profile_path
+        workflow_path, analysis_path, encounter_profile_path, specialization_profile_path,
+        workflow_registry_dir,
     )
     paths = {
         "personal_analysis": analysis_path.expanduser().resolve(),
@@ -280,7 +296,11 @@ def assemble_partial_personal_review_document(
         ),
     }
     canonical = validate_report_document(document)
-    _verify_personal_sources(canonical, sources | {"ability_names": ability_names, "ability_names_metadata": metadata})
+    _verify_personal_sources(
+        canonical,
+        sources | {"ability_names": ability_names, "ability_names_metadata": metadata},
+        workflow_registry_dir,
+    )
     return document
 
 
@@ -960,19 +980,14 @@ def _validate_guide_document(document: dict[str, Any], common: dict[str, Any]) -
     }
 
 
-def render_report_document(value: Any, output_dir: Path) -> dict[str, Any]:
+def render_report_document(
+    value: Any, output_dir: Path, *, workflow_registry_dir: Path | None = None
+) -> dict[str, Any]:
     document = validate_report_document(value)
-    verification = _validate_source_artifacts(document)
-    html = (
-        _render_personal_html(document, verification)
-        if document["document_type"] == "personal_review"
-        else {
-            "mechanic_review": _render_mechanic_html,
-            "raid_guide": _render_guide_html,
-        }[document["document_type"]](document)
-    )
-    html_sha256 = hashlib.sha256(html.encode("utf-8")).hexdigest()
     output_dir = output_dir.expanduser().resolve()
+    verification = _validate_source_artifacts(document, workflow_registry_dir)
+    html = _render_validated_document(document, verification)
+    html_sha256 = hashlib.sha256(html.encode("utf-8")).hexdigest()
     html_path = output_dir / f"{html_sha256}.html"
     index_path = output_dir / f"{html_sha256}.json"
     index = {
@@ -1005,6 +1020,60 @@ def render_report_document(value: Any, output_dir: Path) -> dict[str, Any]:
     }
 
 
+def validate_rendered_report_index(
+    value: Any,
+    html_bytes: bytes,
+    html_file: str,
+    workflow_registry_dir: Path | None = None,
+) -> dict[str, Any]:
+    index = _object(value, "Rendered Report Document index")
+    _fields(index, "Rendered Report Document index", {"schema_version", "document", "render"})
+    if type(index["schema_version"]) is not int or index["schema_version"] != 1:
+        raise InputError("Rendered Report Document index schema_version must be 1.")
+    stored_document = _object(index["document"], "Rendered Report Document")
+    document = validate_report_document({
+        key: item for key, item in stored_document.items() if key != "document_id"
+    })
+    if stored_document != document:
+        raise InputError("Rendered Report Document has an invalid canonical identity.")
+    render = _object(index["render"], "Rendered Report Document render metadata")
+    _fields(
+        render,
+        "Rendered Report Document render metadata",
+        {"renderer_schema_version", "html_file", "html_sha256"},
+    )
+    verification = _validate_source_artifacts(document, workflow_registry_dir)
+    expected_bytes = _render_validated_document(document, verification).encode("utf-8")
+    html_sha256 = hashlib.sha256(expected_bytes).hexdigest()
+    if (
+        type(render["renderer_schema_version"]) is not int
+        or render["renderer_schema_version"] != RENDERER_SCHEMA_VERSION
+        or render["html_file"] != html_file
+        or render["html_file"] != f"{html_sha256}.html"
+        or render["html_sha256"] != html_sha256
+        or html_bytes != expected_bytes
+    ):
+        raise InputError("Rendered Report Document index or HTML does not match its validated document.")
+    return {
+        "document_id": document["document_id"],
+        "document_schema_version": DOCUMENT_SCHEMA_VERSION,
+        "renderer_schema_version": RENDERER_SCHEMA_VERSION,
+        "html_sha256": html_sha256,
+        "document": document,
+    }
+
+
+def _render_validated_document(
+    document: dict[str, Any], verification: dict[str, bool]
+) -> str:
+    if document["document_type"] == "personal_review":
+        return _render_personal_html(document, verification)
+    return {
+        "mechanic_review": _render_mechanic_html,
+        "raid_guide": _render_guide_html,
+    }[document["document_type"]](document)
+
+
 def _validate_sources(value: Any, expected_kinds: set[str]) -> list[dict[str, str]]:
     sources = _list(value, "Report Document source_artifacts", nonempty=True, maximum=20)
     result = []
@@ -1025,7 +1094,9 @@ def _validate_sources(value: Any, expected_kinds: set[str]) -> list[dict[str, st
     return result
 
 
-def _validate_source_artifacts(document: dict[str, Any]) -> dict[str, bool]:
+def _validate_source_artifacts(
+    document: dict[str, Any], workflow_registry_dir: Path | None
+) -> dict[str, bool]:
     artifacts: dict[str, dict[str, Any]] = {}
     try:
         for source in document["source_artifacts"]:
@@ -1055,7 +1126,9 @@ def _validate_source_artifacts(document: dict[str, Any]) -> dict[str, bool]:
             _verify_mechanic_source(document, artifacts["mechanic_review"])
             return {"mechanic_source": True}
         elif document["document_type"] == "personal_review":
-            _verify_personal_sources(document, artifacts)
+            if workflow_registry_dir is None:
+                raise InputError("Personal Review rendering requires the configured workflow registry.")
+            _verify_personal_sources(document, artifacts, workflow_registry_dir)
             comparison_available = document["comparison"].get("status") != "unavailable"
             return {
                 "complete_bundle": True, "hard_conditions": comparison_available,
@@ -1145,10 +1218,16 @@ def _verify_mechanic_source(document: dict[str, Any], source: dict[str, Any]) ->
                 raise InputError("Report Document evidence excerpt does not match a source anomaly.")
 
 
-def _verify_personal_sources(document: dict[str, Any], sources: dict[str, dict[str, Any]]) -> None:
+def _verify_personal_sources(
+    document: dict[str, Any],
+    sources: dict[str, dict[str, Any]],
+    workflow_registry_dir: Path,
+) -> None:
     analysis = sources["personal_analysis"]
     if document["comparison"].get("status") == "unavailable":
-        _verify_partial_personal_sources(document, sources, analysis)
+        _verify_partial_personal_sources(
+            document, sources, analysis, workflow_registry_dir
+        )
         return
     benchmark = sources["encounter_benchmark"]
     workflow_ref = next((item for item in document["source_artifacts"] if item["kind"] == "personal_review_workflow"), None)
@@ -1157,7 +1236,8 @@ def _verify_personal_sources(document: dict[str, Any], sources: dict[str, dict[s
     analysis_ref = next(item for item in document["source_artifacts"] if item["kind"] == "personal_analysis")
     benchmark_ref = next(item for item in document["source_artifacts"] if item["kind"] == "encounter_benchmark")
     validate_comparison_workflow(
-        Path(workflow_ref["path"]), Path(analysis_ref["path"]), Path(benchmark_ref["path"])
+        Path(workflow_ref["path"]), Path(analysis_ref["path"]), Path(benchmark_ref["path"]),
+        workflow_registry_dir,
     )
     comparison = sources["comparison"]
     ability_names = sources["ability_names"]
@@ -1300,7 +1380,10 @@ def _verify_personal_sources(document: dict[str, Any], sources: dict[str, dict[s
 
 
 def _verify_partial_personal_sources(
-    document: dict[str, Any], sources: dict[str, dict[str, Any]], analysis: dict[str, Any]
+    document: dict[str, Any],
+    sources: dict[str, dict[str, Any]],
+    analysis: dict[str, Any],
+    workflow_registry_dir: Path,
 ) -> None:
     workflow_ref = next(item for item in document["source_artifacts"] if item["kind"] == "personal_review_workflow")
     qualified_sample_count = validate_partial_workflow(
@@ -1308,6 +1391,7 @@ def _verify_partial_personal_sources(
         Path(next(item["path"] for item in document["source_artifacts"] if item["kind"] == "personal_analysis")),
         Path(next(item["path"] for item in document["source_artifacts"] if item["kind"] == "encounter_profile")),
         Path(next(item["path"] for item in document["source_artifacts"] if item["kind"] == "specialization_profile")),
+        workflow_registry_dir,
     )
     if document["comparison"].get("qualified_sample_count") != qualified_sample_count:
         raise InputError("Partial Personal Review sample count does not match its workflow artifact.")

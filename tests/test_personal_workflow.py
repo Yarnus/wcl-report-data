@@ -16,6 +16,7 @@ from wcl_raid_coach.__main__ import main
 from wcl_raid_coach.personal_workflow import (
     _content_id,
     _persist_content_artifact,
+    initialize_personal_review,
     orchestrate_personal_review,
     verify_personal_workflow,
 )
@@ -81,6 +82,12 @@ class PersonalWorkflowTests(unittest.TestCase):
         defaults.update(kwargs)
         clock = defaults["clock"]
         defaults.setdefault("wall_clock", lambda: 1_000_000 + clock.value)
+        if defaults.get("previous_workflow_path") is None:
+            origin = initialize_personal_review(
+                "ABC9", 9, 10, root / "outputs",
+                clock=clock, wall_clock=defaults["wall_clock"],
+            )
+            defaults["previous_workflow_path"] = Path(origin["workflow_path"])
         analysis_value = json.loads(analysis.read_text(encoding="utf-8")) if analysis.is_file() else None
         analysis_ref = {
             "path": str(analysis.resolve()),
@@ -127,7 +134,10 @@ class PersonalWorkflowTests(unittest.TestCase):
             cohort = identify_cohort({
                 "schema_version": 2,
                 "filters": target["comparison_identity"],
-                "pagination": {"exhausted": True},
+                "pagination": {
+                    "first_page": 1, "last_page": 1,
+                    "has_more_pages": False, "truncated": False, "exhausted": True,
+                },
                 "eligible_recent_candidates": [
                     {
                         "report_code": value["identity"]["report_code"],
@@ -145,6 +155,10 @@ class PersonalWorkflowTests(unittest.TestCase):
                 target_path, cohort_path, encounter, specialization, root / "outputs",
                 reference_analysis_paths=[path for path, _ in references], benchmark_paths=[],
                 candidate_rejections=[], blockers=[],
+                previous_workflow_path=Path(initialize_personal_review(
+                    target["identity"]["report_code"], target["identity"]["fight_id"],
+                    target["player"]["actor_id"], root / "outputs",
+                )["workflow_path"]),
             )
             benchmark_path = Path(workflow["workflow"]["artifacts"]["encounter_benchmark"]["path"])
             benchmark = json.loads(benchmark_path.read_text(encoding="utf-8"))
@@ -153,10 +167,14 @@ class PersonalWorkflowTests(unittest.TestCase):
             document = assemble_personal_review_document(
                 target_path, benchmark_path, comparison_path,
                 workflow_path=Path(workflow["workflow_path"]),
+                workflow_registry_dir=root / "outputs" / "personal-workflows",
                 ability_names_path=mapping,
                 ability_names_metadata_path=metadata,
             )
-            report = render_report_document(document, root / "reports")
+            report = render_report_document(
+                document, root / "outputs" / "reports",
+                workflow_registry_dir=root / "outputs" / "personal-workflows",
+            )
             stale_index = Path(references[0][1]["evidence"]["index_path"])
             stale_index.write_text(stale_index.read_text(encoding="utf-8") + "\n", encoding="utf-8")
 
@@ -164,11 +182,15 @@ class PersonalWorkflowTests(unittest.TestCase):
                 assemble_personal_review_document(
                     target_path, benchmark_path, comparison_path,
                     workflow_path=Path(workflow["workflow_path"]),
+                    workflow_registry_dir=root / "outputs" / "personal-workflows",
                     ability_names_path=mapping,
                     ability_names_metadata_path=metadata,
                 )
             with self.assertRaisesRegex(InputError, "changed|hash|provenance"):
-                render_report_document(document, root / "other-reports")
+                render_report_document(
+                    document, root / "outputs" / "other-reports",
+                    workflow_registry_dir=root / "outputs" / "personal-workflows",
+                )
             with self.assertRaisesRegex(InputError, "changed|hash|provenance"):
                 finalize_personal_review_delivery(
                     Path(workflow["workflow_path"]), report, root / "outputs"
@@ -186,10 +208,10 @@ class PersonalWorkflowTests(unittest.TestCase):
         self.assertEqual(result["qualified_reference_samples"], 3)
         self.assertIn("player_death", [item.get("reason") for item in result["candidate_progress"]])
 
-    def test_nine_qualified_samples_are_preserved_by_benchmark_and_reuse(self) -> None:
+    def test_ten_qualified_samples_are_preserved_by_benchmark_and_reuse(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            files = self.setup_files(root, count=9)
+            files = self.setup_files(root, count=10)
             clock = StepClock()
             first = self.invoke(files, root, reference_analysis_paths=files[4], clock=clock)
             benchmark_path = Path(first["workflow"]["artifacts"]["encounter_benchmark"]["path"])
@@ -200,14 +222,22 @@ class PersonalWorkflowTests(unittest.TestCase):
                     previous_workflow_path=Path(first["workflow_path"]),
                 )["workflow"]
 
-        self.assertEqual(len(first["workflow"]["artifacts"]["reference_analyses"]), 9)
-        self.assertEqual(len(benchmark["reference_samples"]), 9)
-        self.assertEqual(benchmark["sample_count"], 9)
-        self.assertEqual(len(second["artifacts"]["reference_analyses"]), 9)
-        self.assertEqual(second["qualified_reference_samples"], 9)
+        self.assertEqual(len(first["workflow"]["artifacts"]["reference_analyses"]), 10)
+        self.assertEqual(len(benchmark["reference_samples"]), 10)
+        self.assertEqual(benchmark["sample_count"], 10)
+        self.assertEqual(benchmark["confidence"], "normal")
+        self.assertEqual(len(second["artifacts"]["reference_analyses"]), 10)
+        self.assertEqual(second["qualified_reference_samples"], 10)
         self.assertTrue(second["benchmark_reused"])
         self.assertEqual(second["budget"]["target_seconds"], 30.0)
         self.assertLess(second["budget"]["elapsed_seconds"], 30.0)
+
+    def test_workflow_rejects_eleven_qualified_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = self.setup_files(root, count=11)
+            with self.assertRaisesRegex(InputError, "maximum of 10"):
+                self.invoke(files, root, reference_analysis_paths=files[4])
 
     def test_workflow_rejects_malformed_reference_analysis_containers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -249,6 +279,31 @@ class PersonalWorkflowTests(unittest.TestCase):
                     "--cohort", str(files[1]), "--encounter-profile", str(files[2]),
                     "--specialization-profile", str(files[3]),
                     "--previous-workflow", str(workflow_path),
+                ])
+            response = json.loads(output.getvalue())
+
+        self.assertEqual(status, 1)
+        self.assertEqual(response["error"], "invalid_input")
+
+    def test_cli_returns_json_input_error_for_malformed_cohort_pagination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = self.setup_files(root)
+            cohort = json.loads(files[1].read_text(encoding="utf-8"))
+            cohort.pop("cohort_id")
+            cohort["pagination"] = None
+            cohort["cohort_id"] = hashlib.sha256(json.dumps(
+                cohort, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode()).hexdigest()
+            files[1].write_text(json.dumps(cohort), encoding="utf-8")
+            origin = initialize_personal_review("ABC9", 9, 10, root / "outputs")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main([
+                    "--data-root", str(root), "coach", "personal-workflow", str(files[0]),
+                    "--cohort", str(files[1]), "--encounter-profile", str(files[2]),
+                    "--specialization-profile", str(files[3]),
+                    "--previous-workflow", origin["workflow_path"],
                 ])
             response = json.loads(output.getvalue())
 
@@ -324,9 +379,41 @@ class PersonalWorkflowTests(unittest.TestCase):
         self.assertIsNone(result["artifacts"]["personal_analysis"])
         self.assertEqual(result["artifacts"]["progress"][0]["path"], str(checkpoint.resolve()))
         self.assertEqual(result["stage_progress"], {
-            "retrieval": "in_progress", "agent_synthesis": "pending",
+            "retrieval": "in_progress", "agent_synthesis": "unavailable",
             "validation": "pending", "rendering": "pending",
         })
+
+    def test_initial_workflow_requires_only_selected_identity_and_continuation_includes_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            clock = StepClock()
+            wall_clock = lambda: 1_000_000 + clock.value
+            initial = initialize_personal_review(
+                "ABC9", 9, 10, root / "outputs", clock=clock, wall_clock=wall_clock
+            )
+            self.assertIsNone(initial["workflow"]["artifacts"]["ranking_cohort"])
+            self.assertIsNone(initial["workflow"]["artifacts"]["personal_analysis"])
+            clock.value = 75
+            continued = self.invoke(
+                self.setup_files(root), root, reference_analysis_paths=[], clock=clock,
+                wall_clock=wall_clock, previous_workflow_path=Path(initial["workflow_path"]),
+            )["workflow"]
+
+        self.assertEqual(continued["selected_identity"], {
+            "report_code": "ABC9", "fight_id": 9, "actor_id": 10,
+        })
+        self.assertGreaterEqual(continued["budget"]["elapsed_seconds"], 75)
+
+    def test_continuation_rejects_analysis_for_different_selected_player(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = self.setup_files(root)
+            initial = initialize_personal_review("ABC9", 9, 11, root / "outputs")
+            with self.assertRaisesRegex(InputError, "selected WCL Report, Boss Attempt, and player"):
+                self.invoke(
+                    files, root, reference_analysis_paths=[],
+                    previous_workflow_path=Path(initial["workflow_path"]),
+                )
 
     def test_reuse_budget_follows_deep_validated_reuse(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
