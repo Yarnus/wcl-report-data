@@ -90,7 +90,7 @@ class DiagnosticsTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, diagnostics.collect() as metrics, patch(
             "wcl_raid_coach.dataset._try_file_lock", side_effect=[BlockingIOError, None]
-        ), patch("wcl_raid_coach.diagnostics.monotonic", side_effect=lambda: clock[0]), patch(
+        ), patch("wcl_raid_coach.dataset._unlock"), patch("wcl_raid_coach.diagnostics.monotonic", side_effect=lambda: clock[0]), patch(
             "wcl_raid_coach.dataset.time.sleep", side_effect=wait
         ):
             with _file_lock(Path(directory) / "lock", timeout_seconds=1, unavailable_message="busy"):
