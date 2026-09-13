@@ -17,6 +17,8 @@ CN 报告链接可直接作为输入，并会规范化为全球站报告链接�
 
 ## 查询
 
+混合报告的主要区域可能是大秘境。仅在 Retail 报告的主要区域不是团本、且有非 Mythic+ Encounter 时，额外请求 `worldData.zones`（包含 difficulty `sizes`），按 Encounter 成员关系解析唯一团本区域。此请求经过现有共享限流和重试；保留原始主要区域，不猜测难度 ID，也不合并多个团本区域。
+
 同一 WCL Report 的明确选择应使用一次批量 `prepare`，共享一次 Report Index 查询；每个 Boss Attempt 仍独立检查采集结束时的 Report Revision。一次候选发现中的 WclClient 按 `(report_code, fight_id)` 在内存复用 actor/fight metadata，每个候选仍独立匹配角色、服务器、职业和专精，歧义身份拒绝。缓存不持久化，也不作为 Complete Bundle 资格或 Report Revision 的证明。
 
 建立 Report Index 时会获取 Report Revision、归档状态、Retail 游戏版本、主 actor 与 ability、战斗参与元数据、报告难度元数据、ranking partition 的 `id`、`name`、`compactName`、`default`，以及 WCL zone encounter 顺序。严格校验并规范化后的 `zone.partitions` 写入不可变 Report Index，供 Personal Analysis 解析比较身份；`zone.encounters` 只作为当前 `inspect` 的选择元数据返回，不写入已有不可变 Report Index。

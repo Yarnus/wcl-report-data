@@ -303,3 +303,6 @@ python -m wcl_raid_coach --diagnostics inspect 'https://www.warcraftlogs.com/rep
 
 诊断按操作统计 WCL/Wago 请求次数、重试、收到的响应正文字节、网络耗时，以及名称映射、Complete Bundle 校验、玩家分析、报告组装/生成和锁等待。它不包含凭据或事件内容，不改变 Personal Review 的 elapsed/`target_met` 语义。测量边界见[性能诊断说明](references/performance.md)。
 同一 OS 用户的 WCL 请求会跨进程协调额度与 HTTP 429 冷却；更换 workspace 或 data/cache root 不会绕过冷却。协调状态位于 `~/.wcl-report-data/api/`，不保存凭据；详见[配置说明](references/setup.md)。
+## 混合报告识别
+
+同一 WCL Report 混有 Mythic+ 和团本时，即使主要区域是大秘境，工具也会通过官方区域的 Encounter 成员关系解析唯一团本区域。只选择团本 Boss Attempt；无法唯一解析时返回错误。难度来自该团本的官方元数据，不使用固定数字映射。

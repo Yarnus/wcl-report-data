@@ -308,3 +308,6 @@ python -m wcl_raid_coach --diagnostics inspect 'https://www.warcraftlogs.com/rep
 
 Diagnostics count WCL/Wago attempts, retries, received response-body bytes and network duration by operation, plus mapping initialization, Complete Bundle validation, player analysis, report assembly/generation and lock waiting. They contain no credentials or event content and do not change Personal Review elapsed/`target_met` semantics. See [measurement boundaries](references/performance.en.md).
 WCL requests coordinate quota and HTTP 429 cooldown across processes belonging to the same OS user. Changing workspace or data/cache roots does not bypass cooldown. Coordination state lives in `~/.wcl-report-data/api/` and contains no credentials; see [setup](references/setup.en.md).
+## Mixed reports
+
+When a WCL Report mixes Mythic+ and raid fights, the tool resolves a unique raid zone through official zone Encounter membership even when the principal zone is a dungeon season. Select only raid Boss Attempts; ambiguous resolution returns an error. Difficulty names come from that raid's official metadata, never a fixed numeric mapping.

@@ -130,7 +130,7 @@ query CurrentRetailRaids {
   worldData {
     zones {
       id name frozen
-      difficulties { id name }
+      difficulties { id name sizes }
       encounters { id name }
       partitions { id name compactName default }
     }
@@ -260,8 +260,35 @@ class WclClient:
         report = report_data.get("report") if isinstance(report_data, dict) else None
         if not isinstance(report, dict):
             raise ApiError("The report does not exist or is not accessible with client credentials.")
+        report = self._resolve_report_raid_zone(report)
         rate_limit = data.get("rateLimitData")
         return report, rate_limit if isinstance(rate_limit, dict) else None
+
+    def _resolve_report_raid_zone(self, report: dict[str, Any]) -> dict[str, Any]:
+        # Report.zone is only the principal zone, not necessarily the raid zone.
+        from .dataset import _is_raid_zone
+
+        master = report.get("masterData")
+        if not isinstance(master, dict) or master.get("gameVersion") != 1 or _is_raid_zone(report.get("zone")):
+            return report
+        fights = report.get("fights")
+        if not isinstance(fights, list) or any(not isinstance(fight, dict) for fight in fights):
+            raise ApiError("WCL returned malformed report fights.")
+        encounters = {fight["encounterID"] for fight in fights
+                      if type(fight.get("encounterID")) is int and fight["encounterID"] > 0
+                      and fight.get("keystoneLevel") is None}
+        if not encounters:
+            return report
+        candidates = []
+        for zone in self.fetch_raid_zones():
+            members = zone.get("encounters")
+            if not isinstance(members, list) or any(not isinstance(item, dict) for item in members):
+                raise ApiError("WCL returned malformed zone encounters.")
+            if _is_raid_zone(zone) and encounters <= {item.get("id") for item in members if type(item.get("id")) is int}:
+                candidates.append(zone)
+        if len(candidates) != 1:
+            raise ApiError("Cannot uniquely resolve the raid zone for this mixed WCL Report.")
+        return report | {"principal_zone": report.get("zone"), "zone": candidates[0]}
 
     def fetch_events_page(
         self,

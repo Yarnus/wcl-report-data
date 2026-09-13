@@ -31,6 +31,8 @@ Fight Bundle 还包含一个数字 `fight_id`。不同 Report Revision 的文件
 
 战斗的 `difficulty` 是 WCL 返回的原始数字 ID。消费者必须使用同一报告中的 `report.zone.difficulties` 解析它，不能使用静态全局映射。`inspect` 返回的精简 `selected_fight` 和 `fight_choices` 包含解析后的 `difficulty_name`；无法匹配时返回 `null`，不能猜测难度名称。
 
+若 Retail 报告的主要区域不是团本，但包含非 Mythic+ Encounter，客户端通过官方 `worldData.zones` 查找同时包含这些 Encounter 的唯一团本区域，作为解析后的 `report.zone`；原始主要区域保存在 `report.principal_zone`。无匹配或多匹配时拒绝，不合并多个区域的难度表。普通团本和纯 Mythic+ 报告不触发此补充查询。
+
 ## Fight Bundle
 
 `manifest.json` 最后写入。它存在且 `complete: true` 表示：

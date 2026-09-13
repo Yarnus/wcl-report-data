@@ -454,6 +454,8 @@ class DatasetService:
             "abilities": (report.get("masterData") or {}).get("abilities") or [],
             "fights": fights,
         }
+        if "principal_zone" in report:
+            index["report"]["principal_zone"] = report["principal_zone"]
         index_path = self.store.write_index(index)
         difficulty_names = {
             item.get("id"): item.get("name")

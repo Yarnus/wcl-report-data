@@ -24,9 +24,9 @@ def report_fixture() -> dict:
             "id": 53,
             "name": "The Venomous Abyss",
             "difficulties": [
-                {"id": 3, "name": "Normal"},
-                {"id": 4, "name": "Heroic"},
-                {"id": 5, "name": "Mythic"},
+                {"id": 3, "name": "Normal", "sizes": [10, 30]},
+                {"id": 4, "name": "Heroic", "sizes": [10, 30]},
+                {"id": 5, "name": "Mythic", "sizes": [20]},
             ],
             "encounters": [
                 {"id": encounter_id, "name": name_en}

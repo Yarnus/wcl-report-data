@@ -59,6 +59,45 @@ class WclClientTests(unittest.TestCase):
     def make_client(self, **kwargs) -> WclClient:
         return WclClient(Credentials("client-id", "client-secret", "test"), **kwargs)
 
+    def test_mixed_report_resolves_raid_zone_from_encounter_membership(self):
+        client = self.make_client()
+        client._update_rate_limit({"limitPerHour": 3600, "pointsSpentThisHour": 0, "pointsResetIn": 3600})
+        principal = {"id": 55, "difficulties": [{"id": 10, "name": "Dungeon", "sizes": [5]}]}
+        raid = {"id": 53, "difficulties": [{"id": 4, "name": "Heroic", "sizes": [10, 30]}],
+                "encounters": [{"id": 3492}], "partitions": []}
+        report = {"code": "AbC123", "masterData": {"gameVersion": 1}, "zone": principal,
+                  "fights": [{"encounterID": 12923, "keystoneLevel": 10},
+                             {"encounterID": 3492, "keystoneLevel": None, "difficulty": 4}]}
+        with patch.object(client, "graphql", return_value={"reportData": {"report": report}, "rateLimitData": {"limitPerHour": 3600, "pointsSpentThisHour": 0, "pointsResetIn": 3600}}), \
+                patch.object(client, "fetch_raid_zones", return_value=[raid]):
+            actual, _ = client.fetch_report("AbC123")
+        self.assertEqual(actual["zone"]["id"], 53)
+        self.assertEqual(actual["principal_zone"], principal)
+        self.assertEqual(report["zone"], principal)
+
+    def test_mixed_zone_resolution_rejects_missing_and_ambiguous_membership(self):
+        client = self.make_client()
+        report = {"masterData": {"gameVersion": 1}, "zone": {"id": 55},
+                  "fights": [{"encounterID": 3492, "keystoneLevel": None}]}
+        raid = {"id": 53, "difficulties": [{"id": 4, "name": "Heroic", "sizes": [20]}],
+                "encounters": [{"id": 3492}]}
+        for zones in ([], [raid, raid | {"id": 54}], [{"encounters": None}]):
+            with self.subTest(zones=zones), patch.object(client, "fetch_raid_zones", return_value=zones):
+                with self.assertRaises(ApiError):
+                    client._resolve_report_raid_zone(report)
+
+    def test_pure_dungeon_and_existing_raid_do_not_fetch_world_metadata(self):
+        client = self.make_client()
+        for report in (
+            {"masterData": {"gameVersion": 1}, "zone": {"id": 55},
+             "fights": [{"encounterID": 12923, "keystoneLevel": 10}]},
+            {"masterData": {"gameVersion": 1}, "zone": {
+                "id": 53, "difficulties": [{"sizes": [20]}]}},
+        ):
+            with patch.object(client, "fetch_raid_zones") as fetch:
+                self.assertIs(client._resolve_report_raid_zone(report), report)
+                fetch.assert_not_called()
+
     def test_candidate_metadata_reuse_still_checks_each_unique_identity(self):
         client = self.make_client()
         report = {"masterData": {"actors": [

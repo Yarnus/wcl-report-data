@@ -75,3 +75,6 @@ Run `coach personal-workflow-init` immediately after Boss Attempt/player selecti
 ## Optional request diagnostics
 
 The global `--diagnostics` option separately measures HTTP attempts, received body bytes and monotonic network duration for OAuth, quota probes, GraphQL and retries in this invocation. First/last valid quota snapshots are observations and cannot exclude consumption by other clients. This does not change workflow `wcl_network_measurement` or `target_met`; see [measurement boundaries](performance.en.md).
+## Mixed-report metadata
+
+A mixed report's principal zone may be a dungeon season. Only for a Retail report with a non-raid principal zone and non-Mythic+ Encounters, request `worldData.zones` (including difficulty `sizes`) to resolve exactly one raid zone by Encounter membership. This supplemental request uses existing shared scheduling and retries. Preserve the principal zone, never guess difficulty IDs, and never merge multiple raid zones.
