@@ -27,6 +27,6 @@ class BenchmarkTests(unittest.TestCase):
                     for operation in ("OAuth", "ReportIndex"):
                         self.assertEqual(network[operation]["attempts"], 1)
                     self.assertEqual(network["ReportRevision"]["attempts"], 3)
-                self.assertGreater(result["wall_seconds"], 0)
-                # Short scenarios can finish within one Windows CPU clock tick.
+                # Short scenarios can finish within one Windows clock tick.
+                self.assertGreaterEqual(result["wall_seconds"], 0)
                 self.assertGreaterEqual(result["cpu_seconds"], 0)
