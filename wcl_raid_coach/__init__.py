@@ -1,3 +1,3 @@
 """Prepare Warcraft Logs raid evidence, reviews, and coaching guides."""
 
-__version__ = "3.4.2"
+__version__ = "3.4.3"
