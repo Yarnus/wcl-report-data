@@ -78,9 +78,8 @@ Skill入口按需读取[机制](workflow-mechanics.md)、[个人复盘](workflow
 纯 `inspect`、`prepare`、`query` 不下载名称映射，stdout 不再包含 `ability_names`。inspect 仅使用已有且通过内容、build 与 hash 校验的 content mapping，否则展示 WCL 原名并返回 `content_names: null`。中文建议和正式输出仍要求各自的有效映射；需要这些输出时才初始化名称数据。
 
 在子命令前加 `--diagnostics` 可向 stderr 输出数值性能诊断，不创建持久诊断文件，不包含凭据或事件内容。首次名称映射和 Complete Bundle 缓存命中的测量应分开记录；详见[性能诊断](performance.md)。stdout 仍是原有 JSON。
-## 同一 OS 用户的 WCL 协调状态
+## 请求与数据复用
 
-固定目录 `~/.wcl-report-data/api/` 保存 `schedule.lock` 和原子写入的 `state.json`，独立于 workspace、data/cache root 与凭据。所有本工具的凭据共用一把锁；不假定 WCL 按 client ID 隔离额度。状态仅含额度观测、观测/重置相关时间、保守扣除、冷却与请求中断标志，不保存 token、secret 或请求/事件正文。`cache clear` 不删除此目录。
+HTTP 429 直接返回 `wcl_rate_limit`，不自动重试或保存本地冷却。旧 `~/.wcl-report-data/api/state.json` 和 `schedule.lock` 不再读取，重启或系统时钟变化不会通过这些文件阻塞请求，无需清理文件或运行 `doctor` 解锁。`doctor` 仍用于检查凭据、存储和 API 连通性。
 
-锁顺序为已有 dataset/cache 或 artifact lock，再到进程内 token lock，最后到共享 HTTP 文件锁；共享入口内不会再次认证或递归请求。POSIX 和 Windows 沿用现有 OS 文件锁，进程退出自动释放，等待最多 10 秒。冷却不通过换 data root 或重启 CLI 解除；到期后由协调 probe 恢复。状态损坏或时钟异常时返回 `wcl_rate_limit`，保留现有数据进度。详见[API 说明](wcl-api.md)。
-这里的 `~` 指 OS 注册的用户目录：POSIX 使用 UID 的 passwd 记录，Windows 使用系统 Profile folder API；不会因 `HOME` 或 `USERPROFILE` 环境变量变化而改变共享位置。
+同一数据目录中的 Report/cache 锁继续协调 `prepare`：同一 Report Revision 的 Complete Bundle 通过校验后复用，未完成下载从 Raw Page 检查点续传。报告元数据仍从 API 查询，以识别 Report Revision 变化；不同 data/cache root 不共享数据去重。详见[API 说明](wcl-api.md)。

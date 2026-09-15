@@ -214,7 +214,6 @@ def scenario(root, name):
 def measure(name):
     with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
         root = Path(directory)
-        stack.enter_context(patch("wcl_raid_coach.api_schedule.coordination_root", return_value=root / "coordination"))
         transport = Transport(mechanics=name in ("mechanics_followups", "triage"))
         for module in ("api", "ability_names", "content_names"):
             stack.enter_context(patch(f"wcl_raid_coach.{module}.urlopen", side_effect=transport))

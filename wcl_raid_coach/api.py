@@ -8,8 +8,6 @@ import ssl
 import threading
 import time
 import zlib
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -20,14 +18,11 @@ from urllib.request import Request, urlopen
 from .config import Credentials
 from .errors import ApiError, RateLimitError
 from . import diagnostics
-from .api_schedule import ApiSchedule
 
 
 TOKEN_URL = "https://www.warcraftlogs.com/oauth/token"
 API_URL = "https://www.warcraftlogs.com/api/v2/client"
 RETRYABLE_HTTP_STATUSES = {500, 502, 503, 504}
-ESTIMATED_POINTS_PER_REQUEST = 10.0
-REPORT_RESERVATION_POINTS = 500.0
 
 
 REPORT_QUERY = """
@@ -184,16 +179,9 @@ class WclClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
-        self.request_reservation_points = ESTIMATED_POINTS_PER_REQUEST * (max_retries + 1)
         self._token: str | None = None
         self._token_expiry = 0.0
         self._token_lock = threading.Lock()
-        self._rate_limit_lock = threading.Lock()
-        self._rate_limit_snapshot: dict[str, Any] | None = None
-        self._rate_limit_generation = 0
-        self._reserved_points = 0.0
-        self._estimated_spent_points = 0.0
-        self._rate_limit_tripped = threading.Event()
         self._candidate_metadata: dict[tuple[str, int], dict[str, Any]] = {}
 
     def token(self) -> str:
@@ -249,13 +237,11 @@ class WclClient:
         if not isinstance(data, dict):
             raise ApiError("WCL GraphQL response did not contain a data object.")
         if isinstance(data.get("rateLimitData"), dict):
-            self._update_rate_limit(data["rateLimitData"], observed=payload.get("_shared_quota") is not True)
+            self._update_rate_limit(data["rateLimitData"])
         return data
 
     def fetch_report(self, code: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        self._ensure_circuit()
-        with self.reserve_api_points(required_points=REPORT_RESERVATION_POINTS):
-            data = self.graphql(REPORT_QUERY, {"code": code})
+        data = self.graphql(REPORT_QUERY, {"code": code})
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
         if not isinstance(report, dict):
@@ -298,18 +284,16 @@ class WclClient:
         end_time: float,
         limit: int = 10_000,
     ) -> dict[str, Any]:
-        self._ensure_circuit()
-        with self.reserve_api_points():
-            data = self.graphql(
-                EVENT_QUERY,
-                {
-                    "code": code,
-                    "fightIDs": [fight_id],
-                    "startTime": start_time,
-                    "endTime": end_time,
-                    "limit": limit,
-                },
-            )
+        data = self.graphql(
+            EVENT_QUERY,
+            {
+                "code": code,
+                "fightIDs": [fight_id],
+                "startTime": start_time,
+                "endTime": end_time,
+                "limit": limit,
+            },
+        )
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
         if not isinstance(report, dict):
@@ -328,19 +312,17 @@ class WclClient:
         filter_expression: str,
         limit: int = 10_000,
     ) -> dict[str, Any]:
-        self._ensure_circuit()
-        with self.reserve_api_points():
-            data = self.graphql(
-                MECHANIC_EVENT_QUERY,
-                {
-                    "code": code,
-                    "fightIDs": [fight_id],
-                    "startTime": start_time,
-                    "endTime": end_time,
-                    "filterExpression": filter_expression,
-                    "limit": limit,
-                },
-            )
+        data = self.graphql(
+            MECHANIC_EVENT_QUERY,
+            {
+                "code": code,
+                "fightIDs": [fight_id],
+                "startTime": start_time,
+                "endTime": end_time,
+                "filterExpression": filter_expression,
+                "limit": limit,
+            },
+        )
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
         if not isinstance(report, dict):
@@ -359,19 +341,17 @@ class WclClient:
         target_id: int,
         limit: int = 10_000,
     ) -> dict[str, Any]:
-        self._ensure_circuit()
-        with self.reserve_api_points():
-            data = self.graphql(
-                FOCUSED_EVENT_QUERY,
-                {
-                    "code": code,
-                    "fightIDs": [fight_id],
-                    "startTime": start_time,
-                    "endTime": end_time,
-                    "targetID": target_id,
-                    "limit": limit,
-                },
-            )
+        data = self.graphql(
+            FOCUSED_EVENT_QUERY,
+            {
+                "code": code,
+                "fightIDs": [fight_id],
+                "startTime": start_time,
+                "endTime": end_time,
+                "targetID": target_id,
+                "limit": limit,
+            },
+        )
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
         if not isinstance(report, dict):
@@ -382,9 +362,7 @@ class WclClient:
         return page
 
     def fetch_report_revision(self, code: str) -> int:
-        self._ensure_circuit()
-        with self.reserve_api_points():
-            data = self.graphql(REVISION_QUERY, {"code": code})
+        data = self.graphql(REVISION_QUERY, {"code": code})
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
         revision = report.get("revision") if isinstance(report, dict) else None
@@ -393,7 +371,6 @@ class WclClient:
         return revision
 
     def rate_limit(self) -> dict[str, Any]:
-        self._ensure_circuit()
         data = self.graphql(RATE_LIMIT_QUERY)
         value = data.get("rateLimitData")
         if not isinstance(value, dict):
@@ -401,9 +378,7 @@ class WclClient:
         return dict(value)
 
     def fetch_raid_zones(self) -> list[dict[str, Any]]:
-        self._ensure_circuit()
-        with self.reserve_api_points():
-            data = self.graphql(CURRENT_RAIDS_QUERY)
+        data = self.graphql(CURRENT_RAIDS_QUERY)
         world = data.get("worldData")
         zones = world.get("zones") if isinstance(world, dict) else None
         if not isinstance(zones, list) or any(not isinstance(item, dict) for item in zones):
@@ -420,19 +395,17 @@ class WclClient:
         spec_name: str,
         page: int = 1,
     ) -> dict[str, Any]:
-        self._ensure_circuit()
-        with self.reserve_api_points():
-            data = self.graphql(
-                RANKINGS_QUERY,
-                {
-                    "encounterID": encounter_id,
-                    "difficulty": difficulty_id,
-                    "partition": partition_id,
-                    "className": class_name,
-                    "specName": spec_name,
-                    "page": page,
-                },
-            )
+        data = self.graphql(
+            RANKINGS_QUERY,
+            {
+                "encounterID": encounter_id,
+                "difficulty": difficulty_id,
+                "partition": partition_id,
+                "className": class_name,
+                "specName": spec_name,
+                "page": page,
+            },
+        )
         world = data.get("worldData")
         encounter = world.get("encounter") if isinstance(world, dict) else None
         rankings = encounter.get("characterRankings") if isinstance(encounter, dict) else None
@@ -451,10 +424,9 @@ class WclClient:
             return None
         key = (code, fight_id)
         if key not in self._candidate_metadata:
-            with self.reserve_api_points():
-                self._candidate_metadata[key] = self.graphql(
-                    CANDIDATE_SOURCE_QUERY, {"code": code, "fightID": fight_id},
-                )
+            self._candidate_metadata[key] = self.graphql(
+                CANDIDATE_SOURCE_QUERY, {"code": code, "fightID": fight_id},
+            )
         data = self._candidate_metadata[key]
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
@@ -487,88 +459,40 @@ class WclClient:
                 continue
             matches.append(actor_id)
         return matches[0] if len(matches) == 1 and isinstance(matches[0], int) else None
-    @contextmanager
-    def reserve_api_points(
-        self, reserve_fraction: float = 0.15, required_points: float | None = None
-    ) -> Iterator[None]:
-        required = self.request_reservation_points if required_points is None else required_points
-        self._ensure_circuit()
-        rate = self._latest_rate_limit()
-        with self._rate_limit_lock:
-            limit = float(rate["limitPerHour"])
-            remaining = (
-                limit
-                - float(rate["pointsSpentThisHour"])
-                - self._estimated_spent_points
-                - self._reserved_points
-            )
-            if remaining - required < max(50.0, limit * reserve_fraction):
-                raise RateLimitError("WCL API points are below the safety reserve; request was not started.")
-            self._reserved_points += required
-            generation = self._rate_limit_generation
-        try:
-            yield
-        finally:
-            with self._rate_limit_lock:
-                self._reserved_points -= required
-                if generation == self._rate_limit_generation:
-                    self._estimated_spent_points += required
-
-    def _latest_rate_limit(self) -> dict[str, Any]:
-        return self.rate_limit()
-
-    def _update_rate_limit(self, value: dict[str, Any], *, observed: bool = True) -> None:
+    def _update_rate_limit(self, value: dict[str, Any]) -> None:
         for field in ("limitPerHour", "pointsSpentThisHour", "pointsResetIn"):
             if isinstance(value.get(field), bool) or not isinstance(value.get(field), (int, float)):
                 raise ApiError(f"WCL rate-limit field {field!r} is missing or invalid.")
-        if observed:
-            diagnostics.quota_snapshot(value)
-        with self._rate_limit_lock:
-            self._rate_limit_snapshot = dict(value)
-            self._estimated_spent_points = 0.0
-            self._rate_limit_generation += 1
-
-    def _ensure_circuit(self) -> None:
-        if self._rate_limit_tripped.is_set():
-            raise RateLimitError("WCL API rate-limit circuit breaker is open; request was not started.")
+        diagnostics.quota_snapshot(value)
 
     def _request_json(self, request: Request, *, operation: str = "OtherHTTP") -> dict[str, Any]:
         if not request.has_header("Accept-Encoding"):
             request.add_header("Accept-Encoding", "gzip")
         for attempt in range(self.max_retries + 1):
             try:
-                with ApiSchedule().attempt(operation) as scheduled:
-                    if scheduled.cached is not None:
-                        return scheduled.cached
-                    with diagnostics.network_attempt(operation, attempt) as measurement:
+                with diagnostics.network_attempt(operation, attempt) as measurement:
+                    try:
+                        with urlopen(request, timeout=self.timeout) as response:
+                            raw = response.read()
+                            measurement["response_body_bytes"] = len(raw)
+                            content_encoding = response.headers.get("Content-Encoding")
+                    except HTTPError as exc:
                         try:
-                            with urlopen(request, timeout=self.timeout) as response:
-                                raw = response.read()
-                                measurement["response_body_bytes"] = len(raw)
-                                content_encoding = response.headers.get("Content-Encoding")
-                        except HTTPError as exc:
+                            error_body = exc.read()
+                        except (OSError, http.client.HTTPException) as body_error:
+                            if isinstance(body_error, http.client.IncompleteRead):
+                                measurement["response_body_bytes"] = len(body_error.partial)
                             if exc.code == 429:
-                                self._rate_limit_tripped.set()
-                                scheduled.rate_limited(exc.headers)
-                            try:
-                                error_body = exc.read()
-                            except (OSError, http.client.HTTPException) as body_error:
-                                if isinstance(body_error, http.client.IncompleteRead):
-                                    measurement["response_body_bytes"] = len(body_error.partial)
-                                if exc.code == 429:
-                                    raise RateLimitError("WCL HTTP 429: response body unavailable.") from body_error
-                                raise
-                            measurement["response_body_bytes"] = len(error_body)
+                                raise RateLimitError("WCL HTTP 429: response body unavailable.") from body_error
                             raise
-                        except http.client.IncompleteRead as exc:
-                            measurement["response_body_bytes"] = len(exc.partial)
-                            raise
-                    payload = _decode_response(raw, content_encoding)
-                    scheduled.observe(payload)
-                    return payload
+                        measurement["response_body_bytes"] = len(error_body)
+                        raise
+                    except http.client.IncompleteRead as exc:
+                        measurement["response_body_bytes"] = len(exc.partial)
+                        raise
+                return _decode_response(raw, content_encoding)
             except HTTPError as exc:
                 if exc.code == 429:
-                    self._rate_limit_tripped.set()
                     detail = error_body.decode("utf-8", errors="replace")
                     raise RateLimitError(f"WCL HTTP 429: {detail[:500]}") from exc
                 if exc.code in RETRYABLE_HTTP_STATUSES and attempt < self.max_retries:

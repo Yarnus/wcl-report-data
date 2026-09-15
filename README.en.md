@@ -204,6 +204,8 @@ Typical users do not configure storage paths. Global `--data-root` and `--cache-
 
 The installed Skill directory contains only program files and documentation. Report Indexes, Complete Bundles, Profiles, tasks, Guide Snapshots, and rendered Report Documents go to the data directory; Raw Pages and resumable checkpoints go to the cache directory. Run `doctor` to read the effective `data_root` and `cache_root` from its JSON output.
 
+WCL API responses determine rate limiting: HTTP 429 returns `wcl_rate_limit` immediately without retries or persisted quota, cooldown, or scheduling clock state. Legacy `~/.wcl-report-data/api/` files are ignored; `doctor` is not needed to unlock requests. Repeated `prepare` validates and reuses Complete Bundles for the same Report Revision, and interrupted collection resumes from existing Raw Page checkpoints. Report metadata is still queried to detect Report Revision changes.
+
 ```text
 reports/<report-code>/
 |-- latest.json

@@ -51,17 +51,15 @@ Focused Evidence Window 使用独立的 `Report.events` 查询，范围是显式
 
 ## 限流
 
-`coach triage` 使用一个 WclClient、一次完整报告元数据查询，并复用内存 token。Mechanic Review 完成后检查 Report Revision；每个 Focused Evidence Window 开始前再查 revision，分页完成后再次检查。窗口沿用 targetID、固定范围、显式 null 分页终止和本地参与者过滤。任何阶段 API 错误、共享冷却或 revision 改变都会拒绝合并结果，不持久化事件证据。
+`coach triage` 使用一个 WclClient、一次完整报告元数据查询，并复用内存 token。Mechanic Review 完成后检查 Report Revision；每个 Focused Evidence Window 开始前再查 revision，分页完成后再次检查。窗口沿用 targetID、固定范围、显式 null 分页终止和本地参与者过滤。任何阶段 API 错误或 revision 改变都会拒绝合并结果，不持久化事件证据。
 
 全局 `--diagnostics` 可单独测量本次调用的 OAuth、quota probe、GraphQL 和重试的 HTTP 次数、接收正文字节与 monotonic 网络耗时；首末有效额度快照只是观测，不能排除其他客户端消费。它不修改 workflow 的 `wcl_network_measurement` 或 `target_met`；详见[诊断边界](performance.md)。
 
-客户端会使用指数退避重试临时连接失败，以及 HTTP 500、502、503 和 504 响应。每次 OAuth、quota probe、GraphQL 和重试 HTTP attempt 都经过同一 OS 用户的文件锁；HTTP 429 会立即打开进程内断路器，并写入共享冷却状态，阻止其他 workspace 或 data root 的新请求。
+客户端会使用指数退避重试临时连接失败，以及 HTTP 500、502、503 和 504 响应。HTTP 429 立即返回 `wcl_rate_limit`，由调用方告知用户；不自动重试 429，不保存冷却或阻止后续独立请求。
 
-执行 WCL 数据查询前，客户端至少保留 15% 或 50 个 API 点数，取两者中较大值。Report Index 查询的成本会随报告元数据增长，因此预留 500 点。事件和 revision 请求为完整重试预算预留点数，并在同一 GraphQL 响应中刷新限流快照。持久化采集因安全预留而停止后会保留 Raw Page 和检查点；Mechanic Review 不落盘，必须从头重试。
+数据请求直接调用 API，不预查额度、不预留或估算点数。响应中的 `rateLimitData` 仅用于输出和诊断，`doctor` 仍可显式查询额度以检查连通性。没有共享 HTTP 调度锁或持久化时钟基准；旧 `~/.wcl-report-data/api/` 状态不再读取。
 
-共享入口进一步在每次 HTTP attempt 前保守扣除 Report Index 的 500 点或其他 GraphQL 的 10 点；未得到新额度观测的失败保留扣除值。OAuth 不假定点数成本。有效共享快照可满足 quota 初始化，不发重复 probe；诊断中的额度观测只计实际 API 响应。其他客户端仍可消费额度，不能保证服务器永不返回 429。
-
-冷却优先使用合法 `Retry-After` 秒数或 HTTP date，其次使用仍可靠的额度 reset 时间，否则采用 60 秒。冷却期间立即返回 `wcl_rate_limit`，不睡完整额度窗口；错误提供共享冷却或已知 reset 的 Unix 时间。过期后只在文件锁内 probe，成功后其他进程复用观测，再次 429 会重建冷却。失效快照或中断请求后的普通查询要求先运行 `doctor` 刷新。损坏状态和时钟连续性异常返回领域错误，不能自动恢复为满额度。
+同一数据目录中的 Report/cache 锁继续协调下载。重复 `prepare` 校验并复用同一 Report Revision 的 Complete Bundle；中断或限流后保留 Raw Page 和检查点，后续从未完成页续传。报告元数据仍会查询，以识别 Report Revision 变化。Mechanic Review 和 Focused Evidence Window 的临时事件不持久化，重复调用仍会采集。
 
 WCL client secret 只用于 OAuth，不参与本地 Artifact 身份。Ranking Cohort 和 Encounter Benchmark 使用规范 JSON 的 SHA-256 内容 ID；Complete Bundle 使用 Report Index、Raw Page、压缩事件文件和 Canonical Event 内容 hash。它们只支持本地生成和消费，hash 不认证来源，也不能抵抗可同时修改 artifact 与 index 的本地进程。Personal Review 的 180/30 秒是协作式本地 workspace 内的 monotonic/wall-clock 测量，`wcl_network_measurement` 为 `not_measured`，不是 WCL 网络 benchmark。
 

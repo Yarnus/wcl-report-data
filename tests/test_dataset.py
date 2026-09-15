@@ -8,6 +8,7 @@ import multiprocessing
 import os
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import chdir
 from pathlib import Path
@@ -349,6 +350,17 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(queried["matched"], 1)
         self.assertEqual(queried["events"][0]["target"]["actor_id"], 10)
         self.assertFalse(queried["truncated"])
+
+    def test_next_day_prepare_reuses_complete_bundle_with_a_new_client(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ref = ReportRef.parse("https://www.warcraftlogs.com/reports/AbC123#fight=1")
+            first = self.make_service(temporary, FakeClient(event_pages())).prepare(ref)
+            second = FakeClient([])
+            with patch("time.time", return_value=time.time() + 86400):
+                result = self.make_service(temporary, second).prepare(ref)
+            self.assertTrue(result["bundles"][0]["cache_hit"])
+            self.assertEqual(result["bundles"][0]["manifest_path"], first["bundles"][0]["manifest_path"])
+            self.assertEqual(second.page_starts, [])
 
     def test_prepare_resumes_from_last_complete_raw_page(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

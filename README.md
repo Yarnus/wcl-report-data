@@ -200,6 +200,8 @@ AI 不应要求用户在对话中提供或粘贴 secret，不应覆盖已有凭�
 
 Skill 安装目录只保存程序与文档。Report Index、Complete Bundle、Profiles、任务、Guide Snapshot 和渲染后的 Report Document 写入数据目录；Raw Page 和可续传检查点写入缓存目录。运行 `doctor` 可从 JSON 中查看实际的 `data_root` 和 `cache_root`。
 
+限流由 WCL API 决定：HTTP 429 直接返回 `wcl_rate_limit`，不自动重试，也不保存本地额度、冷却或调度时钟状态。旧 `~/.wcl-report-data/api/` 文件不再读取，无需运行 `doctor` 解锁。重复 `prepare` 会校验并复用同一 Report Revision 的 Complete Bundle，中断采集从已有 Raw Page 检查点续传；仍会查询报告元数据以识别 Report Revision 变化。
+
 ```text
 reports/<report-code>/
 ├── latest.json

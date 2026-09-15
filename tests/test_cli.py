@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -134,7 +135,7 @@ class CliTests(unittest.TestCase):
             ])
             candidates = [
                 {"reportCode": code, "fightID": index, "sourceID": 10 + index,
-                 "startTime": "2026-09-01T00:00:00Z"}
+                 "startTime": datetime.now(timezone.utc).isoformat()}
                 for index, code in enumerate(("ABC", "DEF", "GHI", "JKL"), 1)
             ]
             with (
@@ -165,7 +166,7 @@ class CliTests(unittest.TestCase):
             ])
             candidates = [
                 {"reportCode": code, "fightID": index, "name": f"Player {index}",
-                 "startTime": "2026-09-01T00:00:00Z"}
+                 "startTime": datetime.now(timezone.utc).isoformat()}
                 for index, code in enumerate(("ABC", "DEF", "GHI"), 1)
             ]
             with (
@@ -330,12 +331,11 @@ class CliTests(unittest.TestCase):
 
     def test_inspect_and_batch_prepare_do_not_download_names(self) -> None:
         from tools.benchmark import Transport, command
-        from tests.test_api import isolated_schedule
         from wcl_raid_coach.config import Credentials
         from wcl_raid_coach.diagnostics import collect
         transport = Transport()
         transport.report["fights"][2]["inProgress"] = False
-        with tempfile.TemporaryDirectory() as directory, isolated_schedule(), patch(
+        with tempfile.TemporaryDirectory() as directory, patch(
             "wcl_raid_coach.api.urlopen", side_effect=transport
         ), patch("wcl_raid_coach.__main__.resolve_credentials", return_value=Credentials("test", "test", "fixture")), patch(
             "wcl_raid_coach.ability_names.urlopen", side_effect=AssertionError("No display download")
@@ -353,11 +353,10 @@ class CliTests(unittest.TestCase):
 
     def test_inspect_returns_choices_while_content_mapping_lock_is_busy(self):
         from tools.benchmark import Transport, command
-        from tests.test_api import isolated_schedule
         from wcl_raid_coach.dataset import DatasetStore
         from wcl_raid_coach.errors import DatasetError
 
-        with tempfile.TemporaryDirectory() as temporary, isolated_schedule(), patch(
+        with tempfile.TemporaryDirectory() as temporary, patch(
             "wcl_raid_coach.api.urlopen", side_effect=Transport()
         ), patch("wcl_raid_coach.__main__.resolve_credentials"), patch.object(
             DatasetStore, "content_names_lock", side_effect=DatasetError("busy")

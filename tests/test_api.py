@@ -3,9 +3,6 @@ from __future__ import annotations
 import gzip
 import io
 import unittest
-import tempfile
-from contextlib import contextmanager
-from pathlib import Path
 from http.client import IncompleteRead
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -17,11 +14,9 @@ from wcl_raid_coach.api import (
     MECHANIC_EVENT_QUERY,
     RANKINGS_QUERY,
     REPORT_QUERY,
-    REPORT_RESERVATION_POINTS,
     WclClient,
 )
 from wcl_raid_coach.config import Credentials
-from wcl_raid_coach.api_schedule import ApiSchedule
 from wcl_raid_coach.errors import ApiError, RateLimitError
 
 
@@ -42,20 +37,7 @@ class Response:
         return self.value
 
 
-@contextmanager
-def isolated_schedule():
-    with tempfile.TemporaryDirectory() as directory, patch("wcl_raid_coach.api_schedule.coordination_root", return_value=Path(directory)):
-        with ApiSchedule().attempt("RateLimit") as scheduled:
-            scheduled.observe({"data": {"rateLimitData": {
-                "limitPerHour": 3600, "pointsSpentThisHour": 0, "pointsResetIn": 3600,
-            }}})
-        yield
-
-
 class WclClientTests(unittest.TestCase):
-    def setUp(self):
-        self.enterContext(isolated_schedule())
-
     def make_client(self, **kwargs) -> WclClient:
         return WclClient(Credentials("client-id", "client-secret", "test"), **kwargs)
 
@@ -153,7 +135,7 @@ class WclClientTests(unittest.TestCase):
             with self.assertRaisesRegex(ApiError, "invalid gzip"):
                 self.make_client()._request_json(Request("https://example.invalid"))
 
-    def test_first_429_opens_circuit_breaker_without_retrying(self) -> None:
+    def test_429_is_reported_without_retry_or_blocking_the_next_request(self) -> None:
         error = HTTPError(
             "https://example.invalid",
             429,
@@ -163,13 +145,12 @@ class WclClientTests(unittest.TestCase):
         )
         client = self.make_client(max_retries=2, retry_backoff_seconds=0)
 
-        with patch("wcl_raid_coach.api.urlopen", side_effect=[error, error]) as request:
+        with patch("wcl_raid_coach.api.urlopen", side_effect=[error, Response(b'{"ok": true}')]) as request:
             with self.assertRaises(RateLimitError):
                 client._request_json(Request("https://example.invalid"))
-
-        self.assertEqual(request.call_count, 1)
-        with self.assertRaises(RateLimitError):
-            client.fetch_events_page("AbC123", 1, 1_000, 5_000)
+            self.assertEqual(request.call_count, 1)
+            self.assertEqual(client._request_json(Request("https://example.invalid")), {"ok": True})
+        self.assertEqual(request.call_count, 2)
 
     def test_event_query_refreshes_rate_limit_in_the_same_request(self) -> None:
         self.assertIn("rateLimitData", EVENT_QUERY)
@@ -184,8 +165,14 @@ class WclClientTests(unittest.TestCase):
         self.assertIn("targetID: $targetID", FOCUSED_EVENT_QUERY)
         self.assertNotIn("includeResources: true", MECHANIC_EVENT_QUERY)
 
-    def test_report_index_uses_a_large_safety_reservation(self) -> None:
-        self.assertGreaterEqual(REPORT_RESERVATION_POINTS, 500)
+    def test_report_fetch_does_not_probe_or_enforce_a_local_budget(self) -> None:
+        client = self.make_client()
+        report = {"code": "AbC123"}
+        with patch.object(client, "rate_limit", return_value={
+            "limitPerHour": 3600, "pointsSpentThisHour": 3600, "pointsResetIn": 3600,
+        }) as quota, patch.object(client, "graphql", return_value={"reportData": {"report": report}}):
+            self.assertEqual(client.fetch_report("AbC123"), (report, None))
+        quota.assert_not_called()
 
     def test_report_query_fetches_zone_encounter_order(self) -> None:
         self.assertIn("encounters { id name }", REPORT_QUERY)
@@ -200,12 +187,7 @@ class WclClientTests(unittest.TestCase):
 
     def test_event_request_sends_the_fixed_fight_end_time(self) -> None:
         client = self.make_client()
-        client._rate_limit_snapshot = {
-            "limitPerHour": 3600,
-            "pointsSpentThisHour": 0,
-            "pointsResetIn": 3600,
-        }
-        response = {"rateLimitData": client._rate_limit_snapshot, "reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
+        response = {"reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
 
         with patch.object(client, "graphql", return_value=response) as graphql:
             client.fetch_events_page("AbC123", 1, 2_000, 5_000)
@@ -215,12 +197,7 @@ class WclClientTests(unittest.TestCase):
 
     def test_mechanic_event_request_sends_filter_and_fixed_range(self) -> None:
         client = self.make_client()
-        client._rate_limit_snapshot = {
-            "limitPerHour": 3600,
-            "pointsSpentThisHour": 0,
-            "pointsResetIn": 3600,
-        }
-        response = {"rateLimitData": client._rate_limit_snapshot, "reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
+        response = {"reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
 
         with patch.object(client, "graphql", return_value=response) as graphql:
             client.fetch_mechanic_events_page("AbC123", 1, 2_000, 5_000, "ability.id = 1")
@@ -232,12 +209,7 @@ class WclClientTests(unittest.TestCase):
 
     def test_focused_event_request_sends_target_and_fixed_range(self) -> None:
         client = self.make_client()
-        client._rate_limit_snapshot = {
-            "limitPerHour": 3600,
-            "pointsSpentThisHour": 0,
-            "pointsResetIn": 3600,
-        }
-        response = {"rateLimitData": client._rate_limit_snapshot, "reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
+        response = {"reportData": {"report": {"events": {"data": [], "nextPageTimestamp": None}}}}
 
         with patch.object(client, "graphql", return_value=response) as graphql:
             client.fetch_focused_events_page("AbC123", 1, 2_000, 5_000, 10)
@@ -251,11 +223,6 @@ class WclClientTests(unittest.TestCase):
 
     def test_report_revision_rejects_a_boolean(self) -> None:
         client = self.make_client()
-        client._rate_limit_snapshot = {
-            "limitPerHour": 3600,
-            "pointsSpentThisHour": 0,
-            "pointsResetIn": 3600,
-        }
         response = {"reportData": {"report": {"revision": True}}}
 
         with patch.object(client, "graphql", return_value=response):

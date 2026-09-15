@@ -12,7 +12,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request
 
-from tests.test_api import Response, isolated_schedule
+from tests.test_api import Response
 from wcl_raid_coach import diagnostics
 from wcl_raid_coach.__main__ import main
 from wcl_raid_coach.api import WclClient
@@ -21,20 +21,15 @@ from wcl_raid_coach.errors import RateLimitError
 
 
 class DiagnosticsTests(unittest.TestCase):
-    def setUp(self):
-        self.enterContext(isolated_schedule())
-
-    def test_429_body_failure_still_trips_circuit_without_retry(self):
+    def test_429_body_failure_is_reported_without_retry(self):
         for failure in (IncompleteRead(b"partial", 20), TimeoutError()):
             with self.subTest(failure=type(failure).__name__):
                 client = WclClient(Credentials("id", "secret", "test"), max_retries=1, retry_backoff_seconds=0)
                 body = io.BytesIO()
                 error = HTTPError("https://example.invalid", 429, "limited", {}, body)
-                with isolated_schedule(), diagnostics.collect() as metrics, patch.object(body, "read", side_effect=failure), patch("wcl_raid_coach.api.urlopen", side_effect=[error, Response(b"{}")]):
+                with diagnostics.collect() as metrics, patch.object(body, "read", side_effect=failure), patch("wcl_raid_coach.api.urlopen", side_effect=[error, Response(b"{}")]):
                     with self.assertRaises(RateLimitError):
                         client._request_json(Request("https://example.invalid"))
-                    with self.assertRaises(RateLimitError):
-                        client.fetch_report("ABC")
                 self.assertEqual(metrics.snapshot()["network"]["OtherHTTP"]["attempts"], 1)
 
     def test_oversized_quota_integer_cannot_crash_diagnostics(self):

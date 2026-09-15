@@ -67,5 +67,5 @@ cd "<SKILL_ROOT>" && python -m wcl_raid_coach query "<MANIFEST_PATH>" --type dam
 - 个人复盘选定后立即初始化计时；复用 Benchmark 必须连同绑定的原 Ranking Cohort、Profiles 和 Complete Bundles 深度验证。先查本地兼容 artifact，再刷新排名。初始目标 3 个合格 Reference Samples，已有 3–10 个立即使用。
 - 机制异常不证明责任或灭团因果。judgment/causal_attribution 为 null；团队事实保持并列。没有当前 Profile/规则证据不判断 padding、责任或可规避伤害；坦克/治疗建议遵守相应生存/治疗 guardrail。
 - 中文建议和攻略 Spell 必须命中已校验的 zhCN mapping，不自行翻译。普通数据可保留 WCL 原名，机制名称使用随包规则。未知维度明确未评估。
-- 限流遵循同一 OS 用户的共享调度，保留至少 15% 或 50 点的较高者。失败保留已有持久进度；临时机制证据无 checkpoint，需重跑。多 Boss 可交付已完成章节并披露 blocker。
+- API 返回 `wcl_rate_limit` 时直接告知用户并保留已有持久进度。重复准备复用同一 Report Revision 的已校验 Complete Bundle，中断下载从检查点续传；临时机制证据无 checkpoint，需重跑。多 Boss 可交付已完成章节并披露 blocker。
 - 正式交付使用 `personal-report`、`guide-report` 或 `mechanics --report` 的确定性来源校验和渲染；对话给短摘要与 HTML 链接。选择、进度、错误、查询和追问使用文本；用户明确不要报告时遵从。详细 schema 仅在构造 artifact 时读[数据契约](references/data-contract.md)，API/恢复问题读[API 说明](references/wcl-api.md)。
